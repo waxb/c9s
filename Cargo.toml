@@ -1,6 +1,6 @@
 [package]
 name = "c9s"
-version = "0.1.9"
+version = "0.1.10"
 edition = "2021"
 description = "A k9s-inspired TUI for managing Claude Code sessions"
 license = "MIT"

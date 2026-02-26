@@ -4,6 +4,7 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::Paragraph;
 use ratatui::Frame;
 
+use crate::app::Selection;
 use crate::terminal::TabEntry;
 use crate::ui::theme::Theme;
 
@@ -13,8 +14,9 @@ pub fn render_terminal(
     tabs: &[TabEntry],
     exited: bool,
     scrolled: bool,
+    selection: Option<&Selection>,
     area: Rect,
-) {
+) -> Rect {
     let chunks = Layout::vertical([
         Constraint::Length(1),
         Constraint::Min(1),
@@ -24,7 +26,7 @@ pub fn render_terminal(
 
     render_tab_bar(f, tabs, chunks[0]);
 
-    render_screen(f, screen, chunks[1]);
+    render_screen(f, screen, selection, chunks[1]);
 
     let active = tabs.iter().find(|t| t.is_active);
     let project = active.map(|t| t.name.as_str()).unwrap_or("");
@@ -60,7 +62,7 @@ pub fn render_terminal(
             scroll_indicator,
             Span::styled(
                 format!(
-                    "  C-d:list  C-Space:harpoon  C-n/p:cycle  Scroll:scrollback  Shift+drag:select  {}",
+                    "  C-d:list  C-Space:harpoon  C-n/p:cycle  drag:select  {}",
                     project
                 ),
                 Theme::footer(),
@@ -68,14 +70,23 @@ pub fn render_terminal(
         ])
     };
     f.render_widget(Paragraph::new(status_line), chunks[2]);
+
+    chunks[1]
 }
 
-fn render_screen(f: &mut Frame, screen: &vt100::Screen, area: Rect) {
+fn render_screen(
+    f: &mut Frame,
+    screen: &vt100::Screen,
+    selection: Option<&Selection>,
+    area: Rect,
+) {
     let buf = f.buffer_mut();
     for row in 0..area.height {
         for col in 0..area.width {
             if let Some(cell) = screen.cell(row, col) {
-                let buf_cell = &mut buf[(col + area.x, row + area.y)];
+                let abs_x = col + area.x;
+                let abs_y = row + area.y;
+                let buf_cell = &mut buf[(abs_x, abs_y)];
                 if cell.has_contents() {
                     buf_cell.set_symbol(cell.contents());
                 }
@@ -97,6 +108,15 @@ fn render_screen(f: &mut Frame, screen: &vt100::Screen, area: Rect) {
                 if cell.inverse() {
                     modifier |= Modifier::REVERSED;
                 }
+
+                let selected = selection
+                    .filter(|s| s.has_content)
+                    .map_or(false, |s| is_selected(s, abs_x, abs_y));
+
+                if selected {
+                    modifier |= Modifier::REVERSED;
+                }
+
                 let style = Style::reset().add_modifier(modifier);
                 buf_cell.set_style(style);
                 buf_cell.set_fg(fg);
@@ -121,6 +141,26 @@ fn render_screen(f: &mut Frame, screen: &vt100::Screen, area: Rect) {
             }
         }
     }
+}
+
+fn is_selected(sel: &Selection, abs_x: u16, abs_y: u16) -> bool {
+    let (start, end) = crate::app::normalize_selection(sel);
+    let (s_col, s_row) = start;
+    let (e_col, e_row) = end;
+
+    if abs_y < s_row || abs_y > e_row {
+        return false;
+    }
+    if s_row == e_row {
+        return abs_x >= s_col && abs_x <= e_col;
+    }
+    if abs_y == s_row {
+        return abs_x >= s_col;
+    }
+    if abs_y == e_row {
+        return abs_x <= e_col;
+    }
+    true
 }
 
 fn render_tab_bar(f: &mut Frame, tabs: &[TabEntry], area: Rect) {
@@ -188,4 +228,3 @@ fn convert_color(c: vt100::Color) -> Color {
         vt100::Color::Rgb(r, g, b) => Color::Rgb(r, g, b),
     }
 }
-

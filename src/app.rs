@@ -3,6 +3,19 @@ use crate::session::config::{scan_session_config, build_config_items, ConfigItem
 use crate::store::Store;
 use crate::terminal::TerminalManager;
 use anyhow::Result;
+use std::io::Write;
+
+#[derive(Debug, Clone, Default)]
+pub struct Selection {
+    pub start: (u16, u16),
+    pub end: (u16, u16),
+    pub active: bool,
+    pub has_content: bool,
+    pub content_x: u16,
+    pub content_y: u16,
+    pub content_w: u16,
+    pub content_h: u16,
+}
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ViewMode {
@@ -65,6 +78,7 @@ pub struct App {
     detail_cursor: usize,
     detail_preview: Option<(String, String)>,
     detail_preview_scroll: usize,
+    selection: Selection,
 }
 
 impl App {
@@ -89,6 +103,7 @@ impl App {
             detail_cursor: 0,
             detail_preview: None,
             detail_preview_scroll: 0,
+            selection: Selection::default(),
         };
 
         app.refresh()?;
@@ -404,4 +419,156 @@ impl App {
             .filter(|s| s.pid.is_some())
             .collect()
     }
+
+    pub fn selection(&self) -> &Selection {
+        &self.selection
+    }
+
+    pub fn update_selection_area(&mut self, x: u16, y: u16, w: u16, h: u16) {
+        self.selection.content_x = x;
+        self.selection.content_y = y;
+        self.selection.content_w = w;
+        self.selection.content_h = h;
+    }
+
+    pub fn start_selection(&mut self, col: u16, row: u16) {
+        self.selection.start = (col, row);
+        self.selection.end = (col, row);
+        self.selection.active = true;
+        self.selection.has_content = false;
+    }
+
+    pub fn extend_selection(&mut self, col: u16, row: u16) {
+        if self.selection.active {
+            self.selection.end = (col, row);
+            self.selection.has_content = self.selection.start != self.selection.end;
+        }
+    }
+
+    pub fn finalize_selection(&mut self) {
+        if !self.selection.has_content {
+            self.clear_selection();
+            return;
+        }
+        self.selection.active = false;
+
+        let text = self.extract_selection_text();
+        if !text.is_empty() {
+            osc52_copy(&text);
+        }
+    }
+
+    pub fn clear_selection(&mut self) {
+        self.selection = Selection {
+            content_x: self.selection.content_x,
+            content_y: self.selection.content_y,
+            content_w: self.selection.content_w,
+            content_h: self.selection.content_h,
+            ..Selection::default()
+        };
+    }
+
+    #[allow(dead_code)]
+    pub fn has_selection(&self) -> bool {
+        self.selection.has_content
+    }
+
+    fn extract_selection_text(&self) -> String {
+        let sel = &self.selection;
+        let term = match self.terminal_manager.active_terminal() {
+            Some(t) => t,
+            None => return String::new(),
+        };
+
+        let guard = term.lock_parser();
+        let screen = guard.screen();
+
+        let (start, end) = normalize_selection(sel);
+        let (start_col, start_row) = start;
+        let (end_col, end_row) = end;
+
+        let to_scr_row = |abs_y: u16| -> Option<u16> {
+            if abs_y >= sel.content_y && abs_y < sel.content_y + sel.content_h {
+                Some(abs_y - sel.content_y)
+            } else {
+                None
+            }
+        };
+        let to_scr_col = |abs_x: u16| -> u16 {
+            abs_x.saturating_sub(sel.content_x)
+        };
+
+        let mut lines = Vec::new();
+
+        for abs_row in start_row..=end_row {
+            let scr_row = match to_scr_row(abs_row) {
+                Some(r) => r,
+                None => continue,
+            };
+
+            let col_start = if abs_row == start_row { to_scr_col(start_col) } else { 0 };
+            let col_end = if abs_row == end_row {
+                to_scr_col(end_col)
+            } else {
+                sel.content_w.saturating_sub(1)
+            };
+
+            let mut row_text = String::new();
+            for c in col_start..=col_end {
+                if let Some(cell) = screen.cell(scr_row, c) {
+                    if cell.has_contents() {
+                        row_text.push_str(cell.contents());
+                    } else {
+                        row_text.push(' ');
+                    }
+                } else {
+                    row_text.push(' ');
+                }
+            }
+            lines.push(row_text.trim_end().to_string());
+        }
+
+        lines.join("\n")
+    }
+}
+
+pub fn normalize_selection(sel: &Selection) -> ((u16, u16), (u16, u16)) {
+    let (s, e) = (sel.start, sel.end);
+    if (s.1, s.0) <= (e.1, e.0) {
+        (s, e)
+    } else {
+        (e, s)
+    }
+}
+
+fn osc52_copy(text: &str) {
+    use std::io;
+    let encoded = base64_encode(text.as_bytes());
+    let seq = format!("\x1b]52;c;{}\x07", encoded);
+    let _ = io::stderr().write_all(seq.as_bytes());
+    let _ = io::stderr().flush();
+}
+
+fn base64_encode(data: &[u8]) -> String {
+    const CHARS: &[u8] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    let mut result = String::new();
+    for chunk in data.chunks(3) {
+        let b0 = chunk[0] as u32;
+        let b1 = if chunk.len() > 1 { chunk[1] as u32 } else { 0 };
+        let b2 = if chunk.len() > 2 { chunk[2] as u32 } else { 0 };
+        let triple = (b0 << 16) | (b1 << 8) | b2;
+        result.push(CHARS[((triple >> 18) & 0x3F) as usize] as char);
+        result.push(CHARS[((triple >> 12) & 0x3F) as usize] as char);
+        if chunk.len() > 1 {
+            result.push(CHARS[((triple >> 6) & 0x3F) as usize] as char);
+        } else {
+            result.push('=');
+        }
+        if chunk.len() > 2 {
+            result.push(CHARS[(triple & 0x3F) as usize] as char);
+        } else {
+            result.push('=');
+        }
+    }
+    result
 }

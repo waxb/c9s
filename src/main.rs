@@ -120,23 +120,15 @@ fn run_loop(
                         ui::render_help(f, area);
                     }
                     ViewMode::Terminal => {
-                        if let Some(term) = app.terminal_manager().active_terminal() {
-                            let guard = term.lock_parser();
-                            let screen = guard.screen();
-                            let scrolled = screen.scrollback() > 0;
-                            let exited = term.is_exited();
-                            let tabs = app.terminal_manager().tab_info();
-                            ui::render_terminal(f, screen, &tabs, exited, scrolled, area);
+                        let content_area = render_terminal_view(app, f, area);
+                        if let Some(ca) = content_area {
+                            app.update_selection_area(ca.x, ca.y, ca.width, ca.height);
                         }
                     }
                     ViewMode::TerminalHarpoon => {
-                        if let Some(term) = app.terminal_manager().active_terminal() {
-                            let guard = term.lock_parser();
-                            let screen = guard.screen();
-                            let scrolled = screen.scrollback() > 0;
-                            let exited = term.is_exited();
-                            let tabs = app.terminal_manager().tab_info();
-                            ui::render_terminal(f, screen, &tabs, exited, scrolled, area);
+                        let content_area = render_terminal_view(app, f, area);
+                        if let Some(ca) = content_area {
+                            app.update_selection_area(ca.x, ca.y, ca.width, ca.height);
                         }
                         ui::render_harpoon(f, app, area);
                     }
@@ -205,6 +197,23 @@ fn run_loop(
     Ok(())
 }
 
+fn render_terminal_view(
+    app: &App,
+    f: &mut ratatui::Frame,
+    area: ratatui::layout::Rect,
+) -> Option<ratatui::layout::Rect> {
+    let term = app.terminal_manager().active_terminal()?;
+    let guard = term.lock_parser();
+    let screen = guard.screen();
+    let scrolled = screen.scrollback() > 0;
+    let exited = term.is_exited();
+    let tabs = app.terminal_manager().tab_info();
+    let sel = app.selection().clone();
+    let sel_ref = if sel.has_content || sel.active { Some(&sel) } else { None };
+    let content_area = ui::render_terminal(f, screen, &tabs, exited, scrolled, sel_ref, area);
+    Some(content_area)
+}
+
 fn process_action(
     app: &mut App,
     action: Action,
@@ -266,7 +275,18 @@ fn process_action(
             let _ = app.refresh();
         }
         Action::TerminalInput(bytes) => {
+            app.clear_selection();
             let _ = app.terminal_manager_mut().write_to_active(&bytes);
+        }
+        Action::SelectStart(col, row) => {
+            app.start_selection(col, row);
+        }
+        Action::SelectExtend(col, row) => {
+            app.extend_selection(col, row);
+        }
+        Action::SelectEnd(col, row) => {
+            app.extend_selection(col, row);
+            app.finalize_selection();
         }
         Action::CycleNextSession => {
             app.terminal_manager_mut().cycle_next();

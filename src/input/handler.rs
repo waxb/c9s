@@ -1,4 +1,4 @@
-use crossterm::event::{Event, KeyCode, KeyEvent, KeyModifiers, MouseEventKind};
+use crossterm::event::{Event, KeyCode, KeyEvent, KeyModifiers, MouseButton, MouseEventKind};
 
 use crate::app::ViewMode;
 
@@ -34,6 +34,9 @@ pub enum Action {
     CommandCancel,
     ScrollUp(usize),
     ScrollDown(usize),
+    SelectStart(u16, u16),
+    SelectExtend(u16, u16),
+    SelectEnd(u16, u16),
     ConfirmQuit,
     CancelQuit,
     None,
@@ -42,12 +45,12 @@ pub enum Action {
 pub fn handle_event(event: &Event, mode: &ViewMode) -> Action {
     match event {
         Event::Key(key) => handle_key(key, mode),
-        Event::Mouse(mouse) => handle_mouse(mouse.kind, mode),
+        Event::Mouse(mouse) => handle_mouse(mouse.kind, mouse.column, mouse.row, mode),
         _ => Action::None,
     }
 }
 
-fn handle_mouse(kind: MouseEventKind, mode: &ViewMode) -> Action {
+fn handle_mouse(kind: MouseEventKind, col: u16, row: u16, mode: &ViewMode) -> Action {
     match kind {
         MouseEventKind::ScrollUp => match mode {
             ViewMode::Terminal | ViewMode::TerminalHarpoon => Action::ScrollUp(3),
@@ -59,6 +62,27 @@ fn handle_mouse(kind: MouseEventKind, mode: &ViewMode) -> Action {
             ViewMode::List | ViewMode::Filter | ViewMode::Harpoon | ViewMode::Detail => Action::MoveDown,
             _ => Action::None,
         },
+        MouseEventKind::Down(MouseButton::Left) => {
+            if matches!(mode, ViewMode::Terminal | ViewMode::TerminalHarpoon) {
+                Action::SelectStart(col, row)
+            } else {
+                Action::None
+            }
+        }
+        MouseEventKind::Drag(MouseButton::Left) => {
+            if matches!(mode, ViewMode::Terminal | ViewMode::TerminalHarpoon) {
+                Action::SelectExtend(col, row)
+            } else {
+                Action::None
+            }
+        }
+        MouseEventKind::Up(MouseButton::Left) => {
+            if matches!(mode, ViewMode::Terminal | ViewMode::TerminalHarpoon) {
+                Action::SelectEnd(col, row)
+            } else {
+                Action::None
+            }
+        }
         _ => Action::None,
     }
 }
