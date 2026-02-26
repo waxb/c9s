@@ -81,7 +81,6 @@ fn run_loop(
     let refresh_interval = Duration::from_secs(5);
     let mut last_refresh = Instant::now();
     let mut needs_draw = true;
-    let mut mouse_captured = true;
 
     loop {
         if matches!(app.view_mode(), ViewMode::Terminal | ViewMode::TerminalHarpoon) {
@@ -183,13 +182,6 @@ fn run_loop(
         }
 
         let in_terminal = matches!(app.view_mode(), ViewMode::Terminal | ViewMode::TerminalHarpoon);
-        if in_terminal && mouse_captured {
-            stdout().execute(DisableMouseCapture)?;
-            mouse_captured = false;
-        } else if !in_terminal && !mouse_captured {
-            stdout().execute(EnableMouseCapture)?;
-            mouse_captured = true;
-        }
 
         app.terminal_manager_mut().check_and_forward_notifications(in_terminal);
 
