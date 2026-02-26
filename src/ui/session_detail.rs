@@ -61,10 +61,22 @@ fn render_tree_layout(
     render_usage_column(f, session, columns[1]);
     render_config_tree(f, items, cursor, columns[2]);
 
-    let footer = Paragraph::new(Line::from(Span::styled(
-        " Esc:back  a:attach  Up/Dn:navigate  Enter:preview file",
-        Theme::footer(),
-    )));
+    let always_total: u32 = items
+        .iter()
+        .filter(|i| i.always_loaded.unwrap_or(false))
+        .filter_map(|i| i.tokens)
+        .sum();
+
+    let footer_text = if always_total > 0 {
+        format!(
+            " Esc:back  a:attach  Up/Dn:navigate  Enter:preview  ~{}tk always-loaded",
+            format_tokens_short(always_total),
+        )
+    } else {
+        " Esc:back  a:attach  Up/Dn:navigate  Enter:preview file".to_string()
+    };
+
+    let footer = Paragraph::new(Line::from(Span::styled(footer_text, Theme::footer())));
     f.render_widget(footer, chunks[2]);
 }
 
@@ -155,6 +167,11 @@ fn render_config_tree(
     let exists = Style::default().fg(Color::Green);
     let missing = Style::default().fg(Color::DarkGray);
     let memory = Style::default().fg(Color::Magenta);
+    let total_style = Style::default()
+        .fg(Color::Yellow)
+        .add_modifier(Modifier::BOLD);
+    let token_style = Style::default().fg(Color::Yellow);
+    let conditional_style = Style::default().fg(Color::DarkGray);
     let selected_style = Style::default()
         .bg(Color::DarkGray)
         .fg(Color::White)
@@ -167,15 +184,31 @@ fn render_config_tree(
         .take(visible_height)
         .map(|(i, item)| {
             let is_selected = i == cursor;
-            let label = format!("  {}", item.label);
+
+            if item.kind == ConfigItemKind::SectionTotal {
+                return Line::from(Span::styled(
+                    format!("  {}", item.label),
+                    total_style,
+                ));
+            }
 
             if is_selected {
                 let has_file = item.path.is_some();
                 let marker = if has_file { ">" } else { " " };
-                Line::from(Span::styled(
+                let mut spans = vec![Span::styled(
                     format!("{} {}", marker, item.label),
                     selected_style,
-                ))
+                )];
+                if let Some(t) = item.tokens {
+                    spans.push(Span::styled(
+                        format!("  ~{}tk", format_tokens_short(t)),
+                        selected_style,
+                    ));
+                }
+                if item.always_loaded == Some(false) {
+                    spans.push(Span::styled(" [cond]", selected_style));
+                }
+                Line::from(spans)
             } else {
                 let base_style = match item.kind {
                     ConfigItemKind::SectionHeader => section,
@@ -183,8 +216,19 @@ fn render_config_tree(
                     ConfigItemKind::FileExists => exists,
                     ConfigItemKind::FileMissing => missing,
                     ConfigItemKind::MemoryFile => memory,
+                    ConfigItemKind::SectionTotal => total_style,
                 };
-                Line::from(Span::styled(label, base_style))
+                let mut spans = vec![Span::styled(format!("  {}", item.label), base_style)];
+                if let Some(t) = item.tokens {
+                    spans.push(Span::styled(
+                        format!("  ~{}tk", format_tokens_short(t)),
+                        token_style,
+                    ));
+                }
+                if item.always_loaded == Some(false) {
+                    spans.push(Span::styled(" [cond]", conditional_style));
+                }
+                Line::from(spans)
             }
         })
         .collect();
@@ -297,5 +341,13 @@ fn format_number(n: u64) -> String {
         format!("{:.1}K", n as f64 / 1_000.0)
     } else {
         n.to_string()
+    }
+}
+
+fn format_tokens_short(t: u32) -> String {
+    if t >= 1000 {
+        format!("{:.1}K", t as f64 / 1000.0)
+    } else {
+        t.to_string()
     }
 }

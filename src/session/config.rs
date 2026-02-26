@@ -1,3 +1,4 @@
+use std::io::Read;
 use std::path::{Path, PathBuf};
 
 #[derive(Debug, Clone)]
@@ -11,6 +12,8 @@ pub struct ConfigItem {
     pub label: String,
     pub path: Option<PathBuf>,
     pub kind: ConfigItemKind,
+    pub tokens: Option<u32>,
+    pub always_loaded: Option<bool>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -20,6 +23,49 @@ pub enum ConfigItemKind {
     FileExists,
     FileMissing,
     MemoryFile,
+    SectionTotal,
+}
+
+fn estimate_file_tokens(path: &Path) -> (Option<u32>, Option<bool>) {
+    let meta = match std::fs::metadata(path) {
+        Ok(m) => m,
+        Err(_) => return (None, None),
+    };
+    let tokens = (meta.len() / 4) as u32;
+
+    let mut buf = [0u8; 512];
+    let frontmatter = match std::fs::File::open(path) {
+        Ok(mut f) => {
+            let n = f.read(&mut buf).unwrap_or(0);
+            String::from_utf8_lossy(&buf[..n]).to_string()
+        }
+        Err(_) => return (Some(tokens), Some(true)),
+    };
+
+    if !frontmatter.starts_with("---") {
+        return (Some(tokens), Some(true));
+    }
+
+    let has_paths = frontmatter.contains("\npaths:")
+        || frontmatter.contains("\npaths :");
+    let has_always_apply_false = frontmatter.contains("alwaysApply: false")
+        || frontmatter.contains("alwaysApply:false");
+
+    if has_paths || has_always_apply_false {
+        (Some(tokens), Some(false))
+    } else {
+        (Some(tokens), Some(true))
+    }
+}
+
+fn make_item(label: String, path: Option<PathBuf>, kind: ConfigItemKind) -> ConfigItem {
+    let (tokens, always_loaded) = match &path {
+        Some(p) if matches!(kind, ConfigItemKind::FileExists | ConfigItemKind::MemoryFile) => {
+            estimate_file_tokens(p)
+        }
+        _ => (None, None),
+    };
+    ConfigItem { label, path, kind, tokens, always_loaded }
 }
 
 pub fn build_config_items(cfg: &SessionConfig, cwd: &Path) -> Vec<ConfigItem> {
@@ -30,42 +76,43 @@ pub fn build_config_items(cfg: &SessionConfig, cwd: &Path) -> Vec<ConfigItem> {
     let memory_dir = claude_dir.join("projects").join(&encoded_cwd).join("memory");
 
     let mut items = Vec::new();
+    let mut global_total: u32 = 0;
+    let mut global_always: u32 = 0;
 
     items.push(ConfigItem {
         label: "Global (~/.claude/)".to_string(),
         path: None,
         kind: ConfigItemKind::SectionHeader,
+        tokens: None,
+        always_loaded: None,
     });
 
     let global_md = claude_dir.join("CLAUDE.md");
-    items.push(ConfigItem {
-        label: "CLAUDE.md".to_string(),
-        path: if cfg.global_claude_md { Some(global_md) } else { None },
-        kind: if cfg.global_claude_md { ConfigItemKind::FileExists } else { ConfigItemKind::FileMissing },
-    });
+    let item = if cfg.global_claude_md {
+        make_item("CLAUDE.md".to_string(), Some(global_md), ConfigItemKind::FileExists)
+    } else {
+        make_item("CLAUDE.md".to_string(), None, ConfigItemKind::FileMissing)
+    };
+    accumulate(&item, &mut global_total, &mut global_always);
+    items.push(item);
 
     if cfg.global_rules.is_empty() {
-        items.push(ConfigItem {
-            label: "rules/  [empty]".to_string(),
-            path: None,
-            kind: ConfigItemKind::FileMissing,
-        });
+        items.push(make_item("rules/  [empty]".to_string(), None, ConfigItemKind::FileMissing));
     } else {
         let mut current_cat = String::new();
         for entry in &cfg.global_rules {
             if entry.category != current_cat {
                 current_cat = entry.category.clone();
-                items.push(ConfigItem {
-                    label: format!("rules/{}/", current_cat),
-                    path: None,
-                    kind: ConfigItemKind::Category,
-                });
+                items.push(make_item(
+                    format!("rules/{}/", current_cat),
+                    None,
+                    ConfigItemKind::Category,
+                ));
             }
-            items.push(ConfigItem {
-                label: format!("  {}", entry.name),
-                path: Some(claude_dir.join("rules").join(&current_cat).join(&entry.name)),
-                kind: ConfigItemKind::FileExists,
-            });
+            let path = claude_dir.join("rules").join(&current_cat).join(&entry.name);
+            let item = make_item(format!("  {}", entry.name), Some(path), ConfigItemKind::FileExists);
+            accumulate(&item, &mut global_total, &mut global_always);
+            items.push(item);
         }
     }
 
@@ -74,109 +121,192 @@ pub fn build_config_items(cfg: &SessionConfig, cwd: &Path) -> Vec<ConfigItem> {
         for entry in &cfg.global_agents {
             if entry.category != current_cat {
                 current_cat = entry.category.clone();
-                items.push(ConfigItem {
-                    label: format!("agents/{}/", current_cat),
-                    path: None,
-                    kind: ConfigItemKind::Category,
-                });
+                items.push(make_item(
+                    format!("agents/{}/", current_cat),
+                    None,
+                    ConfigItemKind::Category,
+                ));
             }
-            items.push(ConfigItem {
-                label: format!("  {}", entry.name),
-                path: Some(claude_dir.join("agents").join(&current_cat).join(&entry.name)),
-                kind: ConfigItemKind::FileExists,
-            });
+            let path = claude_dir.join("agents").join(&current_cat).join(&entry.name);
+            let item = make_item(format!("  {}", entry.name), Some(path), ConfigItemKind::FileExists);
+            accumulate(&item, &mut global_total, &mut global_always);
+            items.push(item);
         }
     }
+
+    items.push(ConfigItem {
+        label: format_total("Global", global_total, global_always),
+        path: None,
+        kind: ConfigItemKind::SectionTotal,
+        tokens: Some(global_total),
+        always_loaded: None,
+    });
 
     items.push(ConfigItem {
         label: String::new(),
         path: None,
         kind: ConfigItemKind::SectionHeader,
+        tokens: None,
+        always_loaded: None,
     });
 
     items.push(ConfigItem {
         label: "Project (.claude/)".to_string(),
         path: None,
         kind: ConfigItemKind::SectionHeader,
+        tokens: None,
+        always_loaded: None,
     });
 
+    let mut project_total: u32 = 0;
+    let mut project_always: u32 = 0;
+
     let project_md = cwd.join("CLAUDE.md");
-    items.push(ConfigItem {
-        label: "CLAUDE.md".to_string(),
-        path: if cfg.project_claude_md { Some(project_md) } else { None },
-        kind: if cfg.project_claude_md { ConfigItemKind::FileExists } else { ConfigItemKind::FileMissing },
-    });
+    let item = if cfg.project_claude_md {
+        make_item("CLAUDE.md".to_string(), Some(project_md), ConfigItemKind::FileExists)
+    } else {
+        make_item("CLAUDE.md".to_string(), None, ConfigItemKind::FileMissing)
+    };
+    accumulate(&item, &mut project_total, &mut project_always);
+    items.push(item);
 
     if !cfg.project_rules.is_empty() {
         let mut current_cat = String::new();
         for entry in &cfg.project_rules {
             if entry.category != current_cat {
                 current_cat = entry.category.clone();
-                items.push(ConfigItem {
-                    label: format!("rules/{}/", current_cat),
-                    path: None,
-                    kind: ConfigItemKind::Category,
-                });
+                items.push(make_item(
+                    format!("rules/{}/", current_cat),
+                    None,
+                    ConfigItemKind::Category,
+                ));
             }
-            items.push(ConfigItem {
-                label: format!("  {}", entry.name),
-                path: Some(cwd.join(".claude").join("rules").join(&current_cat).join(&entry.name)),
-                kind: ConfigItemKind::FileExists,
-            });
+            let path = cwd.join(".claude").join("rules").join(&current_cat).join(&entry.name);
+            let item = make_item(format!("  {}", entry.name), Some(path), ConfigItemKind::FileExists);
+            accumulate(&item, &mut project_total, &mut project_always);
+            items.push(item);
         }
     }
 
     let settings_path = cwd.join(".claude").join("settings.local.json");
-    items.push(ConfigItem {
-        label: "settings.local.json".to_string(),
-        path: if cfg.project_settings { Some(settings_path) } else { None },
-        kind: if cfg.project_settings { ConfigItemKind::FileExists } else { ConfigItemKind::FileMissing },
+    items.push(if cfg.project_settings {
+        make_item("settings.local.json".to_string(), Some(settings_path), ConfigItemKind::FileExists)
+    } else {
+        make_item("settings.local.json".to_string(), None, ConfigItemKind::FileMissing)
     });
 
     if !cfg.project_commands.is_empty() {
-        items.push(ConfigItem {
-            label: "commands/".to_string(),
-            path: None,
-            kind: ConfigItemKind::Category,
-        });
+        items.push(make_item("commands/".to_string(), None, ConfigItemKind::Category));
         for cmd in &cfg.project_commands {
-            items.push(ConfigItem {
-                label: format!("  {}", cmd),
-                path: Some(cwd.join(".claude").join("commands").join(cmd)),
-                kind: ConfigItemKind::FileExists,
-            });
+            let path = cwd.join(".claude").join("commands").join(cmd);
+            let item = make_item(format!("  {}", cmd), Some(path), ConfigItemKind::FileExists);
+            accumulate(&item, &mut project_total, &mut project_always);
+            items.push(item);
         }
     }
+
+    items.push(ConfigItem {
+        label: format_total("Project", project_total, project_always),
+        path: None,
+        kind: ConfigItemKind::SectionTotal,
+        tokens: Some(project_total),
+        always_loaded: None,
+    });
 
     items.push(ConfigItem {
         label: String::new(),
         path: None,
         kind: ConfigItemKind::SectionHeader,
+        tokens: None,
+        always_loaded: None,
     });
+
+    let mut mem_total: u32 = 0;
 
     items.push(ConfigItem {
         label: format!("Memory ({})", cfg.project_memories.len()),
         path: None,
         kind: ConfigItemKind::SectionHeader,
+        tokens: None,
+        always_loaded: None,
     });
 
     if cfg.project_memories.is_empty() {
-        items.push(ConfigItem {
-            label: "  (no memories)".to_string(),
-            path: None,
-            kind: ConfigItemKind::FileMissing,
-        });
+        items.push(make_item("  (no memories)".to_string(), None, ConfigItemKind::FileMissing));
     } else {
         for mem in &cfg.project_memories {
-            items.push(ConfigItem {
-                label: mem.clone(),
-                path: Some(memory_dir.join(mem)),
-                kind: ConfigItemKind::MemoryFile,
-            });
+            let item = make_item(
+                mem.clone(),
+                Some(memory_dir.join(mem)),
+                ConfigItemKind::MemoryFile,
+            );
+            if let Some(t) = item.tokens {
+                mem_total += t;
+            }
+            items.push(item);
         }
     }
 
+    items.push(ConfigItem {
+        label: format!("  ~{}tk total", format_tokens(mem_total)),
+        path: None,
+        kind: ConfigItemKind::SectionTotal,
+        tokens: Some(mem_total),
+        always_loaded: None,
+    });
+
+    let grand_always = global_always + project_always;
+    let grand_total = global_total + project_total + mem_total;
+    items.push(ConfigItem {
+        label: String::new(),
+        path: None,
+        kind: ConfigItemKind::SectionHeader,
+        tokens: None,
+        always_loaded: None,
+    });
+    items.push(ConfigItem {
+        label: format!(
+            "Grand total: ~{}tk  (always-loaded: ~{}tk)",
+            format_tokens(grand_total),
+            format_tokens(grand_always),
+        ),
+        path: None,
+        kind: ConfigItemKind::SectionTotal,
+        tokens: Some(grand_total),
+        always_loaded: None,
+    });
+
     items
+}
+
+fn accumulate(item: &ConfigItem, total: &mut u32, always: &mut u32) {
+    if let Some(t) = item.tokens {
+        *total += t;
+        if item.always_loaded.unwrap_or(true) {
+            *always += t;
+        }
+    }
+}
+
+fn format_total(section: &str, total: u32, always: u32) -> String {
+    if total == always || always == 0 {
+        format!("  {} total: ~{}tk", section, format_tokens(total))
+    } else {
+        format!(
+            "  {} total: ~{}tk (always: ~{}tk)",
+            section,
+            format_tokens(total),
+            format_tokens(always),
+        )
+    }
+}
+
+fn format_tokens(t: u32) -> String {
+    if t >= 1000 {
+        format!("{:.1}K", t as f64 / 1000.0)
+    } else {
+        t.to_string()
+    }
 }
 
 #[derive(Debug, Clone, Default)]
