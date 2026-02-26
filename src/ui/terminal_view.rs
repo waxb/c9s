@@ -60,7 +60,7 @@ pub fn render_terminal(
             scroll_indicator,
             Span::styled(
                 format!(
-                    "  C-d:list  C-Space:harpoon  C-n/p:cycle  PgUp/Dn:scroll  {}",
+                    "  C-d:list  C-Space:harpoon  C-n/p:cycle  Scroll:scrollback  Opt+drag:select  {}",
                     project
                 ),
                 Theme::footer(),
