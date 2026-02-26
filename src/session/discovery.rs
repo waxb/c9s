@@ -120,7 +120,7 @@ impl SessionDiscovery {
 
                         let status = match pid {
                             Some(_) => {
-                                let idle_threshold = chrono::Duration::seconds(30);
+                                let idle_threshold = chrono::Duration::seconds(2);
                                 let is_stale = match stats.last_timestamp {
                                     Some(ts) => {
                                         Utc::now().signed_duration_since(ts) > idle_threshold
