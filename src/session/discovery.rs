@@ -119,21 +119,23 @@ impl SessionDiscovery {
                         let pid = live_cwds.get(&project_cwd).copied();
 
                         let status = match pid {
-                            Some(_) => match stats.last_message_type.as_deref() {
-                                Some("user") => SessionStatus::Thinking,
-                                _ => {
-                                    let idle_threshold = chrono::Duration::seconds(30);
-                                    match stats.last_timestamp {
-                                        Some(ts)
-                                            if Utc::now().signed_duration_since(ts)
-                                                > idle_threshold =>
-                                        {
-                                            SessionStatus::Idle
-                                        }
+                            Some(_) => {
+                                let idle_threshold = chrono::Duration::seconds(30);
+                                let is_stale = match stats.last_timestamp {
+                                    Some(ts) => {
+                                        Utc::now().signed_duration_since(ts) > idle_threshold
+                                    }
+                                    None => true,
+                                };
+                                if is_stale {
+                                    SessionStatus::Idle
+                                } else {
+                                    match stats.last_message_type.as_deref() {
+                                        Some("user") => SessionStatus::Thinking,
                                         _ => SessionStatus::Active,
                                     }
                                 }
-                            },
+                            }
                             None => SessionStatus::Dead,
                         };
 
