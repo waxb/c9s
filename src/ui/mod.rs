@@ -6,6 +6,7 @@ mod session_detail;
 mod session_list;
 mod terminal_view;
 mod theme;
+pub mod usage_panel;
 
 pub use command_bar_view::render_command_input;
 pub use confirm_quit::render_confirm_quit;

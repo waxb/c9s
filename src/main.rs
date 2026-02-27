@@ -4,6 +4,7 @@ mod session;
 mod store;
 mod terminal;
 mod ui;
+mod usage;
 
 use anyhow::Result;
 use app::{App, ViewMode};

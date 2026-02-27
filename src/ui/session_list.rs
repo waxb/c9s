@@ -7,15 +7,19 @@ use ratatui::Frame;
 use crate::app::{App, ViewMode};
 use crate::session::SessionStatus;
 use crate::ui::theme::Theme;
+use crate::ui::usage_panel::render_usage_panel;
 
 pub fn render_session_list(f: &mut Frame, app: &App, area: Rect) {
     let show_command_bar = app.is_filtering() || app.attached_session_id().is_some();
+
+    let usage_height = if app.usage().api_available { 10 } else { 4 };
 
     let chunks = if show_command_bar {
         Layout::vertical([
             Constraint::Length(3),
             Constraint::Length(1),
             Constraint::Min(5),
+            Constraint::Length(usage_height),
             Constraint::Length(1),
         ])
         .split(area)
@@ -24,6 +28,7 @@ pub fn render_session_list(f: &mut Frame, app: &App, area: Rect) {
             Constraint::Length(3),
             Constraint::Length(0),
             Constraint::Min(5),
+            Constraint::Length(usage_height),
             Constraint::Length(1),
         ])
         .split(area)
@@ -34,7 +39,9 @@ pub fn render_session_list(f: &mut Frame, app: &App, area: Rect) {
         render_command_bar(f, app, chunks[1]);
     }
     render_table(f, app, chunks[2]);
-    render_footer(f, app, chunks[3]);
+    let sessions = app.filtered_sessions();
+    render_usage_panel(f, app.usage(), &sessions, chunks[3]);
+    render_footer(f, app, chunks[4]);
 }
 
 fn render_header(f: &mut Frame, app: &App, area: Rect) {

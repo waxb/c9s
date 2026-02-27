@@ -2,6 +2,7 @@ use crate::session::{Session, SessionConfig, SessionDiscovery, SessionStatus};
 use crate::session::config::{scan_session_config, build_config_items, ConfigItem};
 use crate::store::Store;
 use crate::terminal::TerminalManager;
+use crate::usage::{UsageData, UsageFetcher};
 use anyhow::Result;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -65,6 +66,8 @@ pub struct App {
     detail_cursor: usize,
     detail_preview: Option<(String, String)>,
     detail_preview_scroll: usize,
+    usage_fetcher: UsageFetcher,
+    usage: UsageData,
 }
 
 impl App {
@@ -89,6 +92,8 @@ impl App {
             detail_cursor: 0,
             detail_preview: None,
             detail_preview_scroll: 0,
+            usage_fetcher: UsageFetcher::new(),
+            usage: UsageData::default(),
         };
 
         app.refresh()?;
@@ -111,7 +116,13 @@ impl App {
             self.selected = self.filtered.len() - 1;
         }
 
+        self.usage = self.usage_fetcher.get().clone();
+
         Ok(())
+    }
+
+    pub fn usage(&self) -> &UsageData {
+        &self.usage
     }
 
     fn apply_sort(&mut self) {
