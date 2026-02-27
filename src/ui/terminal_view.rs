@@ -45,14 +45,9 @@ pub fn render_terminal(
         Line::from(vec![
             Span::styled(
                 " [exited]",
-                Style::default()
-                    .fg(Color::Red)
-                    .add_modifier(Modifier::BOLD),
+                Style::default().fg(Color::Red).add_modifier(Modifier::BOLD),
             ),
-            Span::styled(
-                format!("  C-d:dismiss  {}", project),
-                Theme::footer(),
-            ),
+            Span::styled(format!("  C-d:dismiss  {}", project), Theme::footer()),
         ])
     } else {
         Line::from(vec![
@@ -60,7 +55,7 @@ pub fn render_terminal(
             scroll_indicator,
             Span::styled(
                 format!(
-                    "  C-d:list  C-Space:harpoon  C-n/p:cycle  C-j/k:scroll  {}",
+                    "  C-d:list  C-Space:switch  C-n/p:cycle  C-j/k:scroll  {}",
                     project
                 ),
                 Theme::footer(),
@@ -141,7 +136,9 @@ fn render_tab_bar(f: &mut Frame, tabs: &[TabEntry], area: Rect) {
         if i > 0 {
             let sep_style = Style::default().fg(Color::DarkGray).bg(bg);
             for ch in " | ".chars() {
-                if col >= max_col { break; }
+                if col >= max_col {
+                    break;
+                }
                 let cell = &mut buf[(col, area.y)];
                 cell.set_style(sep_style);
                 cell.set_symbol(&ch.to_string());
@@ -169,7 +166,9 @@ fn render_tab_bar(f: &mut Frame, tabs: &[TabEntry], area: Rect) {
         };
 
         for ch in text.chars() {
-            if col >= max_col { break; }
+            if col >= max_col {
+                break;
+            }
             let cell = &mut buf[(col, area.y)];
             cell.set_style(tab_style);
             cell.set_symbol(&ch.to_string());

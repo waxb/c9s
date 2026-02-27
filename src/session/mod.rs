@@ -114,3 +114,54 @@ fn model_pricing(model: &str) -> (f64, f64) {
         (3.0, 15.0)
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use chrono::Utc;
+    use std::path::PathBuf;
+
+    fn make_session(
+        model: &str,
+        input: u64,
+        output: u64,
+        cache_read: u64,
+        cache_write: u64,
+    ) -> Session {
+        Session {
+            id: "test".to_string(),
+            pid: None,
+            cwd: PathBuf::from("/tmp"),
+            project_name: "test".to_string(),
+            git_branch: None,
+            model: Some(model.to_string()),
+            status: SessionStatus::Dead,
+            started_at: Utc::now(),
+            last_activity: Utc::now(),
+            input_tokens: input,
+            output_tokens: output,
+            cache_read_tokens: cache_read,
+            cache_write_tokens: cache_write,
+            message_count: 0,
+            tool_call_count: 0,
+            claude_version: None,
+            permission_mode: None,
+            plan_slugs: Vec::new(),
+            compaction_count: 0,
+            hook_run_count: 0,
+            hook_error_count: 0,
+        }
+    }
+
+    #[test]
+    fn test_estimated_cost() {
+        let session = make_session("claude-sonnet-4-20250514", 1_000_000, 100_000, 0, 0);
+        let cost = session.estimated_cost_usd();
+        let expected = (1_000_000.0 * 3.0 + 100_000.0 * 15.0) / 1_000_000.0;
+        assert!((cost - expected).abs() < 0.001);
+
+        let opus = make_session("claude-opus-4-20250514", 1_000_000, 100_000, 0, 0);
+        let opus_cost = opus.estimated_cost_usd();
+        assert!(opus_cost > cost);
+    }
+}

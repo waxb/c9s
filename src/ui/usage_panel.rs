@@ -1,4 +1,4 @@
-use ratatui::layout::{Constraint, Layout, Rect};
+use ratatui::layout::Rect;
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Paragraph};
@@ -7,12 +7,7 @@ use ratatui::Frame;
 use crate::session::Session;
 use crate::usage::UsageData;
 
-pub fn render_usage_panel(
-    f: &mut Frame,
-    usage: &UsageData,
-    sessions: &[&Session],
-    area: Rect,
-) {
+pub fn render_usage_panel(f: &mut Frame, usage: &UsageData, sessions: &[&Session], area: Rect) {
     let block = Block::default()
         .borders(Borders::ALL)
         .border_style(Style::default().fg(Color::DarkGray))
@@ -22,44 +17,28 @@ pub fn render_usage_panel(
     let inner = block.inner(area);
     f.render_widget(block, area);
 
+    let bar_width = inner.width.saturating_sub(2) as usize;
     let mut lines: Vec<Line> = Vec::new();
 
     if usage.api_available {
         if let Some(pct) = usage.five_hour {
-            let label = match &usage.plan_name {
-                Some(p) => format!("5-hour window ({})", p),
-                None => "5-hour window".to_string(),
+            let title = match &usage.plan_name {
+                Some(p) => format!("Current session ({})", p),
+                None => "Current session".to_string(),
             };
-            lines.push(Line::from(Span::styled(
-                format!(" {}", label),
-                Style::default().fg(Color::White).add_modifier(Modifier::BOLD),
-            )));
-            lines.push(render_bar(pct, inner.width.saturating_sub(2)));
+            lines.push(make_title(&title));
+            lines.push(make_bar(pct, bar_width));
             if let Some(ref reset) = usage.five_hour_reset {
-                lines.push(Line::from(Span::styled(
-                    format!(" Resets {}", reset),
-                    Style::default().fg(Color::DarkGray),
-                )));
+                lines.push(make_reset(reset));
             }
         }
 
         if let Some(pct) = usage.seven_day {
-            lines.push(Line::from(""));
-            lines.push(Line::from(Span::styled(
-                " Weekly (all models)".to_string(),
-                Style::default().fg(Color::White).add_modifier(Modifier::BOLD),
-            )));
-            lines.push(render_bar(pct, inner.width.saturating_sub(2)));
+            lines.push(make_title("Current week (all models)"));
+            lines.push(make_bar(pct, bar_width));
             if let Some(ref reset) = usage.seven_day_reset {
-                lines.push(Line::from(Span::styled(
-                    format!(" Resets {}", reset),
-                    Style::default().fg(Color::DarkGray),
-                )));
+                lines.push(make_reset(reset));
             }
-        }
-
-        if lines.len() < inner.height as usize {
-            lines.push(Line::from(""));
         }
     }
 
@@ -68,18 +47,21 @@ pub fn render_usage_panel(
     let live_count = sessions.iter().filter(|s| s.pid.is_some()).count();
     let total_count = sessions.len();
 
-    let mut model_tokens: std::collections::HashMap<&str, u64> = std::collections::HashMap::new();
+    let mut model_tokens: [(&str, u64); 4] =
+        [("opus", 0), ("sonnet", 0), ("haiku", 0), ("other", 0)];
     for s in sessions {
-        let model_key = match s.model.as_deref() {
-            Some(m) if m.contains("opus") => "opus",
-            Some(m) if m.contains("sonnet") => "sonnet",
-            Some(m) if m.contains("haiku") => "haiku",
-            _ => "other",
+        let idx = match s.model.as_deref() {
+            Some(m) if m.contains("opus") => 0,
+            Some(m) if m.contains("sonnet") => 1,
+            Some(m) if m.contains("haiku") => 2,
+            _ => 3,
         };
-        *model_tokens.entry(model_key).or_default() += s.total_tokens();
+        model_tokens[idx].1 += s.total_tokens();
     }
 
-    let stats_line = format!(
+    lines.push(make_title("Sessions"));
+
+    let stats = format!(
         " ${:.2} | {} tokens | {} live / {} total",
         today_cost,
         format_tokens(today_tokens),
@@ -87,23 +69,15 @@ pub fn render_usage_panel(
         total_count,
     );
     lines.push(Line::from(Span::styled(
-        stats_line,
-        Style::default().fg(Color::Yellow),
+        stats,
+        Style::default().fg(Color::White),
     )));
 
-    let mut model_parts: Vec<String> = Vec::new();
-    for key in &["opus", "sonnet", "haiku"] {
-        if let Some(&t) = model_tokens.get(key) {
-            if t > 0 {
-                model_parts.push(format!("{} {}", key, format_tokens(t)));
-            }
-        }
-    }
-    if let Some(&t) = model_tokens.get("other") {
-        if t > 0 {
-            model_parts.push(format!("other {}", format_tokens(t)));
-        }
-    }
+    let model_parts: Vec<String> = model_tokens
+        .iter()
+        .filter(|(_, t)| *t > 0)
+        .map(|(name, t)| format!("{} {}", name, format_tokens(*t)))
+        .collect();
     if !model_parts.is_empty() {
         lines.push(Line::from(Span::styled(
             format!(" Models: {}", model_parts.join(" | ")),
@@ -111,34 +85,54 @@ pub fn render_usage_panel(
         )));
     }
 
-    let chunks = Layout::vertical([Constraint::Min(0)]).split(inner);
     let paragraph = Paragraph::new(lines);
-    f.render_widget(paragraph, chunks[0]);
+    f.render_widget(paragraph, inner);
 }
 
-fn render_bar(pct: u8, width: u16) -> Line<'static> {
-    let bar_width = (width as usize).saturating_sub(14);
-    let filled = (bar_width as f64 * pct as f64 / 100.0).round() as usize;
-    let empty = bar_width.saturating_sub(filled);
+fn make_title(text: &str) -> Line<'static> {
+    Line::from(Span::styled(
+        format!(" {}", text),
+        Style::default()
+            .fg(Color::Cyan)
+            .add_modifier(Modifier::BOLD),
+    ))
+}
 
-    let color = if pct >= 80 {
-        Color::Red
-    } else if pct >= 50 {
-        Color::Yellow
-    } else {
-        Color::Green
-    };
+fn make_bar(pct: u8, total_width: usize) -> Line<'static> {
+    let label = format!("{}% used", pct);
+    let label_len = label.len() + 1;
+    let bar_max = total_width.saturating_sub(label_len + 2);
+    let filled = (bar_max as f64 * pct as f64 / 100.0).round() as usize;
+    let empty = bar_max.saturating_sub(filled);
 
+    let color = bar_color(pct);
     let bar_filled = "\u{2588}".repeat(filled);
-    let bar_empty = " ".repeat(empty);
-    let label = format!(" {}% used", pct);
+    let bar_empty = "\u{2591}".repeat(empty);
 
     Line::from(vec![
         Span::raw(" "),
         Span::styled(bar_filled, Style::default().fg(color)),
-        Span::styled(bar_empty, Style::default()),
-        Span::styled(label, Style::default().fg(color).add_modifier(Modifier::BOLD)),
+        Span::styled(bar_empty, Style::default().fg(Color::Indexed(238))),
+        Span::raw(" "),
+        Span::styled(label, Style::default().fg(Color::White)),
     ])
+}
+
+fn make_reset(reset: &str) -> Line<'static> {
+    Line::from(Span::styled(
+        format!(" Resets {}", reset),
+        Style::default().fg(Color::DarkGray),
+    ))
+}
+
+fn bar_color(pct: u8) -> Color {
+    if pct >= 80 {
+        Color::Red
+    } else if pct >= 50 {
+        Color::Yellow
+    } else {
+        Color::Indexed(75)
+    }
 }
 
 fn format_tokens(n: u64) -> String {

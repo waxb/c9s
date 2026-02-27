@@ -4,8 +4,8 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Paragraph, Wrap};
 use ratatui::Frame;
 
-use crate::session::Session;
 use crate::session::config::{ConfigItem, ConfigItemKind};
+use crate::session::Session;
 use crate::ui::theme::Theme;
 
 pub fn render_session_detail(
@@ -46,8 +46,11 @@ fn render_tree_layout(
     ])
     .split(area);
 
-    let header = Paragraph::new(Line::from(Span::styled(title.to_string(), Theme::title())))
-        .block(Block::default().borders(Borders::ALL).style(Theme::border()));
+    let header = Paragraph::new(Line::from(Span::styled(title.to_string(), Theme::title()))).block(
+        Block::default()
+            .borders(Borders::ALL)
+            .style(Theme::border()),
+    );
     f.render_widget(header, chunks[0]);
 
     let columns = Layout::horizontal([
@@ -96,21 +99,27 @@ fn render_preview_layout(
     ])
     .split(area);
 
-    let header = Paragraph::new(Line::from(Span::styled(title.to_string(), Theme::title())))
-        .block(Block::default().borders(Borders::ALL).style(Theme::border()));
+    let header = Paragraph::new(Line::from(Span::styled(title.to_string(), Theme::title()))).block(
+        Block::default()
+            .borders(Borders::ALL)
+            .style(Theme::border()),
+    );
     f.render_widget(header, chunks[0]);
 
-    let columns = Layout::horizontal([
-        Constraint::Percentage(30),
-        Constraint::Percentage(70),
-    ])
-    .split(chunks[1]);
+    let columns = Layout::horizontal([Constraint::Percentage(30), Constraint::Percentage(70)])
+        .split(chunks[1]);
 
     render_info_column(f, session, columns[0]);
 
-    let lines: Vec<Line> = content.lines().map(|l| {
-        Line::from(Span::styled(l.to_string(), Style::default().fg(Color::White)))
-    }).collect();
+    let lines: Vec<Line> = content
+        .lines()
+        .map(|l| {
+            Line::from(Span::styled(
+                l.to_string(),
+                Style::default().fg(Color::White),
+            ))
+        })
+        .collect();
 
     let total_lines = lines.len();
     let visible_height = columns[1].height.saturating_sub(2) as usize;
@@ -133,7 +142,9 @@ fn render_preview_layout(
         .title(format!(" {} {}", filename, scroll_indicator))
         .borders(Borders::ALL)
         .style(Theme::border());
-    let para = Paragraph::new(visible).block(block).wrap(Wrap { trim: false });
+    let para = Paragraph::new(visible)
+        .block(block)
+        .wrap(Wrap { trim: false });
     f.render_widget(para, columns[1]);
 
     let footer = Paragraph::new(Line::from(Span::styled(
@@ -143,12 +154,7 @@ fn render_preview_layout(
     f.render_widget(footer, chunks[2]);
 }
 
-fn render_config_tree(
-    f: &mut Frame,
-    items: &[ConfigItem],
-    cursor: usize,
-    area: Rect,
-) {
+fn render_config_tree(f: &mut Frame, items: &[ConfigItem], cursor: usize, area: Rect) {
     let visible_height = area.height.saturating_sub(2) as usize;
     if visible_height == 0 {
         return;
@@ -186,10 +192,7 @@ fn render_config_tree(
             let is_selected = i == cursor;
 
             if item.kind == ConfigItemKind::SectionTotal {
-                return Line::from(Span::styled(
-                    format!("  {}", item.label),
-                    total_style,
-                ));
+                return Line::from(Span::styled(format!("  {}", item.label), total_style));
             }
 
             if is_selected {
@@ -255,27 +258,15 @@ fn render_info_column(f: &mut Frame, session: &Session, area: Rect) {
         kv_line("ID", &session.id[..8.min(session.id.len())]),
         kv_line("CWD", &session.cwd.to_string_lossy()),
         kv_line("Project", &session.project_name),
-        kv_line(
-            "Branch",
-            session.git_branch.as_deref().unwrap_or("-"),
-        ),
-        kv_line(
-            "Model",
-            session.model.as_deref().unwrap_or("-"),
-        ),
+        kv_line("Branch", session.git_branch.as_deref().unwrap_or("-")),
+        kv_line("Model", session.model.as_deref().unwrap_or("-")),
         kv_line("Status", session.status.label()),
         kv_line(
             "PID",
             &session.pid.map_or("-".to_string(), |p| p.to_string()),
         ),
-        kv_line(
-            "Version",
-            session.claude_version.as_deref().unwrap_or("-"),
-        ),
-        kv_line(
-            "Perm",
-            session.permission_mode.as_deref().unwrap_or("-"),
-        ),
+        kv_line("Version", session.claude_version.as_deref().unwrap_or("-")),
+        kv_line("Perm", session.permission_mode.as_deref().unwrap_or("-")),
     ];
 
     if !session.plan_slugs.is_empty() {
@@ -303,10 +294,7 @@ fn render_usage_column(f: &mut Frame, session: &Session, area: Rect) {
         kv_line("Compactions", &session.compaction_count.to_string()),
         kv_line(
             "Hooks",
-            &format!(
-                "{}/{}err",
-                session.hook_run_count, session.hook_error_count
-            ),
+            &format!("{}/{}err", session.hook_run_count, session.hook_error_count),
         ),
         kv_line("Last Active", &session.last_activity_display()),
         kv_line("Duration", &session.duration_display()),

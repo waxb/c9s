@@ -51,10 +51,11 @@ impl JsonlNotifier {
 
         let jsonl_path = project_dir.join(format!("{}.jsonl", session_id));
         let (path, size) = if jsonl_path.exists() {
-            let size = std::fs::metadata(&jsonl_path)
-                .map(|m| m.len())
-                .unwrap_or(0);
-            debug_log(&format!("new: found jsonl at {:?} size={}", jsonl_path, size));
+            let size = std::fs::metadata(&jsonl_path).map(|m| m.len()).unwrap_or(0);
+            debug_log(&format!(
+                "new: found jsonl at {:?} size={}",
+                jsonl_path, size
+            ));
             (Some(jsonl_path), size)
         } else {
             debug_log(&format!("new: no jsonl at {:?}, will discover", jsonl_path));
@@ -86,7 +87,12 @@ impl JsonlNotifier {
         };
 
         if current_size > self.last_size {
-            debug_log(&format!("new data: {} -> {} (+{})", self.last_size, current_size, current_size - self.last_size));
+            debug_log(&format!(
+                "new data: {} -> {} (+{})",
+                self.last_size,
+                current_size,
+                current_size - self.last_size
+            ));
         }
 
         if current_size == self.last_size {
@@ -165,7 +171,10 @@ impl JsonlNotifier {
                                     | SessionState::Working
                                     | SessionState::ToolWait
                             ) {
-                                debug_log(&format!("BELL: end_turn from state {:?}", self.state as u8));
+                                debug_log(&format!(
+                                    "BELL: end_turn from state {:?}",
+                                    self.state as u8
+                                ));
                                 should_notify = true;
                             }
                             self.state = SessionState::Idle;
@@ -216,12 +225,12 @@ impl JsonlNotifier {
         let mut newest: Option<(PathBuf, SystemTime)> = None;
         for entry in entries.flatten() {
             let p = entry.path();
-            if p.extension().map_or(true, |e| e != "jsonl") {
+            if p.extension().is_none_or(|e| e != "jsonl") {
                 continue;
             }
             if let Ok(meta) = p.metadata() {
                 if let Ok(mtime) = meta.modified() {
-                    if newest.as_ref().map_or(true, |(_, t)| mtime > *t) {
+                    if newest.as_ref().is_none_or(|(_, t)| mtime > *t) {
                         newest = Some((p, mtime));
                     }
                 }

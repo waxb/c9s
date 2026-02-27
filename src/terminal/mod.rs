@@ -180,7 +180,9 @@ impl EmbeddedTerminal {
     pub fn scroll_down(&self, lines: usize) {
         let mut parser = self.parser.lock().unwrap();
         let current = parser.screen().scrollback();
-        parser.screen_mut().set_scrollback(current.saturating_sub(lines));
+        parser
+            .screen_mut()
+            .set_scrollback(current.saturating_sub(lines));
         self.dirty.store(true, Ordering::Relaxed);
     }
 
@@ -193,7 +195,11 @@ impl EmbeddedTerminal {
                 pixel_height: 0,
             })
             .map_err(|e| anyhow::anyhow!("{}", e))?;
-        self.parser.lock().unwrap().screen_mut().set_size(rows, cols);
+        self.parser
+            .lock()
+            .unwrap()
+            .screen_mut()
+            .set_size(rows, cols);
         self.dirty.store(true, Ordering::Relaxed);
         Ok(())
     }

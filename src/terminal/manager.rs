@@ -57,14 +57,11 @@ impl TerminalManager {
                 kill_process(pid);
                 std::thread::sleep(std::time::Duration::from_millis(200));
             }
-            let term =
-                EmbeddedTerminal::spawn_resume(session_id, project_name, cwd, rows, cols)?;
+            let term = EmbeddedTerminal::spawn_resume(session_id, project_name, cwd, rows, cols)?;
             self.order.push(session_id.to_string());
             self.terminals.insert(session_id.to_string(), term);
-            self.notifiers.insert(
-                session_id.to_string(),
-                JsonlNotifier::new(cwd, session_id),
-            );
+            self.notifiers
+                .insert(session_id.to_string(), JsonlNotifier::new(cwd, session_id));
         }
         self.active_id = Some(session_id.to_string());
         self.clear_active_bells();
@@ -174,7 +171,7 @@ impl TerminalManager {
     }
 
     pub fn active_is_exited(&self) -> bool {
-        self.active_terminal().map_or(false, |t| t.is_exited())
+        self.active_terminal().is_some_and(|t| t.is_exited())
     }
 
     pub fn is_attached(&self, session_id: &str) -> bool {

@@ -13,7 +13,7 @@ const BINDINGS: &[(&str, &str)] = &[
     ("d", "Session detail panel"),
     ("a", "Attach (open terminal)"),
     ("1-9", "Attach to live session by #"),
-    ("Space", "Quick switch (harpoon)"),
+    ("Space", "Quick switcher"),
     ("n", "New session (/new path)"),
     ("/", "Filter sessions"),
     ("s", "Cycle sort column"),
@@ -25,7 +25,7 @@ const BINDINGS: &[(&str, &str)] = &[
     ("", ""),
     ("In terminal", ""),
     ("Ctrl+d", "Detach (back to list)"),
-    ("Ctrl+Space", "Harpoon (quick switch)"),
+    ("Ctrl+Space", "Quick switcher"),
     ("Ctrl+n / Ctrl+p", "Cycle next / prev session"),
     ("Ctrl+K / Ctrl+J", "Scroll history up / down"),
 ];
@@ -44,10 +44,7 @@ pub fn render_help(f: &mut Frame, area: Rect) {
             if key.is_empty() && desc.is_empty() {
                 Line::from("")
             } else if desc.is_empty() {
-                Line::from(Span::styled(
-                    format!("  -- {} --", key),
-                    Theme::footer(),
-                ))
+                Line::from(Span::styled(format!("  -- {} --", key), Theme::footer()))
             } else {
                 Line::from(vec![
                     Span::styled(format!("  {:<16}", key), Theme::help_key()),

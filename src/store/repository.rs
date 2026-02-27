@@ -107,11 +107,11 @@ impl Store {
 
     #[allow(dead_code)]
     pub fn get_total_cost(&self) -> Result<f64> {
-        let cost: f64 = self
-            .conn
-            .query_row("SELECT COALESCE(SUM(estimated_cost_usd), 0.0) FROM sessions", [], |row| {
-                row.get(0)
-            })?;
+        let cost: f64 = self.conn.query_row(
+            "SELECT COALESCE(SUM(estimated_cost_usd), 0.0) FROM sessions",
+            [],
+            |row| row.get(0),
+        )?;
         Ok(cost)
     }
 

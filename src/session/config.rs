@@ -46,10 +46,9 @@ fn estimate_file_tokens(path: &Path) -> (Option<u32>, Option<bool>) {
         return (Some(tokens), Some(true));
     }
 
-    let has_paths = frontmatter.contains("\npaths:")
-        || frontmatter.contains("\npaths :");
-    let has_always_apply_false = frontmatter.contains("alwaysApply: false")
-        || frontmatter.contains("alwaysApply:false");
+    let has_paths = frontmatter.contains("\npaths:") || frontmatter.contains("\npaths :");
+    let has_always_apply_false =
+        frontmatter.contains("alwaysApply: false") || frontmatter.contains("alwaysApply:false");
 
     if has_paths || has_always_apply_false {
         (Some(tokens), Some(false))
@@ -60,12 +59,23 @@ fn estimate_file_tokens(path: &Path) -> (Option<u32>, Option<bool>) {
 
 fn make_item(label: String, path: Option<PathBuf>, kind: ConfigItemKind) -> ConfigItem {
     let (tokens, always_loaded) = match &path {
-        Some(p) if matches!(kind, ConfigItemKind::FileExists | ConfigItemKind::MemoryFile) => {
+        Some(p)
+            if matches!(
+                kind,
+                ConfigItemKind::FileExists | ConfigItemKind::MemoryFile
+            ) =>
+        {
             estimate_file_tokens(p)
         }
         _ => (None, None),
     };
-    ConfigItem { label, path, kind, tokens, always_loaded }
+    ConfigItem {
+        label,
+        path,
+        kind,
+        tokens,
+        always_loaded,
+    }
 }
 
 pub fn build_config_items(cfg: &SessionConfig, cwd: &Path) -> Vec<ConfigItem> {
@@ -73,7 +83,10 @@ pub fn build_config_items(cfg: &SessionConfig, cwd: &Path) -> Vec<ConfigItem> {
         .unwrap_or_else(|| PathBuf::from("~"))
         .join(".claude");
     let encoded_cwd = cwd.to_string_lossy().replace('/', "-");
-    let memory_dir = claude_dir.join("projects").join(&encoded_cwd).join("memory");
+    let memory_dir = claude_dir
+        .join("projects")
+        .join(&encoded_cwd)
+        .join("memory");
 
     let mut items = Vec::new();
     let mut global_total: u32 = 0;
@@ -89,7 +102,11 @@ pub fn build_config_items(cfg: &SessionConfig, cwd: &Path) -> Vec<ConfigItem> {
 
     let global_md = claude_dir.join("CLAUDE.md");
     let item = if cfg.global_claude_md {
-        make_item("CLAUDE.md".to_string(), Some(global_md), ConfigItemKind::FileExists)
+        make_item(
+            "CLAUDE.md".to_string(),
+            Some(global_md),
+            ConfigItemKind::FileExists,
+        )
     } else {
         make_item("CLAUDE.md".to_string(), None, ConfigItemKind::FileMissing)
     };
@@ -97,7 +114,11 @@ pub fn build_config_items(cfg: &SessionConfig, cwd: &Path) -> Vec<ConfigItem> {
     items.push(item);
 
     if cfg.global_rules.is_empty() {
-        items.push(make_item("rules/  [empty]".to_string(), None, ConfigItemKind::FileMissing));
+        items.push(make_item(
+            "rules/  [empty]".to_string(),
+            None,
+            ConfigItemKind::FileMissing,
+        ));
     } else {
         let mut current_cat = String::new();
         for entry in &cfg.global_rules {
@@ -109,8 +130,15 @@ pub fn build_config_items(cfg: &SessionConfig, cwd: &Path) -> Vec<ConfigItem> {
                     ConfigItemKind::Category,
                 ));
             }
-            let path = claude_dir.join("rules").join(&current_cat).join(&entry.name);
-            let item = make_item(format!("  {}", entry.name), Some(path), ConfigItemKind::FileExists);
+            let path = claude_dir
+                .join("rules")
+                .join(&current_cat)
+                .join(&entry.name);
+            let item = make_item(
+                format!("  {}", entry.name),
+                Some(path),
+                ConfigItemKind::FileExists,
+            );
             accumulate(&item, &mut global_total, &mut global_always);
             items.push(item);
         }
@@ -127,8 +155,15 @@ pub fn build_config_items(cfg: &SessionConfig, cwd: &Path) -> Vec<ConfigItem> {
                     ConfigItemKind::Category,
                 ));
             }
-            let path = claude_dir.join("agents").join(&current_cat).join(&entry.name);
-            let item = make_item(format!("  {}", entry.name), Some(path), ConfigItemKind::FileExists);
+            let path = claude_dir
+                .join("agents")
+                .join(&current_cat)
+                .join(&entry.name);
+            let item = make_item(
+                format!("  {}", entry.name),
+                Some(path),
+                ConfigItemKind::FileExists,
+            );
             accumulate(&item, &mut global_total, &mut global_always);
             items.push(item);
         }
@@ -163,7 +198,11 @@ pub fn build_config_items(cfg: &SessionConfig, cwd: &Path) -> Vec<ConfigItem> {
 
     let project_md = cwd.join("CLAUDE.md");
     let item = if cfg.project_claude_md {
-        make_item("CLAUDE.md".to_string(), Some(project_md), ConfigItemKind::FileExists)
+        make_item(
+            "CLAUDE.md".to_string(),
+            Some(project_md),
+            ConfigItemKind::FileExists,
+        )
     } else {
         make_item("CLAUDE.md".to_string(), None, ConfigItemKind::FileMissing)
     };
@@ -181,8 +220,16 @@ pub fn build_config_items(cfg: &SessionConfig, cwd: &Path) -> Vec<ConfigItem> {
                     ConfigItemKind::Category,
                 ));
             }
-            let path = cwd.join(".claude").join("rules").join(&current_cat).join(&entry.name);
-            let item = make_item(format!("  {}", entry.name), Some(path), ConfigItemKind::FileExists);
+            let path = cwd
+                .join(".claude")
+                .join("rules")
+                .join(&current_cat)
+                .join(&entry.name);
+            let item = make_item(
+                format!("  {}", entry.name),
+                Some(path),
+                ConfigItemKind::FileExists,
+            );
             accumulate(&item, &mut project_total, &mut project_always);
             items.push(item);
         }
@@ -190,13 +237,25 @@ pub fn build_config_items(cfg: &SessionConfig, cwd: &Path) -> Vec<ConfigItem> {
 
     let settings_path = cwd.join(".claude").join("settings.local.json");
     items.push(if cfg.project_settings {
-        make_item("settings.local.json".to_string(), Some(settings_path), ConfigItemKind::FileExists)
+        make_item(
+            "settings.local.json".to_string(),
+            Some(settings_path),
+            ConfigItemKind::FileExists,
+        )
     } else {
-        make_item("settings.local.json".to_string(), None, ConfigItemKind::FileMissing)
+        make_item(
+            "settings.local.json".to_string(),
+            None,
+            ConfigItemKind::FileMissing,
+        )
     });
 
     if !cfg.project_commands.is_empty() {
-        items.push(make_item("commands/".to_string(), None, ConfigItemKind::Category));
+        items.push(make_item(
+            "commands/".to_string(),
+            None,
+            ConfigItemKind::Category,
+        ));
         for cmd in &cfg.project_commands {
             let path = cwd.join(".claude").join("commands").join(cmd);
             let item = make_item(format!("  {}", cmd), Some(path), ConfigItemKind::FileExists);
@@ -232,7 +291,11 @@ pub fn build_config_items(cfg: &SessionConfig, cwd: &Path) -> Vec<ConfigItem> {
     });
 
     if cfg.project_memories.is_empty() {
-        items.push(make_item("  (no memories)".to_string(), None, ConfigItemKind::FileMissing));
+        items.push(make_item(
+            "  (no memories)".to_string(),
+            None,
+            ConfigItemKind::FileMissing,
+        ));
     } else {
         for mem in &cfg.project_memories {
             let item = make_item(
@@ -339,7 +402,10 @@ pub fn scan_session_config(cwd: &Path) -> SessionConfig {
     let project_commands = scan_flat_files(&cwd.join(".claude").join("commands"));
 
     let encoded_cwd = cwd.to_string_lossy().replace('/', "-");
-    let memory_dir = claude_dir.join("projects").join(&encoded_cwd).join("memory");
+    let memory_dir = claude_dir
+        .join("projects")
+        .join(&encoded_cwd)
+        .join("memory");
     let project_memories = scan_flat_files(&memory_dir);
 
     SessionConfig {
@@ -361,10 +427,7 @@ fn scan_categorized_dir(dir: &Path) -> Vec<ConfigEntry> {
         return entries;
     };
 
-    let mut cats: Vec<_> = categories
-        .flatten()
-        .filter(|e| e.path().is_dir())
-        .collect();
+    let mut cats: Vec<_> = categories.flatten().filter(|e| e.path().is_dir()).collect();
     cats.sort_by_key(|e| e.file_name());
 
     for cat in cats {
@@ -419,4 +482,45 @@ fn scan_flat_files(dir: &Path) -> Vec<String> {
         .collect();
     names.sort();
     names
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::io::Write;
+
+    #[test]
+    fn test_estimate_file_tokens() {
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join("test.md");
+        std::fs::write(&file, "a".repeat(400)).unwrap();
+        let (tokens, always) = estimate_file_tokens(&file);
+        assert_eq!(tokens, Some(100));
+        assert_eq!(always, Some(true));
+    }
+
+    #[test]
+    fn test_conditional_detection() {
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join("rule.md");
+        let mut f = std::fs::File::create(&file).unwrap();
+        writeln!(f, "---").unwrap();
+        writeln!(f, "paths:").unwrap();
+        writeln!(f, "  - src/**/*.rs").unwrap();
+        writeln!(f, "---").unwrap();
+        writeln!(f, "Some rule content here").unwrap();
+        let (tokens, always) = estimate_file_tokens(&file);
+        assert!(tokens.is_some());
+        assert_eq!(always, Some(false));
+    }
+
+    #[test]
+    fn test_always_loaded_detection() {
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join("rule.md");
+        std::fs::write(&file, "Just plain content without frontmatter").unwrap();
+        let (tokens, always) = estimate_file_tokens(&file);
+        assert!(tokens.is_some());
+        assert_eq!(always, Some(true));
+    }
 }

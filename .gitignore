@@ -2,3 +2,6 @@
 .beads/
 .claude/
 ideas.save
+*.swp
+*.swo
+.DS_Store

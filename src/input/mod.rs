@@ -1,3 +1,3 @@
 mod handler;
 
-pub use handler::{Action, handle_event};
+pub use handler::{handle_event, Action};

@@ -20,7 +20,7 @@ fn truncate(s: &str, max: usize) -> String {
     }
 }
 
-pub fn render_harpoon(f: &mut Frame, app: &App, area: Rect) {
+pub fn render_qswitcher(f: &mut Frame, app: &App, area: Rect) {
     let sessions = app.filtered_sessions();
 
     if sessions.is_empty() {
@@ -68,9 +68,7 @@ pub fn render_harpoon(f: &mut Frame, app: &App, area: Rect) {
                     .fg(Color::Cyan)
                     .add_modifier(Modifier::BOLD | base_mod)
             } else {
-                Style::default()
-                    .fg(Color::DarkGray)
-                    .add_modifier(base_mod)
+                Style::default().fg(Color::DarkGray).add_modifier(base_mod)
             };
 
             let branch = session.git_branch.as_deref().unwrap_or("");
@@ -81,9 +79,7 @@ pub fn render_harpoon(f: &mut Frame, app: &App, area: Rect) {
                     .fg(Color::White)
                     .add_modifier(Modifier::BOLD | base_mod)
             } else {
-                Style::default()
-                    .fg(Color::White)
-                    .add_modifier(base_mod)
+                Style::default().fg(Color::White).add_modifier(base_mod)
             };
 
             Line::from(vec![
@@ -101,9 +97,7 @@ pub fn render_harpoon(f: &mut Frame, app: &App, area: Rect) {
                 ),
                 Span::styled(
                     branch_display,
-                    Style::default()
-                        .fg(Color::DarkGray)
-                        .add_modifier(base_mod),
+                    Style::default().fg(Color::DarkGray).add_modifier(base_mod),
                 ),
             ])
         })

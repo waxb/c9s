@@ -1,5 +1,5 @@
+use crate::session::config::{build_config_items, scan_session_config, ConfigItem};
 use crate::session::{Session, SessionConfig, SessionDiscovery, SessionStatus};
-use crate::session::config::{scan_session_config, build_config_items, ConfigItem};
 use crate::store::Store;
 use crate::terminal::TerminalManager;
 use crate::usage::{UsageData, UsageFetcher};
@@ -11,9 +11,9 @@ pub enum ViewMode {
     Detail,
     Help,
     Filter,
-    Harpoon,
+    QSwitcher,
     Terminal,
-    TerminalHarpoon,
+    TerminalQSwitcher,
     Command,
     ConfirmQuit,
 }
@@ -128,10 +128,12 @@ impl App {
     fn apply_sort(&mut self) {
         match self.sort_column {
             SortColumn::LastActive => {
-                self.sessions.sort_by(|a, b| b.last_activity.cmp(&a.last_activity));
+                self.sessions
+                    .sort_by(|a, b| b.last_activity.cmp(&a.last_activity));
             }
             SortColumn::Project => {
-                self.sessions.sort_by(|a, b| a.project_name.cmp(&b.project_name));
+                self.sessions
+                    .sort_by(|a, b| a.project_name.cmp(&b.project_name));
             }
             SortColumn::Cost => {
                 self.sessions.sort_by(|a, b| {
@@ -154,7 +156,8 @@ impl App {
                 });
             }
             SortColumn::Tokens => {
-                self.sessions.sort_by(|a, b| b.total_tokens().cmp(&a.total_tokens()));
+                self.sessions
+                    .sort_by_key(|b| std::cmp::Reverse(b.total_tokens()));
             }
         }
     }
@@ -209,7 +212,7 @@ impl App {
     }
 
     pub fn set_view_mode(&mut self, mode: ViewMode) {
-        if matches!(mode, ViewMode::Harpoon | ViewMode::TerminalHarpoon) {
+        if matches!(mode, ViewMode::QSwitcher | ViewMode::TerminalQSwitcher) {
             let max = self.filtered.len().min(9);
             if self.selected >= max && max > 0 {
                 self.selected = max - 1;
@@ -251,7 +254,8 @@ impl App {
     pub fn detail_open_preview(&mut self) {
         if let Some(item) = self.detail_items.get(self.detail_cursor) {
             if let Some(ref path) = item.path {
-                let name = path.file_name()
+                let name = path
+                    .file_name()
                     .map(|n| n.to_string_lossy().to_string())
                     .unwrap_or_default();
                 let content = std::fs::read_to_string(path)
@@ -300,7 +304,10 @@ impl App {
             }
             return;
         }
-        let limit = if matches!(self.view_mode, ViewMode::Harpoon | ViewMode::TerminalHarpoon) {
+        let limit = if matches!(
+            self.view_mode,
+            ViewMode::QSwitcher | ViewMode::TerminalQSwitcher
+        ) {
             self.filtered.len().min(9)
         } else {
             self.filtered.len()
@@ -410,10 +417,6 @@ impl App {
 
     #[allow(dead_code)]
     pub fn live_sessions(&self) -> Vec<&Session> {
-        self.sessions
-            .iter()
-            .filter(|s| s.pid.is_some())
-            .collect()
+        self.sessions.iter().filter(|s| s.pid.is_some()).collect()
     }
-
 }

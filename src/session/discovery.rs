@@ -92,7 +92,7 @@ impl SessionDiscovery {
                 if let Ok(jsonl_files) = std::fs::read_dir(&path) {
                     for jf in jsonl_files.flatten() {
                         let jf_path = jf.path();
-                        if jf_path.extension().map_or(true, |e| e != "jsonl") {
+                        if jf_path.extension().is_none_or(|e| e != "jsonl") {
                             continue;
                         }
 
@@ -117,10 +117,7 @@ impl SessionDiscovery {
                             .clone()
                             .unwrap_or_else(|| session_id.clone());
 
-                        let project_cwd = stats
-                            .cwd
-                            .clone()
-                            .unwrap_or_else(|| fallback_cwd.clone());
+                        let project_cwd = stats.cwd.clone().unwrap_or_else(|| fallback_cwd.clone());
 
                         let pid = live_cwds.get(&project_cwd).copied();
 
@@ -267,9 +264,7 @@ impl SessionDiscovery {
     }
 
     fn parse_jsonl_cached(&mut self, path: &Path) -> JsonlStats {
-        let mtime = std::fs::metadata(path)
-            .and_then(|m| m.modified())
-            .ok();
+        let mtime = std::fs::metadata(path).and_then(|m| m.modified()).ok();
 
         if let Some(mtime) = mtime {
             if let Some((cached_mtime, cached_stats)) = self.stats_cache.get(path) {
@@ -374,8 +369,10 @@ impl SessionDiscovery {
                         }
 
                         if let Some(usage) = message.get("usage") {
-                            stats.input_tokens +=
-                                usage.get("input_tokens").and_then(|v| v.as_u64()).unwrap_or(0);
+                            stats.input_tokens += usage
+                                .get("input_tokens")
+                                .and_then(|v| v.as_u64())
+                                .unwrap_or(0);
                             stats.output_tokens += usage
                                 .get("output_tokens")
                                 .and_then(|v| v.as_u64())
@@ -414,5 +411,38 @@ fn extract_project_name(cwd: &str) -> String {
         0 => cwd.to_string(),
         1 => parts[0].to_string(),
         _ => format!("{}/{}", parts[1], parts[0]),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_decode_project_path() {
+        assert_eq!(decode_project_path("-Users-foo-bar"), "/Users/foo/bar");
+        assert_eq!(
+            decode_project_path("-home-user-project"),
+            "/home/user/project"
+        );
+    }
+
+    #[test]
+    fn test_parse_jsonl_extracts_session_id() {
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join("test.jsonl");
+        let lines = [
+            r#"{"sessionId":"abc-123","cwd":"/tmp/proj","type":"user","timestamp":"2026-01-01T00:00:00Z"}"#,
+            r#"{"type":"assistant","message":{"model":"claude-sonnet-4-20250514","stop_reason":"end_turn","usage":{"input_tokens":100,"output_tokens":50}},"timestamp":"2026-01-01T00:01:00Z"}"#,
+        ];
+        std::fs::write(&file, lines.join("\n")).unwrap();
+
+        let stats = SessionDiscovery::parse_jsonl(&file);
+        assert_eq!(stats.session_id.as_deref(), Some("abc-123"));
+        assert_eq!(stats.cwd.as_deref(), Some("/tmp/proj"));
+        assert_eq!(stats.input_tokens, 100);
+        assert_eq!(stats.output_tokens, 50);
+        assert_eq!(stats.message_count, 2);
+        assert!(stats.model.as_deref().unwrap().contains("sonnet"));
     }
 }

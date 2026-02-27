@@ -14,9 +14,7 @@ pub fn render_confirm_quit(f: &mut Frame, active_sessions: &[String], area: Rect
     f.render_widget(Clear, popup_area);
 
     let border_style = Style::default().fg(Color::Red);
-    let title_style = Style::default()
-        .fg(Color::Red)
-        .add_modifier(Modifier::BOLD);
+    let title_style = Style::default().fg(Color::Red).add_modifier(Modifier::BOLD);
 
     let mut lines: Vec<Line> = Vec::new();
     lines.push(Line::from(""));
@@ -43,9 +41,7 @@ pub fn render_confirm_quit(f: &mut Frame, active_sessions: &[String], area: Rect
         Span::styled("    ", Style::default()),
         Span::styled(
             " y/Enter: exit ",
-            Style::default()
-                .fg(Color::Red)
-                .add_modifier(Modifier::BOLD),
+            Style::default().fg(Color::Red).add_modifier(Modifier::BOLD),
         ),
         Span::styled("   ", Style::default()),
         Span::styled(

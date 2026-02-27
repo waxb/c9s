@@ -85,7 +85,10 @@ fn run_loop(
     let mut mouse_captured = true;
 
     loop {
-        if matches!(app.view_mode(), ViewMode::Terminal | ViewMode::TerminalHarpoon) {
+        if matches!(
+            app.view_mode(),
+            ViewMode::Terminal | ViewMode::TerminalQSwitcher
+        ) {
             if let Some(term) = app.terminal_manager().active_terminal() {
                 if term.take_dirty() {
                     needs_draw = true;
@@ -108,14 +111,19 @@ fn run_loop(
                             let preview = app.detail_preview().cloned();
                             let preview_scroll = app.detail_preview_scroll();
                             ui::render_session_detail(
-                                f, &session, &items, cursor,
-                                preview.as_ref(), preview_scroll, area,
+                                f,
+                                &session,
+                                &items,
+                                cursor,
+                                preview.as_ref(),
+                                preview_scroll,
+                                area,
                             );
                         }
                     }
-                    ViewMode::Harpoon => {
+                    ViewMode::QSwitcher => {
                         ui::render_session_list(f, app, area);
-                        ui::render_harpoon(f, app, area);
+                        ui::render_qswitcher(f, app, area);
                     }
                     ViewMode::Help => {
                         ui::render_session_list(f, app, area);
@@ -124,9 +132,9 @@ fn run_loop(
                     ViewMode::Terminal => {
                         render_terminal_view(app, f, area);
                     }
-                    ViewMode::TerminalHarpoon => {
+                    ViewMode::TerminalQSwitcher => {
                         render_terminal_view(app, f, area);
-                        ui::render_harpoon(f, app, area);
+                        ui::render_qswitcher(f, app, area);
                     }
                     ViewMode::Command => {
                         ui::render_session_list(f, app, area);
@@ -147,8 +155,13 @@ fn run_loop(
                 let ev = event::read()?;
 
                 if let event::Event::Resize(cols, rows) = ev {
-                    if matches!(app.view_mode(), ViewMode::Terminal | ViewMode::TerminalHarpoon) {
-                        let _ = app.terminal_manager().resize_active(rows.saturating_sub(2), cols);
+                    if matches!(
+                        app.view_mode(),
+                        ViewMode::Terminal | ViewMode::TerminalQSwitcher
+                    ) {
+                        let _ = app
+                            .terminal_manager()
+                            .resize_active(rows.saturating_sub(2), cols);
                     }
                     needs_draw = true;
                 }
@@ -169,7 +182,10 @@ fn run_loop(
             }
         }
 
-        let in_terminal = matches!(app.view_mode(), ViewMode::Terminal | ViewMode::TerminalHarpoon);
+        let in_terminal = matches!(
+            app.view_mode(),
+            ViewMode::Terminal | ViewMode::TerminalQSwitcher
+        );
         if in_terminal && mouse_captured {
             stdout().execute(DisableMouseCapture)?;
             mouse_captured = false;
@@ -178,18 +194,24 @@ fn run_loop(
             mouse_captured = true;
         }
 
-        app.terminal_manager_mut().check_and_forward_notifications(in_terminal);
+        app.terminal_manager_mut()
+            .check_and_forward_notifications(in_terminal);
 
-        if matches!(app.view_mode(), ViewMode::Terminal | ViewMode::TerminalHarpoon) {
+        if matches!(
+            app.view_mode(),
+            ViewMode::Terminal | ViewMode::TerminalQSwitcher
+        ) {
             app.terminal_manager_mut().cleanup_inactive_exited();
         }
 
-        if !matches!(app.view_mode(), ViewMode::Terminal | ViewMode::TerminalHarpoon) {
-            if last_refresh.elapsed() >= refresh_interval {
-                app.refresh()?;
-                last_refresh = Instant::now();
-                needs_draw = true;
-            }
+        if !matches!(
+            app.view_mode(),
+            ViewMode::Terminal | ViewMode::TerminalQSwitcher
+        ) && last_refresh.elapsed() >= refresh_interval
+        {
+            app.refresh()?;
+            last_refresh = Instant::now();
+            needs_draw = true;
         }
 
         if app.should_quit() {
@@ -200,11 +222,7 @@ fn run_loop(
     Ok(())
 }
 
-fn render_terminal_view(
-    app: &App,
-    f: &mut ratatui::Frame,
-    area: ratatui::layout::Rect,
-) {
+fn render_terminal_view(app: &App, f: &mut ratatui::Frame, area: ratatui::layout::Rect) {
     if let Some(term) = app.terminal_manager().active_terminal() {
         let guard = term.lock_parser();
         let screen = guard.screen();
@@ -251,20 +269,20 @@ fn process_action(
             attach_by_index(app, idx, terminal)?;
             if matches!(
                 app.view_mode(),
-                ViewMode::Harpoon | ViewMode::TerminalHarpoon
+                ViewMode::QSwitcher | ViewMode::TerminalQSwitcher
             ) {
                 app.set_view_mode(ViewMode::Terminal);
             }
         }
-        Action::ToggleHarpoon => {
-            if *app.view_mode() == ViewMode::Harpoon {
+        Action::ToggleQSwitcher => {
+            if *app.view_mode() == ViewMode::QSwitcher {
                 app.set_view_mode(ViewMode::List);
             } else {
-                app.set_view_mode(ViewMode::Harpoon);
+                app.set_view_mode(ViewMode::QSwitcher);
             }
         }
-        Action::TerminalHarpoon => {
-            app.set_view_mode(ViewMode::TerminalHarpoon);
+        Action::TerminalQSwitcher => {
+            app.set_view_mode(ViewMode::TerminalQSwitcher);
         }
         Action::Detach => {
             if app.terminal_manager().active_is_exited() {
@@ -302,8 +320,8 @@ fn process_action(
                     app.set_view_mode(ViewMode::List);
                 }
             }
-            ViewMode::Help | ViewMode::Harpoon => app.set_view_mode(ViewMode::List),
-            ViewMode::TerminalHarpoon => app.set_view_mode(ViewMode::Terminal),
+            ViewMode::Help | ViewMode::QSwitcher => app.set_view_mode(ViewMode::List),
+            ViewMode::TerminalQSwitcher => app.set_view_mode(ViewMode::Terminal),
             ViewMode::Filter => {
                 app.set_view_mode(ViewMode::List);
             }

@@ -12,7 +12,7 @@ use crate::ui::usage_panel::render_usage_panel;
 pub fn render_session_list(f: &mut Frame, app: &App, area: Rect) {
     let show_command_bar = app.is_filtering() || app.attached_session_id().is_some();
 
-    let usage_height = if app.usage().api_available { 10 } else { 4 };
+    let usage_height = if app.usage().api_available { 12 } else { 6 };
 
     let chunks = if show_command_bar {
         Layout::vertical([
@@ -65,7 +65,9 @@ fn render_header(f: &mut Frame, app: &App, area: Rect) {
         Span::styled(sort_info, Theme::footer()),
     ]);
 
-    let block = Block::default().borders(Borders::ALL).style(Theme::border());
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .style(Theme::border());
     let paragraph = Paragraph::new(header).block(block);
     f.render_widget(paragraph, area);
 }
@@ -184,7 +186,9 @@ fn render_table(f: &mut Frame, app: &App, area: Rect) {
                 Cell::from(model_short),
                 Cell::from(session.status.label()).style(status_style),
                 Cell::from(format_count(session.message_count as u64)),
-                Cell::from(format_tokens(session.input_tokens + session.cache_read_tokens)),
+                Cell::from(format_tokens(
+                    session.input_tokens + session.cache_read_tokens,
+                )),
                 Cell::from(format_tokens(session.output_tokens)),
                 Cell::from(format!("${:.2}", session.estimated_cost_usd())).style(Theme::cost()),
                 Cell::from(session.last_activity_display()),
@@ -235,7 +239,7 @@ fn render_footer(f: &mut Frame, app: &App, area: Rect) {
         format_tokens(total_tokens)
     );
 
-    let keys = "  a:attach  d:detail  Space:harpoon  1-9:jump  n:new  /:filter  s:sort  ?:help";
+    let keys = "  a:attach  d:detail  Space:switch  1-9:jump  n:new  /:filter  s:sort  ?:help";
 
     let footer = Line::from(vec![
         Span::styled(stats, Theme::cost()),
@@ -254,7 +258,7 @@ fn shorten_model(model: &str) -> String {
     } else if model.contains("haiku") {
         "haiku".to_string()
     } else {
-        model.split('-').last().unwrap_or(model).to_string()
+        model.split('-').next_back().unwrap_or(model).to_string()
     }
 }
 

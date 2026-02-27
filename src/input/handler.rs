@@ -20,12 +20,12 @@ pub enum Action {
     CycleSort,
     AttachSession,
     AttachByIndex(usize),
-    ToggleHarpoon,
+    ToggleQSwitcher,
     Refresh,
     LaunchNew,
     TerminalInput(Vec<u8>),
     Detach,
-    TerminalHarpoon,
+    TerminalQSwitcher,
     CycleNextSession,
     CyclePrevSession,
     CommandInput(char),
@@ -50,13 +50,17 @@ pub fn handle_event(event: &Event, mode: &ViewMode) -> Action {
 fn handle_mouse(kind: MouseEventKind, mode: &ViewMode) -> Action {
     match kind {
         MouseEventKind::ScrollUp => match mode {
-            ViewMode::Terminal | ViewMode::TerminalHarpoon => Action::ScrollUp(3),
-            ViewMode::List | ViewMode::Filter | ViewMode::Harpoon | ViewMode::Detail => Action::MoveUp,
+            ViewMode::Terminal | ViewMode::TerminalQSwitcher => Action::ScrollUp(3),
+            ViewMode::List | ViewMode::Filter | ViewMode::QSwitcher | ViewMode::Detail => {
+                Action::MoveUp
+            }
             _ => Action::None,
         },
         MouseEventKind::ScrollDown => match mode {
-            ViewMode::Terminal | ViewMode::TerminalHarpoon => Action::ScrollDown(3),
-            ViewMode::List | ViewMode::Filter | ViewMode::Harpoon | ViewMode::Detail => Action::MoveDown,
+            ViewMode::Terminal | ViewMode::TerminalQSwitcher => Action::ScrollDown(3),
+            ViewMode::List | ViewMode::Filter | ViewMode::QSwitcher | ViewMode::Detail => {
+                Action::MoveDown
+            }
             _ => Action::None,
         },
         _ => Action::None,
@@ -65,7 +69,7 @@ fn handle_mouse(kind: MouseEventKind, mode: &ViewMode) -> Action {
 
 fn handle_key(key: &KeyEvent, mode: &ViewMode) -> Action {
     match mode {
-        ViewMode::Terminal | ViewMode::TerminalHarpoon => {}
+        ViewMode::Terminal | ViewMode::TerminalQSwitcher => {}
         _ => {
             if key.modifiers.contains(KeyModifiers::CONTROL) && key.code == KeyCode::Char('c') {
                 return Action::Quit;
@@ -75,9 +79,9 @@ fn handle_key(key: &KeyEvent, mode: &ViewMode) -> Action {
 
     match mode {
         ViewMode::Filter => handle_filter_key(key),
-        ViewMode::Harpoon => handle_harpoon_key(key),
+        ViewMode::QSwitcher => handle_qswitcher_key(key),
         ViewMode::Terminal => handle_terminal_key(key),
-        ViewMode::TerminalHarpoon => handle_terminal_harpoon_key(key),
+        ViewMode::TerminalQSwitcher => handle_terminal_qswitcher_key(key),
         ViewMode::Command => handle_command_key(key),
         ViewMode::ConfirmQuit => handle_confirm_quit_key(key),
         _ => handle_normal_key(key),
@@ -100,13 +104,13 @@ fn handle_normal_key(key: &KeyEvent) -> Action {
         KeyCode::Char('s') => Action::CycleSort,
         KeyCode::Char('r') => Action::Refresh,
         KeyCode::Char('n') => Action::LaunchNew,
-        KeyCode::Char(' ') => Action::ToggleHarpoon,
+        KeyCode::Char(' ') => Action::ToggleQSwitcher,
         KeyCode::Char(c @ '1'..='9') => Action::AttachByIndex((c as usize) - ('1' as usize)),
         _ => Action::None,
     }
 }
 
-fn handle_harpoon_key(key: &KeyEvent) -> Action {
+fn handle_qswitcher_key(key: &KeyEvent) -> Action {
     match key.code {
         KeyCode::Char(c @ '1'..='9') => Action::AttachByIndex((c as usize) - ('1' as usize)),
         KeyCode::Char('j') | KeyCode::Down => Action::MoveDown,
@@ -131,7 +135,7 @@ fn handle_terminal_key(key: &KeyEvent) -> Action {
     if key.modifiers.contains(KeyModifiers::CONTROL) {
         match key.code {
             KeyCode::Char('d') => return Action::Detach,
-            KeyCode::Char(' ') => return Action::TerminalHarpoon,
+            KeyCode::Char(' ') => return Action::TerminalQSwitcher,
             KeyCode::Char('n') => return Action::CycleNextSession,
             KeyCode::Char('p') => return Action::CyclePrevSession,
             KeyCode::Char('k') => return Action::ScrollUp(10),
@@ -143,7 +147,7 @@ fn handle_terminal_key(key: &KeyEvent) -> Action {
     Action::TerminalInput(key_event_to_bytes(key))
 }
 
-fn handle_terminal_harpoon_key(key: &KeyEvent) -> Action {
+fn handle_terminal_qswitcher_key(key: &KeyEvent) -> Action {
     if key.modifiers.contains(KeyModifiers::CONTROL) && key.code == KeyCode::Char('d') {
         return Action::Detach;
     }

@@ -87,9 +87,17 @@ fn fetch_usage() -> UsageData {
         Some(resp) => UsageData {
             plan_name,
             five_hour: parse_utilization(resp.five_hour.as_ref().and_then(|w| w.utilization)),
-            five_hour_reset: resp.five_hour.as_ref().and_then(|w| w.resets_at.as_ref()).and_then(|s| format_reset_time(s)),
+            five_hour_reset: resp
+                .five_hour
+                .as_ref()
+                .and_then(|w| w.resets_at.as_ref())
+                .and_then(|s| format_reset_time(s)),
             seven_day: parse_utilization(resp.seven_day.as_ref().and_then(|w| w.utilization)),
-            seven_day_reset: resp.seven_day.as_ref().and_then(|w| w.resets_at.as_ref()).and_then(|s| format_reset_time(s)),
+            seven_day_reset: resp
+                .seven_day
+                .as_ref()
+                .and_then(|w| w.resets_at.as_ref())
+                .and_then(|s| format_reset_time(s)),
             api_available: true,
         },
         None => UsageData {
@@ -141,13 +149,40 @@ fn plan_from_subscription(sub_type: &str) -> Option<String> {
 
 fn parse_utilization(val: Option<f64>) -> Option<u8> {
     val.filter(|v| v.is_finite())
-        .map(|v| v.max(0.0).min(100.0) as u8)
+        .map(|v| v.clamp(0.0, 100.0) as u8)
 }
 
 fn format_reset_time(iso: &str) -> Option<String> {
     let dt = chrono::DateTime::parse_from_rfc3339(iso).ok()?;
     let local = dt.with_timezone(&chrono::Local);
     Some(local.format("%b %-d at %-H:%M").to_string())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_plan_from_subscription() {
+        assert_eq!(plan_from_subscription("max_5x"), Some("Max".to_string()));
+        assert_eq!(plan_from_subscription("pro"), Some("Pro".to_string()));
+        assert_eq!(
+            plan_from_subscription("team_enterprise"),
+            Some("Team".to_string())
+        );
+        assert_eq!(plan_from_subscription(""), None);
+        assert_eq!(plan_from_subscription("api_key"), None);
+    }
+
+    #[test]
+    fn test_parse_utilization() {
+        assert_eq!(parse_utilization(Some(50.0)), Some(50));
+        assert_eq!(parse_utilization(Some(0.0)), Some(0));
+        assert_eq!(parse_utilization(Some(100.0)), Some(100));
+        assert_eq!(parse_utilization(Some(150.0)), Some(100));
+        assert_eq!(parse_utilization(Some(f64::NAN)), None);
+        assert_eq!(parse_utilization(None), None);
+    }
 }
 
 fn call_api(token: &str) -> Option<ApiResponse> {
