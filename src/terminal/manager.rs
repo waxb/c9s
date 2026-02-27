@@ -205,27 +205,11 @@ impl TerminalManager {
             .collect()
     }
 
-    pub fn check_and_forward_notifications(&mut self, viewing_terminal: bool) {
+    pub fn check_and_forward_notifications(&mut self, _viewing_terminal: bool) {
         self.check_count += 1;
-        if self.check_count % 500 == 1 {
-            let active_short = self.active_id.as_deref().map(|s| &s[..8.min(s.len())]);
-            let ids: Vec<&str> = self.notifiers.keys().map(|s| &s[..8.min(s.len())]).collect();
-            if let Some(first_notifier) = self.notifiers.values().next() {
-                first_notifier.debug_log_ext(&format!(
-                    "tick#{}: {} notifiers {:?}, active={:?}, viewing={}",
-                    self.check_count, self.notifiers.len(), ids, active_short, viewing_terminal
-                ));
-            }
-        }
-        let active_id = self.active_id.clone();
         for (id, notifier) in &mut self.notifiers {
-            let is_viewing = viewing_terminal
-                && active_id.as_deref() == Some(id.as_str());
-            if is_viewing {
-                continue;
-            }
             if notifier.check() {
-                notifier.debug_log_ext(&format!("MANAGER: bell fired for {}", &id[..8.min(id.len())]));
+                notifier.debug_log_ext(&format!("BELL: fired for {}", &id[..8.min(id.len())]));
                 if let Some(term) = self.terminals.get(id) {
                     term.set_bell();
                 }

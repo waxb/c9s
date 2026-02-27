@@ -35,6 +35,7 @@ struct JsonlStats {
     first_timestamp: Option<DateTime<Utc>>,
     last_timestamp: Option<DateTime<Utc>>,
     last_message_type: Option<String>,
+    last_stop_reason: Option<String>,
     permission_mode: Option<String>,
     plan_slugs: Vec<String>,
     compaction_count: u32,
@@ -107,9 +108,14 @@ impl SessionDiscovery {
 
                         let stats = self.parse_jsonl_cached(&jf_path);
 
-                        let Some(ref real_session_id) = stats.session_id else {
+                        if stats.session_id.is_none() && stats.message_count == 0 {
                             continue;
-                        };
+                        }
+
+                        let real_session_id = stats
+                            .session_id
+                            .clone()
+                            .unwrap_or_else(|| session_id.clone());
 
                         let project_cwd = stats
                             .cwd
@@ -120,18 +126,25 @@ impl SessionDiscovery {
 
                         let status = match pid {
                             Some(_) => {
-                                let idle_threshold = chrono::Duration::seconds(2);
-                                let is_stale = match stats.last_timestamp {
+                                let hung_threshold = chrono::Duration::minutes(5);
+                                let is_hung = match stats.last_timestamp {
                                     Some(ts) => {
-                                        Utc::now().signed_duration_since(ts) > idle_threshold
+                                        Utc::now().signed_duration_since(ts) > hung_threshold
                                     }
-                                    None => true,
+                                    None => false,
                                 };
-                                if is_stale {
+                                if is_hung {
                                     SessionStatus::Idle
                                 } else {
                                     match stats.last_message_type.as_deref() {
                                         Some("user") => SessionStatus::Thinking,
+                                        Some("assistant") => {
+                                            match stats.last_stop_reason.as_deref() {
+                                                Some("end_turn") => SessionStatus::Idle,
+                                                Some("tool_use") => SessionStatus::Active,
+                                                _ => SessionStatus::Active,
+                                            }
+                                        }
                                         _ => SessionStatus::Active,
                                     }
                                 }
@@ -353,6 +366,9 @@ impl SessionDiscovery {
                     stats.last_message_type = Some("assistant".to_string());
 
                     if let Some(message) = value.get("message") {
+                        if let Some(sr) = message.get("stop_reason").and_then(|v| v.as_str()) {
+                            stats.last_stop_reason = Some(sr.to_string());
+                        }
                         if let Some(model) = message.get("model").and_then(|v| v.as_str()) {
                             stats.model = Some(model.to_string());
                         }

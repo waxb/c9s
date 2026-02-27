@@ -27,8 +27,7 @@ const BINDINGS: &[(&str, &str)] = &[
     ("Ctrl+d", "Detach (back to list)"),
     ("Ctrl+Space", "Harpoon (quick switch)"),
     ("Ctrl+n / Ctrl+p", "Cycle next / prev session"),
-    ("PgUp/PgDn", "Scroll history (20 lines)"),
-    ("Shift+Up/Dn", "Scroll history (1 line)"),
+    ("Ctrl+K / Ctrl+J", "Scroll history up / down"),
 ];
 
 pub fn render_help(f: &mut Frame, area: Rect) {

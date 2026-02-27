@@ -81,6 +81,7 @@ fn run_loop(
     let refresh_interval = Duration::from_secs(5);
     let mut last_refresh = Instant::now();
     let mut needs_draw = true;
+    let mut mouse_captured = true;
 
     loop {
         if matches!(app.view_mode(), ViewMode::Terminal | ViewMode::TerminalHarpoon) {
@@ -120,16 +121,10 @@ fn run_loop(
                         ui::render_help(f, area);
                     }
                     ViewMode::Terminal => {
-                        let content_area = render_terminal_view(app, f, area);
-                        if let Some(ca) = content_area {
-                            app.update_selection_area(ca.x, ca.y, ca.width, ca.height);
-                        }
+                        render_terminal_view(app, f, area);
                     }
                     ViewMode::TerminalHarpoon => {
-                        let content_area = render_terminal_view(app, f, area);
-                        if let Some(ca) = content_area {
-                            app.update_selection_area(ca.x, ca.y, ca.width, ca.height);
-                        }
+                        render_terminal_view(app, f, area);
                         ui::render_harpoon(f, app, area);
                     }
                     ViewMode::Command => {
@@ -174,6 +169,13 @@ fn run_loop(
         }
 
         let in_terminal = matches!(app.view_mode(), ViewMode::Terminal | ViewMode::TerminalHarpoon);
+        if in_terminal && mouse_captured {
+            stdout().execute(DisableMouseCapture)?;
+            mouse_captured = false;
+        } else if !in_terminal && !mouse_captured {
+            stdout().execute(EnableMouseCapture)?;
+            mouse_captured = true;
+        }
 
         app.terminal_manager_mut().check_and_forward_notifications(in_terminal);
 
@@ -201,17 +203,15 @@ fn render_terminal_view(
     app: &App,
     f: &mut ratatui::Frame,
     area: ratatui::layout::Rect,
-) -> Option<ratatui::layout::Rect> {
-    let term = app.terminal_manager().active_terminal()?;
-    let guard = term.lock_parser();
-    let screen = guard.screen();
-    let scrolled = screen.scrollback() > 0;
-    let exited = term.is_exited();
-    let tabs = app.terminal_manager().tab_info();
-    let sel = app.selection().clone();
-    let sel_ref = if sel.has_content || sel.active { Some(&sel) } else { None };
-    let content_area = ui::render_terminal(f, screen, &tabs, exited, scrolled, sel_ref, area);
-    Some(content_area)
+) {
+    if let Some(term) = app.terminal_manager().active_terminal() {
+        let guard = term.lock_parser();
+        let screen = guard.screen();
+        let scrolled = screen.scrollback() > 0;
+        let exited = term.is_exited();
+        let tabs = app.terminal_manager().tab_info();
+        ui::render_terminal(f, screen, &tabs, exited, scrolled, area);
+    }
 }
 
 fn process_action(
@@ -275,18 +275,7 @@ fn process_action(
             let _ = app.refresh();
         }
         Action::TerminalInput(bytes) => {
-            app.clear_selection();
             let _ = app.terminal_manager_mut().write_to_active(&bytes);
-        }
-        Action::SelectStart(col, row) => {
-            app.start_selection(col, row);
-        }
-        Action::SelectExtend(col, row) => {
-            app.extend_selection(col, row);
-        }
-        Action::SelectEnd(col, row) => {
-            app.extend_selection(col, row);
-            app.finalize_selection();
         }
         Action::CycleNextSession => {
             app.terminal_manager_mut().cycle_next();

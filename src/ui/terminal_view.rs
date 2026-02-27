@@ -4,7 +4,6 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::Paragraph;
 use ratatui::Frame;
 
-use crate::app::Selection;
 use crate::terminal::TabEntry;
 use crate::ui::theme::Theme;
 
@@ -14,9 +13,8 @@ pub fn render_terminal(
     tabs: &[TabEntry],
     exited: bool,
     scrolled: bool,
-    selection: Option<&Selection>,
     area: Rect,
-) -> Rect {
+) {
     let chunks = Layout::vertical([
         Constraint::Length(1),
         Constraint::Min(1),
@@ -26,7 +24,7 @@ pub fn render_terminal(
 
     render_tab_bar(f, tabs, chunks[0]);
 
-    render_screen(f, screen, selection, chunks[1]);
+    render_screen(f, screen, chunks[1]);
 
     let active = tabs.iter().find(|t| t.is_active);
     let project = active.map(|t| t.name.as_str()).unwrap_or("");
@@ -62,7 +60,7 @@ pub fn render_terminal(
             scroll_indicator,
             Span::styled(
                 format!(
-                    "  C-d:list  C-Space:harpoon  C-n/p:cycle  drag:select  {}",
+                    "  C-d:list  C-Space:harpoon  C-n/p:cycle  C-j/k:scroll  {}",
                     project
                 ),
                 Theme::footer(),
@@ -70,23 +68,14 @@ pub fn render_terminal(
         ])
     };
     f.render_widget(Paragraph::new(status_line), chunks[2]);
-
-    chunks[1]
 }
 
-fn render_screen(
-    f: &mut Frame,
-    screen: &vt100::Screen,
-    selection: Option<&Selection>,
-    area: Rect,
-) {
+fn render_screen(f: &mut Frame, screen: &vt100::Screen, area: Rect) {
     let buf = f.buffer_mut();
     for row in 0..area.height {
         for col in 0..area.width {
             if let Some(cell) = screen.cell(row, col) {
-                let abs_x = col + area.x;
-                let abs_y = row + area.y;
-                let buf_cell = &mut buf[(abs_x, abs_y)];
+                let buf_cell = &mut buf[(col + area.x, row + area.y)];
                 if cell.has_contents() {
                     buf_cell.set_symbol(cell.contents());
                 }
@@ -106,14 +95,6 @@ fn render_screen(
                     modifier |= Modifier::UNDERLINED;
                 }
                 if cell.inverse() {
-                    modifier |= Modifier::REVERSED;
-                }
-
-                let selected = selection
-                    .filter(|s| s.has_content)
-                    .map_or(false, |s| is_selected(s, abs_x, abs_y));
-
-                if selected {
                     modifier |= Modifier::REVERSED;
                 }
 
@@ -143,36 +124,14 @@ fn render_screen(
     }
 }
 
-fn is_selected(sel: &Selection, abs_x: u16, abs_y: u16) -> bool {
-    let (start, end) = crate::app::normalize_selection(sel);
-    let (s_col, s_row) = start;
-    let (e_col, e_row) = end;
-
-    if abs_y < s_row || abs_y > e_row {
-        return false;
-    }
-    if s_row == e_row {
-        return abs_x >= s_col && abs_x <= e_col;
-    }
-    if abs_y == s_row {
-        return abs_x >= s_col;
-    }
-    if abs_y == e_row {
-        return abs_x <= e_col;
-    }
-    true
-}
-
 fn render_tab_bar(f: &mut Frame, tabs: &[TabEntry], area: Rect) {
-    let bg = Color::Rgb(35, 35, 40);
+    let bg = Color::Indexed(236);
     let buf = f.buffer_mut();
 
     for x in area.x..area.x + area.width {
         let cell = &mut buf[(x, area.y)];
+        cell.set_style(Style::default().bg(bg));
         cell.set_symbol(" ");
-        cell.set_fg(Color::Reset);
-        cell.set_bg(bg);
-        cell.set_style(Style::default());
     }
 
     let mut col = area.x + 1;
@@ -180,12 +139,12 @@ fn render_tab_bar(f: &mut Frame, tabs: &[TabEntry], area: Rect) {
 
     for (i, tab) in tabs.iter().enumerate() {
         if i > 0 {
+            let sep_style = Style::default().fg(Color::DarkGray).bg(bg);
             for ch in " | ".chars() {
                 if col >= max_col { break; }
                 let cell = &mut buf[(col, area.y)];
+                cell.set_style(sep_style);
                 cell.set_symbol(&ch.to_string());
-                cell.set_fg(Color::DarkGray);
-                cell.set_bg(bg);
                 col += 1;
             }
         }
@@ -200,6 +159,8 @@ fn render_tab_bar(f: &mut Frame, tabs: &[TabEntry], area: Rect) {
             (Color::White, Modifier::empty())
         };
 
+        let tab_style = Style::default().fg(fg).bg(bg).add_modifier(modifier);
+
         let has_star = tab.has_bell && !tab.is_active;
         let text = if has_star {
             format!("{}: {}*", i + 1, tab.name)
@@ -210,12 +171,8 @@ fn render_tab_bar(f: &mut Frame, tabs: &[TabEntry], area: Rect) {
         for ch in text.chars() {
             if col >= max_col { break; }
             let cell = &mut buf[(col, area.y)];
+            cell.set_style(tab_style);
             cell.set_symbol(&ch.to_string());
-            cell.set_fg(fg);
-            cell.set_bg(bg);
-            cell.set_style(Style::default().add_modifier(modifier));
-            cell.set_fg(fg);
-            cell.set_bg(bg);
             col += 1;
         }
     }
