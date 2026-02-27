@@ -1,4 +1,6 @@
-use anyhow::{Context, Result};
+use anyhow::Result;
+#[cfg(target_os = "macos")]
+use anyhow::Context;
 use chrono::{DateTime, Utc};
 use serde_json::Value;
 use std::collections::HashMap;
