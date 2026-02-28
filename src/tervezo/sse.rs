@@ -21,6 +21,7 @@ const HEALTHY_CONNECTION_SECS: u64 = 10;
 #[allow(dead_code)]
 pub enum SseMessage {
     Event(Box<TimelineMessage>),
+    WaitingForInput(bool),
     Error(String),
 }
 
@@ -226,7 +227,7 @@ impl SseStream {
                                     }
                                 }
                             } else {
-                                // Non-message envelope (plan update, etc.) — log full content
+                                // Non-message envelope (plan update, status, etc.)
                                 let keys = envelope
                                     .as_object()
                                     .map(|o| o.keys().cloned().collect::<Vec<_>>().join(", "))
@@ -237,6 +238,20 @@ impl SseStream {
                                     keys,
                                     &data_buf
                                 );
+
+                                // Check for waitingForInput flag
+                                if let Some(waiting) =
+                                    envelope.get("waitingForInput").and_then(|v| v.as_bool())
+                                {
+                                    let _ = tx.send(SseMessage::WaitingForInput(waiting));
+                                }
+
+                                // Status change events can clear waiting state
+                                if envelope.get("status").is_some()
+                                    || envelope.get("complete").is_some()
+                                {
+                                    let _ = tx.send(SseMessage::WaitingForInput(false));
+                                }
                             }
                             // Update cursor from event id if no message had one
                             if let Some(ref eid) = event_id {

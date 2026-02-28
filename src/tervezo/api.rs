@@ -2,8 +2,10 @@ use crate::tlog;
 
 use super::config::TervezoConfig;
 use super::models::{
-    AnalysisResponse, ChangesResponse, FileChange, Implementation, ListResponse, PlanResponse,
-    SshCredentials, Step, StepsResponse, TestOutputResponse, TestReport, TimelineMessage,
+    AnalysisResponse, ChangesResponse, CreatePrResponse, FileChange, Implementation, ListResponse,
+    PlanResponse, PrDetails, PromptRequest, PromptResponse, RestartResponse, SshCredentials,
+    StatusResponse, Step, StepsResponse, SuccessResponse, TestOutputResponse, TestReport,
+    TimelineMessage,
 };
 
 /// Helper to parse JSON with detailed logging on failure.
@@ -52,7 +54,6 @@ impl TervezoClient {
         Ok(list.items)
     }
 
-    #[allow(dead_code)]
     pub fn get_implementation(&self, id: &str) -> Result<Implementation, String> {
         let url = format!("{}/implementations/{}", self.base_url, id);
         let resp = self.get(&url)?;
@@ -186,6 +187,58 @@ impl TervezoClient {
         Ok(steps.steps)
     }
 
+    pub fn get_status(&self, id: &str) -> Result<StatusResponse, String> {
+        let url = format!("{}/implementations/{}/status", self.base_url, id);
+        let resp = self.get(&url)?;
+        parse_json(&resp, "get_status")
+    }
+
+    pub fn get_pr_details(&self, id: &str) -> Result<PrDetails, String> {
+        let url = format!("{}/implementations/{}/pr", self.base_url, id);
+        let resp = self.get(&url)?;
+        parse_json(&resp, "get_pr_details")
+    }
+
+    pub fn create_pr(&self, id: &str) -> Result<CreatePrResponse, String> {
+        let url = format!("{}/implementations/{}/pr", self.base_url, id);
+        let resp = self.post(&url, "{}")?;
+        parse_json(&resp, "create_pr")
+    }
+
+    pub fn merge_pr(&self, id: &str) -> Result<SuccessResponse, String> {
+        let url = format!("{}/implementations/{}/pr/merge", self.base_url, id);
+        let resp = self.post(&url, "{}")?;
+        parse_json(&resp, "merge_pr")
+    }
+
+    pub fn close_pr(&self, id: &str) -> Result<SuccessResponse, String> {
+        let url = format!("{}/implementations/{}/pr/close", self.base_url, id);
+        let resp = self.post(&url, "{}")?;
+        parse_json(&resp, "close_pr")
+    }
+
+    pub fn reopen_pr(&self, id: &str) -> Result<SuccessResponse, String> {
+        let url = format!("{}/implementations/{}/pr/reopen", self.base_url, id);
+        let resp = self.post(&url, "{}")?;
+        parse_json(&resp, "reopen_pr")
+    }
+
+    pub fn restart(&self, id: &str) -> Result<RestartResponse, String> {
+        let url = format!("{}/implementations/{}/restart", self.base_url, id);
+        let resp = self.post(&url, "{}")?;
+        parse_json(&resp, "restart")
+    }
+
+    pub fn send_prompt(&self, id: &str, message: &str) -> Result<PromptResponse, String> {
+        let url = format!("{}/implementations/{}/prompt", self.base_url, id);
+        let body = serde_json::to_string(&PromptRequest {
+            message: message.to_string(),
+        })
+        .map_err(|e| format!("serialize prompt failed: {}", e))?;
+        let resp = self.post(&url, &body)?;
+        parse_json(&resp, "send_prompt")
+    }
+
     fn get(&self, url: &str) -> Result<String, String> {
         tlog!(info, "GET {}", url);
         let resp = self
@@ -218,6 +271,43 @@ impl TervezoClient {
             .map_err(|e| format!("read body failed: {}", e))?;
 
         tlog!(info, "response body: {} bytes", body.len());
+
+        Ok(body)
+    }
+
+    fn post(&self, url: &str, json_body: &str) -> Result<String, String> {
+        tlog!(info, "POST {}", url);
+        let resp = self
+            .agent
+            .post(url)
+            .header("Authorization", &format!("Bearer {}", self.api_key))
+            .header("User-Agent", "c9s/0.1")
+            .header("Accept", "application/json")
+            .header("Content-Type", "application/json")
+            .send(json_body.as_bytes())
+            .map_err(|e| {
+                tlog!(error, "POST request error: {}", e);
+                format!("POST request failed: {}", e)
+            })?;
+
+        let status = resp.status();
+        tlog!(info, "POST response: HTTP {}", status);
+
+        if status != 200 && status != 201 {
+            let body = resp
+                .into_body()
+                .read_to_string()
+                .unwrap_or_else(|_| "(unreadable body)".to_string());
+            tlog!(error, "POST HTTP {}: {}", status, body);
+            return Err(format!("HTTP {}: {}", status, body));
+        }
+
+        let body = resp
+            .into_body()
+            .read_to_string()
+            .map_err(|e| format!("read body failed: {}", e))?;
+
+        tlog!(info, "POST response body: {} bytes", body.len());
 
         Ok(body)
     }

@@ -1,27 +1,144 @@
-use ratatui::layout::{Constraint, Layout, Rect};
+use ratatui::layout::{Constraint, Flex, Layout, Rect};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span, Text};
 use ratatui::widgets::{
-    Block, Borders, Paragraph, Scrollbar, ScrollbarOrientation, ScrollbarState, Wrap,
+    Block, Borders, Clear, Paragraph, Scrollbar, ScrollbarOrientation, ScrollbarState, Wrap,
 };
 use ratatui::Frame;
 
 use crate::app::{TervezoDetailState, TervezoTab};
-use crate::tervezo::models::{FileChange, TestReport};
+use crate::tervezo::models::{format_duration_secs, FileChange, TestReport};
 use crate::tervezo::ImplementationStatus;
 use crate::ui::theme::Theme;
 
 pub fn render_tervezo_detail(f: &mut Frame, state: &TervezoDetailState, area: Rect) {
+    let has_steps = state
+        .status_info
+        .as_ref()
+        .map(|s| !s.steps.is_empty())
+        .unwrap_or(false);
+    let header_height = if has_steps { 4 } else { 3 };
+    let footer_height = if state.action_result.is_some() { 2 } else { 1 };
+
     let chunks = Layout::vertical([
-        Constraint::Length(3),
+        Constraint::Length(header_height),
         Constraint::Min(5),
-        Constraint::Length(1),
+        Constraint::Length(footer_height),
     ])
     .split(area);
 
     render_header(f, state, chunks[0]);
     render_body(f, state, chunks[1]);
     render_footer(f, state, chunks[2]);
+
+    // Step detail overlay
+    if state.steps_expanded {
+        if let Some(ref status) = state.status_info {
+            if !status.steps.is_empty() {
+                render_step_overlay(f, state, area);
+            }
+        }
+    }
+}
+
+pub fn render_tervezo_detail_with_prompt(f: &mut Frame, state: &TervezoDetailState, area: Rect) {
+    let has_steps = state
+        .status_info
+        .as_ref()
+        .map(|s| !s.steps.is_empty())
+        .unwrap_or(false);
+    let header_height = if has_steps { 4 } else { 3 };
+
+    let chunks = Layout::vertical([
+        Constraint::Length(header_height),
+        Constraint::Min(5),
+        Constraint::Length(3),
+    ])
+    .split(area);
+
+    render_header(f, state, chunks[0]);
+    render_body(f, state, chunks[1]);
+    render_prompt_input(f, state, chunks[2]);
+}
+
+pub fn render_tervezo_action_menu(f: &mut Frame, state: &TervezoDetailState, area: Rect) {
+    let item_count = state.action_menu_items.len();
+    let popup_height = (item_count as u16) + 4;
+    let popup_width = 30;
+    let popup_area = centered_rect(popup_width, popup_height, area);
+
+    f.render_widget(Clear, popup_area);
+
+    let mut lines: Vec<Line> = Vec::new();
+    lines.push(Line::from(""));
+
+    for (i, action) in state.action_menu_items.iter().enumerate() {
+        let is_selected = i == state.action_menu_cursor;
+        let marker = if is_selected { " > " } else { "   " };
+        let style = if is_selected {
+            Style::default()
+                .fg(Color::White)
+                .add_modifier(Modifier::BOLD)
+        } else {
+            Style::default().fg(Color::Gray)
+        };
+        lines.push(Line::from(vec![
+            Span::styled(marker.to_string(), style),
+            Span::styled(action.label().to_string(), style),
+        ]));
+    }
+
+    let border_style = Style::default().fg(Color::Cyan);
+    let dialog = Paragraph::new(lines).block(
+        Block::default()
+            .title(" Actions ")
+            .borders(Borders::ALL)
+            .border_style(border_style),
+    );
+
+    f.render_widget(dialog, popup_area);
+}
+
+pub fn render_tervezo_confirm(f: &mut Frame, state: &TervezoDetailState, area: Rect) {
+    let action_label = state.confirm_action.map(|a| a.label()).unwrap_or("Action");
+
+    let popup_area = centered_rect(45, 7, area);
+    f.render_widget(Clear, popup_area);
+
+    let lines = vec![
+        Line::from(""),
+        Line::from(Span::styled(
+            format!("  {}?", action_label),
+            Style::default()
+                .fg(Color::Yellow)
+                .add_modifier(Modifier::BOLD),
+        )),
+        Line::from(""),
+        Line::from(vec![
+            Span::styled("    ", Style::default()),
+            Span::styled(
+                " y/Enter: confirm ",
+                Style::default().fg(Color::Red).add_modifier(Modifier::BOLD),
+            ),
+            Span::styled("   ", Style::default()),
+            Span::styled(
+                " n/Esc: cancel ",
+                Style::default()
+                    .fg(Color::Green)
+                    .add_modifier(Modifier::BOLD),
+            ),
+        ]),
+    ];
+
+    let border_style = Style::default().fg(Color::Yellow);
+    let dialog = Paragraph::new(lines).block(
+        Block::default()
+            .title(" Confirm ")
+            .borders(Borders::ALL)
+            .border_style(border_style),
+    );
+
+    f.render_widget(dialog, popup_area);
 }
 
 fn render_header(f: &mut Frame, state: &TervezoDetailState, area: Rect) {
@@ -35,7 +152,19 @@ fn render_header(f: &mut Frame, state: &TervezoDetailState, area: Rect) {
 
     let branch_str = state.implementation.branch.as_deref().unwrap_or("-");
 
-    let title_spans = vec![
+    let waiting = state
+        .status_info
+        .as_ref()
+        .map(|s| s.waiting_for_input)
+        .unwrap_or(false);
+
+    let status_label = if waiting && state.implementation.status.is_running() {
+        format!("[{} - Awaiting reply]", state.implementation.status.label())
+    } else {
+        format!("[{}]", state.implementation.status.label())
+    };
+
+    let mut title_spans = vec![
         Span::styled(" [T] ", Theme::tzv_remote_marker()),
         Span::styled(
             state.implementation.display_name().to_string(),
@@ -44,35 +173,140 @@ fn render_header(f: &mut Frame, state: &TervezoDetailState, area: Rect) {
                 .add_modifier(Modifier::BOLD),
         ),
         Span::raw("  "),
-        Span::styled(
-            format!("[{}]", state.implementation.status.label()),
-            status_style,
-        ),
+        Span::styled(status_label, status_style),
         Span::raw("  "),
         Span::styled(branch_str.to_string(), Style::default().fg(Color::DarkGray)),
     ];
 
     if let Some(ref pr_url) = state.implementation.pr_url {
-        let mut spans = title_spans;
-        spans.push(Span::raw("  "));
-        spans.push(Span::styled(
+        title_spans.push(Span::raw("  "));
+        title_spans.push(Span::styled(
             pr_url.clone(),
             Style::default().fg(Color::Cyan),
         ));
-        let header = Paragraph::new(Line::from(spans)).block(
-            Block::default()
-                .borders(Borders::ALL)
-                .style(Theme::border()),
-        );
-        f.render_widget(header, area);
-    } else {
-        let header = Paragraph::new(Line::from(title_spans)).block(
-            Block::default()
-                .borders(Borders::ALL)
-                .style(Theme::border()),
-        );
-        f.render_widget(header, area);
     }
+
+    let has_steps = state
+        .status_info
+        .as_ref()
+        .map(|s| !s.steps.is_empty())
+        .unwrap_or(false);
+
+    let mut header_lines = vec![Line::from(title_spans)];
+
+    if has_steps {
+        if let Some(ref status) = state.status_info {
+            header_lines.push(render_step_bar_line(&status.steps));
+        }
+    }
+
+    let header = Paragraph::new(header_lines).block(
+        Block::default()
+            .borders(Borders::ALL)
+            .style(Theme::border()),
+    );
+    f.render_widget(header, area);
+}
+
+fn render_step_bar_line(steps: &[crate::tervezo::models::StatusStep]) -> Line<'static> {
+    let mut spans: Vec<Span<'static>> = Vec::new();
+    spans.push(Span::raw(" "));
+
+    for (i, step) in steps.iter().enumerate() {
+        if i > 0 {
+            spans.push(Span::styled(" → ", Style::default().fg(Color::DarkGray)));
+        }
+
+        let (icon, color) = match step.status.as_str() {
+            "completed" => ("✓", Color::Green),
+            "running" => ("●", Color::Cyan),
+            "failed" => ("✗", Color::Red),
+            "skipped" => ("○", Color::DarkGray),
+            _ => ("○", Color::DarkGray), // pending
+        };
+
+        let duration_str = step
+            .duration
+            .map(|d| format!(" ({})", format_duration_secs(d)))
+            .unwrap_or_default();
+
+        spans.push(Span::styled(
+            format!("{} {}{}", icon, step.name, duration_str),
+            Style::default().fg(color),
+        ));
+    }
+
+    Line::from(spans)
+}
+
+fn render_step_overlay(f: &mut Frame, state: &TervezoDetailState, area: Rect) {
+    let status = match state.status_info.as_ref() {
+        Some(s) => s,
+        None => return,
+    };
+
+    let line_count = status.steps.len() + 4;
+    let popup_height = (line_count as u16).min(area.height.saturating_sub(4));
+    let popup_width = 60u16.min(area.width.saturating_sub(4));
+    let popup_area = centered_rect(popup_width, popup_height, area);
+
+    f.render_widget(Clear, popup_area);
+
+    let mut lines: Vec<Line> = Vec::new();
+
+    // Overall duration
+    if let Some(d) = status.duration {
+        lines.push(Line::from(Span::styled(
+            format!("  Total: {}", format_duration_secs(d)),
+            Style::default().fg(Color::White),
+        )));
+    }
+    lines.push(Line::from(""));
+
+    for step in &status.steps {
+        let (icon, color) = match step.status.as_str() {
+            "completed" => ("✓", Color::Green),
+            "running" => ("●", Color::Cyan),
+            "failed" => ("✗", Color::Red),
+            "skipped" => ("○", Color::DarkGray),
+            _ => ("○", Color::DarkGray),
+        };
+
+        let duration_str = step
+            .duration
+            .map(|d| format!("  {}", format_duration_secs(d)))
+            .unwrap_or_default();
+
+        lines.push(Line::from(vec![
+            Span::styled(format!("  {} ", icon), Style::default().fg(color)),
+            Span::styled(
+                step.name.clone(),
+                Style::default()
+                    .fg(Color::White)
+                    .add_modifier(Modifier::BOLD),
+            ),
+            Span::styled(duration_str, Style::default().fg(Color::DarkGray)),
+        ]));
+
+        if let Some(ref err) = step.error {
+            for err_line in err.lines().take(3) {
+                lines.push(Line::from(Span::styled(
+                    format!("      {}", err_line),
+                    Style::default().fg(Color::Red),
+                )));
+            }
+        }
+    }
+
+    let border_style = Style::default().fg(Color::Cyan);
+    let dialog = Paragraph::new(lines).block(
+        Block::default()
+            .title(" Steps ")
+            .borders(Borders::ALL)
+            .border_style(border_style),
+    );
+
+    f.render_widget(dialog, popup_area);
 }
 
 fn render_body(f: &mut Frame, state: &TervezoDetailState, area: Rect) {
@@ -769,6 +1003,17 @@ fn render_empty(f: &mut Frame, msg: &str, area: Rect) {
 }
 
 fn render_footer(f: &mut Frame, state: &TervezoDetailState, area: Rect) {
+    let mut lines: Vec<Line> = Vec::new();
+
+    // Flash message (action result)
+    if let Some(ref result) = state.action_result {
+        let (msg, style) = match result {
+            Ok(msg) => (msg.as_str(), Style::default().fg(Color::Green)),
+            Err(msg) => (msg.as_str(), Style::default().fg(Color::Red)),
+        };
+        lines.push(Line::from(Span::styled(format!(" {}", msg), style)));
+    }
+
     let ssh_hint = if state.implementation.status.is_running() {
         if state.ssh_creds.is_some() {
             "s:ssh"
@@ -802,12 +1047,78 @@ fn render_footer(f: &mut Frame, state: &TervezoDetailState, area: Rect) {
         ""
     };
 
+    let waiting = state
+        .status_info
+        .as_ref()
+        .map(|s| s.waiting_for_input)
+        .unwrap_or(false);
+    let prompt_hint = if waiting {
+        "p:reply"
+    } else if state.implementation.status.is_terminal() {
+        "p:follow-up"
+    } else {
+        ""
+    };
+
+    let steps_hint = if state
+        .status_info
+        .as_ref()
+        .map(|s| !s.steps.is_empty())
+        .unwrap_or(false)
+    {
+        "w:steps"
+    } else {
+        ""
+    };
+
     let keys = format!(
-        " Esc:back  Tab/h/l:tabs  j/k:timeline  ^d/^u:page  g/G:top/btm  {}  {}  r:refresh  {}",
-        tab_hint, md_hint, ssh_hint
+        " Esc:back  Tab/h/l:tabs  j/k:timeline  ^d/^u:page  g/G:top/btm  {}  {}  r:refresh  {}  a:actions  {}  {}",
+        tab_hint, md_hint, ssh_hint, steps_hint, prompt_hint
     );
 
-    let footer = Line::from(Span::styled(keys, Theme::footer()));
-    let paragraph = Paragraph::new(footer);
+    lines.push(Line::from(Span::styled(keys, Theme::footer())));
+
+    let paragraph = Paragraph::new(lines);
     f.render_widget(paragraph, area);
+}
+
+fn render_prompt_input(f: &mut Frame, state: &TervezoDetailState, area: Rect) {
+    let waiting = state
+        .status_info
+        .as_ref()
+        .map(|s| s.waiting_for_input)
+        .unwrap_or(false);
+    let label = if waiting { "Reply" } else { "Follow-up" };
+
+    let sending_indicator = if state.prompt_sending {
+        " (sending...)"
+    } else {
+        ""
+    };
+
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .border_style(Style::default().fg(Color::Cyan))
+        .title(format!(" {} ", label));
+
+    let inner = block.inner(area);
+    f.render_widget(block, area);
+
+    let text = format!(" {}{}", state.prompt_input, sending_indicator);
+    let cursor_line = Line::from(vec![
+        Span::styled(text, Style::default().fg(Color::White)),
+        Span::styled("█", Style::default().fg(Color::Cyan)),
+    ]);
+    let paragraph = Paragraph::new(cursor_line);
+    f.render_widget(paragraph, inner);
+}
+
+fn centered_rect(width: u16, height: u16, area: Rect) -> Rect {
+    let vertical = Layout::vertical([Constraint::Length(height)])
+        .flex(Flex::Center)
+        .split(area);
+    let horizontal = Layout::horizontal([Constraint::Length(width)])
+        .flex(Flex::Center)
+        .split(vertical[0]);
+    horizontal[0]
 }

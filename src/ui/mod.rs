@@ -18,4 +18,7 @@ pub use qswitcher::render_qswitcher;
 pub use session_detail::render_session_detail;
 pub use session_list::render_session_list;
 pub use terminal_view::render_terminal;
-pub use tervezo_detail::render_tervezo_detail;
+pub use tervezo_detail::{
+    render_tervezo_action_menu, render_tervezo_confirm, render_tervezo_detail,
+    render_tervezo_detail_with_prompt,
+};

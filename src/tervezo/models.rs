@@ -1,5 +1,5 @@
 use chrono::{DateTime, Utc};
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -32,7 +32,6 @@ impl ImplementationStatus {
         matches!(self, Self::Running)
     }
 
-    #[allow(dead_code)]
     pub fn is_terminal(&self) -> bool {
         matches!(
             self,
@@ -650,4 +649,138 @@ pub struct TestReport {
     pub approach: Option<String>,
     #[serde(default)]
     pub uncovered_paths: Vec<UncoveredPath>,
+}
+
+// --- Status / Steps API response ---
+
+#[allow(dead_code)]
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct StatusResponse {
+    pub status: String,
+    #[serde(default)]
+    pub waiting_for_input: bool,
+    #[serde(default)]
+    pub current_step_name: Option<String>,
+    #[serde(default)]
+    pub started_at: Option<DateTime<Utc>>,
+    #[serde(default)]
+    pub completed_at: Option<DateTime<Utc>>,
+    #[serde(default)]
+    pub duration: Option<f64>,
+    #[serde(default)]
+    pub steps: Vec<StatusStep>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct StatusStep {
+    pub name: String,
+    pub status: String,
+    #[serde(default)]
+    pub duration: Option<f64>,
+    #[serde(default)]
+    pub error: Option<String>,
+}
+
+// --- PR details ---
+
+#[allow(dead_code)]
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PrDetails {
+    #[serde(default)]
+    pub url: Option<String>,
+    #[serde(default)]
+    pub number: Option<u32>,
+    #[serde(default)]
+    pub status: Option<String>,
+    #[serde(default)]
+    pub title: Option<String>,
+    #[serde(default)]
+    pub mergeable: Option<bool>,
+    #[serde(default)]
+    pub merged: bool,
+    #[serde(default)]
+    pub draft: bool,
+}
+
+impl PrDetails {
+    pub fn is_open(&self) -> bool {
+        self.status.as_deref() == Some("open")
+    }
+
+    pub fn is_closed(&self) -> bool {
+        self.status.as_deref() == Some("closed")
+    }
+}
+
+// --- POST action response types ---
+
+#[allow(dead_code)]
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CreatePrResponse {
+    #[serde(default)]
+    pub pr_url: Option<String>,
+    #[serde(default)]
+    pub pr_number: Option<u32>,
+}
+
+#[allow(dead_code)]
+#[derive(Debug, Clone, Deserialize)]
+pub struct SuccessResponse {
+    #[serde(default)]
+    pub success: bool,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RestartResponse {
+    #[serde(default)]
+    pub implementation_id: Option<String>,
+    #[serde(default)]
+    pub is_new_implementation: bool,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PromptResponse {
+    #[serde(default)]
+    pub sent: bool,
+    #[serde(default)]
+    pub follow_up_id: Option<String>,
+}
+
+// --- Prompt request body ---
+
+#[derive(Debug, Serialize)]
+pub struct PromptRequest {
+    pub message: String,
+}
+
+// --- Duration formatting ---
+
+pub fn format_duration_secs(secs: f64) -> String {
+    if secs < 1.0 {
+        "< 1s".to_string()
+    } else if secs < 60.0 {
+        format!("{}s", secs as u64)
+    } else if secs < 3600.0 {
+        let m = (secs / 60.0) as u64;
+        let s = (secs % 60.0) as u64;
+        if s == 0 {
+            format!("{}m", m)
+        } else {
+            format!("{}m {}s", m, s)
+        }
+    } else {
+        let h = (secs / 3600.0) as u64;
+        let m = ((secs % 3600.0) / 60.0) as u64;
+        if m == 0 {
+            format!("{}h", h)
+        } else {
+            format!("{}h {}m", h, m)
+        }
+    }
 }

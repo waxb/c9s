@@ -9,7 +9,7 @@ mod ui;
 mod usage;
 
 use anyhow::Result;
-use app::{App, SessionEntry, TervezoDetailMsg, TervezoTab, ViewMode};
+use app::{App, SessionEntry, TervezoAction, TervezoDetailMsg, TervezoTab, ViewMode};
 use crossterm::event;
 use crossterm::event::{DisableMouseCapture, EnableMouseCapture};
 use crossterm::terminal::{
@@ -105,6 +105,32 @@ fn run_loop(
 
         if app.drain_tervezo_detail_messages() {
             needs_draw = true;
+
+            // Handle navigate_to_impl from restart action
+            let nav_target = app.tervezo_detail.as_ref().and_then(|s| {
+                s.action_result.as_ref().and_then(|r| {
+                    r.as_ref()
+                        .ok()
+                        .and_then(|msg| msg.strip_prefix("NAVIGATE:").map(|id| id.to_string()))
+                })
+            });
+            if let Some(new_id) = nav_target {
+                // Fetch the new implementation and re-initialize the detail view
+                if let Some(config) = app.tervezo_config() {
+                    let client = TervezoClient::new(config);
+                    if let Ok(new_impl) = client.get_implementation(&new_id) {
+                        if let Some(ref mut state) = app.tervezo_detail {
+                            state.action_result = Some(Ok(format!("Restarted → {}", new_id)));
+                        }
+                        // Re-initialize state with the new implementation
+                        let mut new_state = app::TervezoDetailState::new(new_impl);
+                        new_state.action_result =
+                            Some(Ok("Restarted (new implementation)".to_string()));
+                        app.tervezo_detail = Some(new_state);
+                        trigger_tervezo_initial_fetch(app);
+                    }
+                }
+            }
         }
 
         if app.drain_sse_messages() {
@@ -145,6 +171,23 @@ fn run_loop(
                     ViewMode::TervezoDetail => {
                         if let Some(ref state) = app.tervezo_detail {
                             ui::render_tervezo_detail(f, state, area);
+                        }
+                    }
+                    ViewMode::TervezoActionMenu => {
+                        if let Some(ref state) = app.tervezo_detail {
+                            ui::render_tervezo_detail(f, state, area);
+                            ui::render_tervezo_action_menu(f, state, area);
+                        }
+                    }
+                    ViewMode::TervezoConfirm => {
+                        if let Some(ref state) = app.tervezo_detail {
+                            ui::render_tervezo_detail(f, state, area);
+                            ui::render_tervezo_confirm(f, state, area);
+                        }
+                    }
+                    ViewMode::TervezoPromptInput => {
+                        if let Some(ref state) = app.tervezo_detail {
+                            ui::render_tervezo_detail_with_prompt(f, state, area);
                         }
                     }
                     ViewMode::QSwitcher => {
@@ -272,6 +315,24 @@ fn process_action(
     action: Action,
     terminal: &Terminal<CrosstermBackend<std::io::Stdout>>,
 ) -> Result<()> {
+    // Clear flash message on any keypress in tervezo detail view
+    if !matches!(action, Action::None) {
+        let in_tzv = matches!(
+            app.view_mode(),
+            ViewMode::TervezoDetail
+                | ViewMode::TervezoActionMenu
+                | ViewMode::TervezoConfirm
+                | ViewMode::TervezoPromptInput
+        );
+        if in_tzv {
+            if let Some(ref mut state) = app.tervezo_detail {
+                if state.action_result.is_some() {
+                    state.action_result = None;
+                }
+            }
+        }
+    }
+
     match action {
         Action::Quit => {
             let active = app.active_attached_sessions();
@@ -524,6 +585,155 @@ fn process_action(
                 }
             }
         }
+        Action::TervezoToggleSteps => {
+            if let Some(ref mut state) = app.tervezo_detail {
+                state.steps_expanded = !state.steps_expanded;
+            }
+        }
+        Action::TervezoOpenActionMenu => {
+            // Clear any previous flash message
+            if let Some(ref mut state) = app.tervezo_detail {
+                state.action_result = None;
+                let items = state.compute_available_actions();
+                if !items.is_empty() {
+                    state.action_menu_items = items;
+                    state.action_menu_cursor = 0;
+                    app.set_view_mode(ViewMode::TervezoActionMenu);
+                }
+            }
+        }
+        Action::TervezoActionMenuUp => {
+            if let Some(ref mut state) = app.tervezo_detail {
+                state.action_menu_cursor = state.action_menu_cursor.saturating_sub(1);
+            }
+        }
+        Action::TervezoActionMenuDown => {
+            if let Some(ref mut state) = app.tervezo_detail {
+                let max = state.action_menu_items.len().saturating_sub(1);
+                if state.action_menu_cursor < max {
+                    state.action_menu_cursor += 1;
+                }
+            }
+        }
+        Action::TervezoActionMenuSelect => {
+            let selected_action = app
+                .tervezo_detail
+                .as_ref()
+                .and_then(|s| s.action_menu_items.get(s.action_menu_cursor).copied());
+            if let Some(action) = selected_action {
+                if action == TervezoAction::SendPrompt {
+                    // Open prompt input instead
+                    app.set_view_mode(ViewMode::TervezoPromptInput);
+                } else if action.is_destructive() {
+                    if let Some(ref mut state) = app.tervezo_detail {
+                        state.confirm_action = Some(action);
+                    }
+                    app.set_view_mode(ViewMode::TervezoConfirm);
+                } else {
+                    // Non-destructive: execute immediately
+                    app.set_view_mode(ViewMode::TervezoDetail);
+                    execute_tervezo_action(app, action);
+                }
+            }
+        }
+        Action::TervezoActionMenuClose => {
+            app.set_view_mode(ViewMode::TervezoDetail);
+        }
+        Action::TervezoConfirmYes => {
+            let action = app
+                .tervezo_detail
+                .as_mut()
+                .and_then(|s| s.confirm_action.take());
+            app.set_view_mode(ViewMode::TervezoDetail);
+            if let Some(action) = action {
+                execute_tervezo_action(app, action);
+            }
+        }
+        Action::TervezoConfirmNo => {
+            if let Some(ref mut state) = app.tervezo_detail {
+                state.confirm_action = None;
+            }
+            app.set_view_mode(ViewMode::TervezoDetail);
+        }
+        Action::TervezoOpenPrompt => {
+            let can_prompt = app
+                .tervezo_detail
+                .as_ref()
+                .map(|s| {
+                    let waiting = s
+                        .status_info
+                        .as_ref()
+                        .map(|si| si.waiting_for_input)
+                        .unwrap_or(false);
+                    waiting || s.implementation.status.is_terminal()
+                })
+                .unwrap_or(false);
+            if can_prompt {
+                if let Some(ref mut state) = app.tervezo_detail {
+                    state.action_result = None;
+                    state.prompt_input.clear();
+                }
+                app.set_view_mode(ViewMode::TervezoPromptInput);
+            }
+        }
+        Action::TervezoPromptChar(c) => {
+            if let Some(ref mut state) = app.tervezo_detail {
+                state.prompt_input.push(c);
+            }
+        }
+        Action::TervezoPromptBackspace => {
+            if let Some(ref mut state) = app.tervezo_detail {
+                state.prompt_input.pop();
+            }
+        }
+        Action::TervezoPromptSubmit => {
+            let prompt_data = app
+                .tervezo_detail
+                .as_ref()
+                .map(|s| (s.implementation_id.clone(), s.prompt_input.clone()));
+            if let Some((impl_id, message)) = prompt_data {
+                if !message.trim().is_empty() {
+                    if let Some(ref mut state) = app.tervezo_detail {
+                        state.prompt_sending = true;
+                    }
+                    app.set_view_mode(ViewMode::TervezoDetail);
+                    if let Some(config) = app.tervezo_config() {
+                        let config = config.clone();
+                        let tx = app.tervezo_detail_tx.clone();
+                        std::thread::spawn(move || {
+                            let client = TervezoClient::new(&config);
+                            match client.send_prompt(&impl_id, &message) {
+                                Ok(resp) => {
+                                    let msg = if resp.sent {
+                                        if let Some(ref fid) = resp.follow_up_id {
+                                            format!("Prompt sent (follow-up: {})", fid)
+                                        } else {
+                                            "Prompt sent".to_string()
+                                        }
+                                    } else {
+                                        "Prompt not sent".to_string()
+                                    };
+                                    if let Some(tx) = tx {
+                                        let _ = tx.send(TervezoDetailMsg::PromptSent(msg));
+                                    }
+                                }
+                                Err(e) => {
+                                    if let Some(tx) = tx {
+                                        let _ = tx.send(TervezoDetailMsg::PromptError(e));
+                                    }
+                                }
+                            }
+                        });
+                    }
+                }
+            }
+        }
+        Action::TervezoPromptCancel => {
+            if let Some(ref mut state) = app.tervezo_detail {
+                state.prompt_input.clear();
+            }
+            app.set_view_mode(ViewMode::TervezoDetail);
+        }
         Action::ToggleLog => {
             if *app.view_mode() == ViewMode::Log {
                 app.set_view_mode(ViewMode::List);
@@ -558,12 +768,15 @@ fn trigger_tervezo_initial_fetch(app: &mut App) {
         state.loading.insert(TervezoTab::Plan);
     }
 
-    // Fetch timeline + plan on background threads
+    // Fetch timeline + plan + status on background threads
     let tx_timeline = tx.clone();
     let tx_plan = tx.clone();
+    let tx_status = tx.clone();
     let config_timeline = config.clone();
+    let config_status = config.clone();
     let id_timeline = impl_id.clone();
-    let id_plan = impl_id;
+    let id_plan = impl_id.clone();
+    let id_status = impl_id.clone();
 
     std::thread::spawn(move || {
         let client = TervezoClient::new(&config_timeline);
@@ -588,6 +801,38 @@ fn trigger_tervezo_initial_fetch(app: &mut App) {
             }
         }
     });
+
+    // Fetch status (steps info)
+    std::thread::spawn(move || {
+        let client = TervezoClient::new(&config_status);
+        if let Ok(status) = client.get_status(&id_status) {
+            let _ = tx_status.send(TervezoDetailMsg::Status(status));
+        }
+    });
+
+    // Fetch PR details if implementation has a PR
+    let has_pr = app
+        .tervezo_detail
+        .as_ref()
+        .map(|s| s.implementation.pr_url.is_some())
+        .unwrap_or(false);
+    if has_pr {
+        let pr_config = match app.tervezo_config() {
+            Some(c) => c.clone(),
+            None => return,
+        };
+        let pr_tx = match app.tervezo_detail_tx.clone() {
+            Some(tx) => tx,
+            None => return,
+        };
+        let pr_id = impl_id;
+        std::thread::spawn(move || {
+            let client = TervezoClient::new(&pr_config);
+            if let Ok(pr) = client.get_pr_details(&pr_id) {
+                let _ = pr_tx.send(TervezoDetailMsg::PrDetails(pr));
+            }
+        });
+    }
 
     // For running implementations: start SSE stream + fetch SSH creds
     let running_info = app.tervezo_detail.as_ref().and_then(|s| {
@@ -688,6 +933,61 @@ fn trigger_tervezo_tab_fetch(app: &mut App) {
                     let _ = tx.send(TervezoDetailMsg::Error(tab, e));
                 }
             },
+        }
+    });
+}
+
+fn execute_tervezo_action(app: &mut App, action: TervezoAction) {
+    let config = match app.tervezo_config() {
+        Some(c) => c.clone(),
+        None => return,
+    };
+    let tx = match app.tervezo_detail_tx.clone() {
+        Some(tx) => tx,
+        None => return,
+    };
+    let impl_id = match app.tervezo_detail.as_ref() {
+        Some(state) => state.implementation_id.clone(),
+        None => return,
+    };
+
+    if let Some(ref mut state) = app.tervezo_detail {
+        state.action_loading = true;
+    }
+
+    std::thread::spawn(move || {
+        let client = TervezoClient::new(&config);
+        let result: Result<String, String> = match action {
+            TervezoAction::CreatePr => client.create_pr(&impl_id).map(|r| {
+                let url = r.pr_url.unwrap_or_default();
+                format!("PR created: {}", url)
+            }),
+            TervezoAction::MergePr => client.merge_pr(&impl_id).map(|_| "PR merged".to_string()),
+            TervezoAction::ClosePr => client.close_pr(&impl_id).map(|_| "PR closed".to_string()),
+            TervezoAction::ReopenPr => client
+                .reopen_pr(&impl_id)
+                .map(|_| "PR reopened".to_string()),
+            TervezoAction::Restart => client.restart(&impl_id).map(|r| {
+                if r.is_new_implementation {
+                    let new_id = r.implementation_id.unwrap_or_default();
+                    format!("NAVIGATE:{}", new_id)
+                } else {
+                    "Restarted".to_string()
+                }
+            }),
+            TervezoAction::SendPrompt => {
+                // Should not reach here — handled via prompt input mode
+                Ok("(use prompt input)".to_string())
+            }
+        };
+
+        match result {
+            Ok(msg) => {
+                let _ = tx.send(TervezoDetailMsg::ActionSuccess(msg));
+            }
+            Err(e) => {
+                let _ = tx.send(TervezoDetailMsg::ActionError(e));
+            }
         }
     });
 }

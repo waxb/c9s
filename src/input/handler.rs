@@ -48,6 +48,19 @@ pub enum Action {
     TervezoRefreshDetail,
     TervezoToggleExpand,
     TervezoToggleRaw,
+    TervezoToggleSteps,
+    TervezoOpenActionMenu,
+    TervezoActionMenuUp,
+    TervezoActionMenuDown,
+    TervezoActionMenuSelect,
+    TervezoActionMenuClose,
+    TervezoConfirmYes,
+    TervezoConfirmNo,
+    TervezoOpenPrompt,
+    TervezoPromptChar(char),
+    TervezoPromptBackspace,
+    TervezoPromptSubmit,
+    TervezoPromptCancel,
     ToggleLog,
     ClearLog,
     None,
@@ -103,6 +116,9 @@ fn handle_key(key: &KeyEvent, mode: &ViewMode) -> Action {
         ViewMode::Command => handle_command_key(key),
         ViewMode::ConfirmQuit => handle_confirm_quit_key(key),
         ViewMode::TervezoDetail => handle_tervezo_detail_key(key),
+        ViewMode::TervezoActionMenu => handle_tervezo_action_menu_key(key),
+        ViewMode::TervezoConfirm => handle_tervezo_confirm_key(key),
+        ViewMode::TervezoPromptInput => handle_tervezo_prompt_key(key),
         ViewMode::Log => handle_log_key(key),
         _ => handle_normal_key(key),
     }
@@ -221,6 +237,37 @@ fn handle_tervezo_detail_key(key: &KeyEvent) -> Action {
         KeyCode::Char('s') => Action::TervezoSsh,
         KeyCode::Char('r') => Action::TervezoRefreshDetail,
         KeyCode::Char('m') => Action::TervezoToggleRaw,
+        KeyCode::Char('w') => Action::TervezoToggleSteps,
+        KeyCode::Char('a') => Action::TervezoOpenActionMenu,
+        KeyCode::Char('p') => Action::TervezoOpenPrompt,
+        _ => Action::None,
+    }
+}
+
+fn handle_tervezo_action_menu_key(key: &KeyEvent) -> Action {
+    match key.code {
+        KeyCode::Char('j') | KeyCode::Down => Action::TervezoActionMenuDown,
+        KeyCode::Char('k') | KeyCode::Up => Action::TervezoActionMenuUp,
+        KeyCode::Enter => Action::TervezoActionMenuSelect,
+        KeyCode::Esc | KeyCode::Char('q') => Action::TervezoActionMenuClose,
+        _ => Action::None,
+    }
+}
+
+fn handle_tervezo_confirm_key(key: &KeyEvent) -> Action {
+    match key.code {
+        KeyCode::Char('y') | KeyCode::Enter => Action::TervezoConfirmYes,
+        KeyCode::Char('n') | KeyCode::Esc => Action::TervezoConfirmNo,
+        _ => Action::None,
+    }
+}
+
+fn handle_tervezo_prompt_key(key: &KeyEvent) -> Action {
+    match key.code {
+        KeyCode::Enter => Action::TervezoPromptSubmit,
+        KeyCode::Esc => Action::TervezoPromptCancel,
+        KeyCode::Backspace => Action::TervezoPromptBackspace,
+        KeyCode::Char(c) => Action::TervezoPromptChar(c),
         _ => Action::None,
     }
 }

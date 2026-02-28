@@ -7,8 +7,8 @@ use crate::store::Store;
 use crate::terminal::TerminalManager;
 use crate::tervezo::models::TestReport;
 use crate::tervezo::{
-    FileChange, Implementation, ImplementationStatus, SseMessage, SseStream, SshCredentials,
-    TervezoConfig, TervezoFetcher, TimelineMessage,
+    FileChange, Implementation, ImplementationStatus, PrDetails, SseMessage, SseStream,
+    SshCredentials, StatusResponse, TervezoConfig, TervezoFetcher, TimelineMessage,
 };
 use crate::usage::{UsageData, UsageFetcher};
 use anyhow::Result;
@@ -25,6 +25,9 @@ pub enum ViewMode {
     Command,
     ConfirmQuit,
     TervezoDetail,
+    TervezoActionMenu,
+    TervezoConfirm,
+    TervezoPromptInput,
     Log,
 }
 
@@ -254,16 +257,49 @@ impl TervezoTab {
     }
 }
 
-#[allow(dead_code)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TervezoAction {
+    CreatePr,
+    MergePr,
+    ClosePr,
+    ReopenPr,
+    Restart,
+    SendPrompt,
+}
+
+impl TervezoAction {
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::CreatePr => "Create PR",
+            Self::MergePr => "Merge PR",
+            Self::ClosePr => "Close PR",
+            Self::ReopenPr => "Reopen PR",
+            Self::Restart => "Restart",
+            Self::SendPrompt => "Send prompt",
+        }
+    }
+
+    pub fn is_destructive(self) -> bool {
+        matches!(self, Self::MergePr | Self::ClosePr | Self::Restart)
+    }
+}
+
 #[allow(clippy::large_enum_variant)]
 pub enum TervezoDetailMsg {
     Timeline(Vec<TimelineMessage>),
+    #[allow(dead_code)]
     TimelineAppend(TimelineMessage),
     Plan(String),
     Analysis(String),
     Changes(Vec<FileChange>),
     TestOutput(Vec<TestReport>),
     SshCreds(SshCredentials),
+    Status(StatusResponse),
+    PrDetails(PrDetails),
+    ActionSuccess(String),
+    ActionError(String),
+    PromptSent(String),
+    PromptError(String),
     Error(TervezoTab, String),
 }
 
@@ -292,6 +328,19 @@ pub struct TervezoDetailState {
     pub analysis_scroll: usize,
     pub timeline_at_bottom: bool,
     pub raw_markdown: bool,
+    // Steps
+    pub status_info: Option<StatusResponse>,
+    pub steps_expanded: bool,
+    // Action menu
+    pub pr_details: Option<PrDetails>,
+    pub action_menu_items: Vec<TervezoAction>,
+    pub action_menu_cursor: usize,
+    pub confirm_action: Option<TervezoAction>,
+    pub action_loading: bool,
+    pub action_result: Option<Result<String, String>>,
+    // Prompt input
+    pub prompt_input: String,
+    pub prompt_sending: bool,
 }
 
 impl TervezoDetailState {
@@ -320,6 +369,16 @@ impl TervezoDetailState {
             analysis_scroll: 0,
             timeline_at_bottom: true,
             raw_markdown: false,
+            status_info: None,
+            steps_expanded: false,
+            pr_details: None,
+            action_menu_items: Vec::new(),
+            action_menu_cursor: 0,
+            confirm_action: None,
+            action_loading: false,
+            action_result: None,
+            prompt_input: String::new(),
+            prompt_sending: false,
         }
     }
 
@@ -380,6 +439,64 @@ impl TervezoDetailState {
             TervezoTab::TestOutput => self.test_scroll += 1,
             TervezoTab::Analysis => self.analysis_scroll += 1,
         }
+    }
+
+    pub fn compute_available_actions(&self) -> Vec<TervezoAction> {
+        let mut actions = Vec::new();
+        let status = &self.implementation.status;
+        let has_pr = self.pr_details.is_some() || self.implementation.pr_url.is_some();
+        let pr_open = self
+            .pr_details
+            .as_ref()
+            .map(|pr| pr.is_open())
+            .unwrap_or(false);
+        let pr_closed = self
+            .pr_details
+            .as_ref()
+            .map(|pr| pr.is_closed())
+            .unwrap_or(false);
+        let pr_merged = self
+            .pr_details
+            .as_ref()
+            .map(|pr| pr.merged)
+            .unwrap_or(false);
+
+        // Create PR: completed and no PR
+        if *status == ImplementationStatus::Completed && !has_pr {
+            actions.push(TervezoAction::CreatePr);
+        }
+
+        // Merge PR: PR is open and not merged
+        if pr_open && !pr_merged {
+            actions.push(TervezoAction::MergePr);
+        }
+
+        // Close PR: PR is open and not merged
+        if pr_open && !pr_merged {
+            actions.push(TervezoAction::ClosePr);
+        }
+
+        // Reopen PR: PR is closed and not merged
+        if pr_closed && !pr_merged {
+            actions.push(TervezoAction::ReopenPr);
+        }
+
+        // Restart: terminal status
+        if status.is_terminal() {
+            actions.push(TervezoAction::Restart);
+        }
+
+        // Send prompt: waiting for input or terminal status
+        let waiting = self
+            .status_info
+            .as_ref()
+            .map(|s| s.waiting_for_input)
+            .unwrap_or(false);
+        if waiting || status.is_terminal() {
+            actions.push(TervezoAction::SendPrompt);
+        }
+
+        actions
     }
 
     pub fn toggle_changes_expand(&mut self) {
@@ -552,6 +669,35 @@ impl App {
                         self.ssh_cache.insert(id, creds);
                         changed = true;
                     }
+                    TervezoDetailMsg::Status(status) => {
+                        state.status_info = Some(status);
+                        changed = true;
+                    }
+                    TervezoDetailMsg::PrDetails(pr) => {
+                        state.pr_details = Some(pr);
+                        changed = true;
+                    }
+                    TervezoDetailMsg::ActionSuccess(msg) => {
+                        state.action_loading = false;
+                        state.action_result = Some(Ok(msg));
+                        changed = true;
+                    }
+                    TervezoDetailMsg::ActionError(msg) => {
+                        state.action_loading = false;
+                        state.action_result = Some(Err(msg));
+                        changed = true;
+                    }
+                    TervezoDetailMsg::PromptSent(msg) => {
+                        state.prompt_sending = false;
+                        state.prompt_input.clear();
+                        state.action_result = Some(Ok(msg));
+                        changed = true;
+                    }
+                    TervezoDetailMsg::PromptError(msg) => {
+                        state.prompt_sending = false;
+                        state.action_result = Some(Err(msg));
+                        changed = true;
+                    }
                     TervezoDetailMsg::Error(tab, _err) => {
                         state.loading.remove(&tab);
                         changed = true;
@@ -579,6 +725,23 @@ impl App {
                             state.timeline.drain(..excess);
                             // Adjust scroll position so it stays on the same content
                             state.timeline_scroll = state.timeline_scroll.saturating_sub(excess);
+                        }
+                        changed = true;
+                    }
+                    SseMessage::WaitingForInput(waiting) => {
+                        if let Some(ref mut status) = state.status_info {
+                            status.waiting_for_input = waiting;
+                        } else {
+                            // Create minimal status info to hold the waiting flag
+                            state.status_info = Some(StatusResponse {
+                                status: state.implementation.status.label().to_string(),
+                                waiting_for_input: waiting,
+                                current_step_name: None,
+                                started_at: None,
+                                completed_at: None,
+                                duration: None,
+                                steps: Vec::new(),
+                            });
                         }
                         changed = true;
                     }
@@ -713,7 +876,13 @@ impl App {
                     self.detail_preview_scroll = 0;
                 }
             }
-        } else if mode != ViewMode::TervezoDetail {
+        } else if !matches!(
+            mode,
+            ViewMode::TervezoDetail
+                | ViewMode::TervezoActionMenu
+                | ViewMode::TervezoConfirm
+                | ViewMode::TervezoPromptInput
+        ) {
             self.detail_config = None;
             self.detail_items.clear();
             self.detail_preview = None;
@@ -728,7 +897,10 @@ impl App {
                     self.tervezo_detail_rx = Some(rx);
                 }
             }
-        } else {
+        } else if !matches!(
+            mode,
+            ViewMode::TervezoActionMenu | ViewMode::TervezoConfirm | ViewMode::TervezoPromptInput
+        ) {
             self.tervezo_detail = None;
             self.tervezo_detail_tx = None;
             self.tervezo_detail_rx = None;
