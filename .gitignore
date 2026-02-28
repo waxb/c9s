@@ -5,3 +5,5 @@ ideas.save
 *.swp
 *.swo
 .DS_Store
+.codegraph/
+openspec/

@@ -8,7 +8,21 @@ use super::models::{
     TimelineMessage,
 };
 
-/// Helper to parse JSON with detailed logging on failure.
+fn simple_percent_encode(input: &str) -> String {
+    let mut encoded = String::with_capacity(input.len());
+    for byte in input.bytes() {
+        match byte {
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' => {
+                encoded.push(byte as char);
+            }
+            _ => {
+                encoded.push_str(&format!("%{:02X}", byte));
+            }
+        }
+    }
+    encoded
+}
+
 fn parse_json<T: serde::de::DeserializeOwned>(body: &str, label: &str) -> Result<T, String> {
     serde_json::from_str(body).map_err(|e| {
         tlog!(error, "{} parse error: {} — body: {}", label, e, body);
@@ -45,7 +59,7 @@ impl TervezoClient {
     ) -> Result<Vec<Implementation>, String> {
         let mut url = format!("{}/implementations", self.base_url);
         if let Some(status) = status_filter {
-            url.push_str(&format!("?status={}", status));
+            url.push_str(&format!("?status={}", simple_percent_encode(status)));
         }
 
         let resp = self.get(&url)?;

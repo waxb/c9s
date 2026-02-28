@@ -74,7 +74,7 @@ pub fn push(level: LogLevel, msg: String) {
     }
 
     // Then push to in-memory buffer (for TUI log panel)
-    let mut buf = global().lock().unwrap();
+    let mut buf = global().lock().unwrap_or_else(|e| e.into_inner());
     buf.entries.push(LogEntry {
         timestamp: now,
         level,
@@ -88,24 +88,32 @@ pub fn push(level: LogLevel, msg: String) {
 }
 
 pub fn take_dirty() -> bool {
-    let mut buf = global().lock().unwrap();
+    let mut buf = global().lock().unwrap_or_else(|e| e.into_inner());
     let was = buf.dirty;
     buf.dirty = false;
     was
 }
 
 pub fn entries() -> Vec<LogEntry> {
-    global().lock().unwrap().entries.clone()
+    global()
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .entries
+        .clone()
 }
 
 pub fn clear() {
-    let mut buf = global().lock().unwrap();
+    let mut buf = global().lock().unwrap_or_else(|e| e.into_inner());
     buf.entries.clear();
     buf.dirty = true;
 }
 
 pub fn entry_count() -> usize {
-    global().lock().unwrap().entries.len()
+    global()
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .entries
+        .len()
 }
 
 #[macro_export]

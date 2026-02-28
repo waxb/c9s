@@ -57,14 +57,14 @@ impl TervezoFetcher {
             match client.list_implementations(None) {
                 Ok(impls) => {
                     tlog!(info, "fetched {} implementations", impls.len());
-                    let mut s = state.lock().unwrap();
+                    let mut s = state.lock().unwrap_or_else(|e| e.into_inner());
                     s.implementations = impls;
                     s.error = None;
                     s.dirty = true;
                 }
                 Err(e) => {
                     tlog!(error, "fetch error: {}", e);
-                    let mut s = state.lock().unwrap();
+                    let mut s = state.lock().unwrap_or_else(|e| e.into_inner());
                     s.error = Some(e);
                     s.dirty = true;
                 }
@@ -80,19 +80,27 @@ impl TervezoFetcher {
     }
 
     pub fn take_dirty(&self) -> bool {
-        let mut s = self.state.lock().unwrap();
+        let mut s = self.state.lock().unwrap_or_else(|e| e.into_inner());
         let was_dirty = s.dirty;
         s.dirty = false;
         was_dirty
     }
 
     pub fn implementations(&self) -> Vec<Implementation> {
-        self.state.lock().unwrap().implementations.clone()
+        self.state
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .implementations
+            .clone()
     }
 
     #[allow(dead_code)]
     pub fn error(&self) -> Option<String> {
-        self.state.lock().unwrap().error.clone()
+        self.state
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .error
+            .clone()
     }
 }
 
