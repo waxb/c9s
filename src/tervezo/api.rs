@@ -3,7 +3,7 @@ use crate::tlog;
 use super::config::TervezoConfig;
 use super::models::{
     AnalysisResponse, ChangesResponse, FileChange, Implementation, ListResponse, PlanResponse,
-    SshCredentials, Step, StepsResponse, TestOutputResponse, TimelineMessage, TimelineResponse,
+    SshCredentials, Step, StepsResponse, TestOutputResponse, TimelineMessage,
 };
 
 /// Helper to parse JSON with detailed logging on failure.
@@ -77,42 +77,47 @@ impl TervezoClient {
 
         let resp = self.get(&url)?;
 
-        // Log raw JSON structure of first message for debugging
-        if let Ok(raw) = serde_json::from_str::<serde_json::Value>(&resp) {
-            if let Some(first) = raw
-                .get("messages")
-                .and_then(|m| m.as_array())
-                .and_then(|a| a.first())
-            {
-                tlog!(
-                    info,
-                    "timeline first msg keys: {}",
-                    first
-                        .as_object()
-                        .map(|o| o.keys().cloned().collect::<Vec<_>>().join(", "))
-                        .unwrap_or_default()
-                );
-                let sample = serde_json::to_string(first).unwrap_or_default();
-                tlog!(
-                    info,
-                    "timeline first msg: {}",
-                    &sample[..500.min(sample.len())]
-                );
+        // Parse the envelope, then deserialize each message individually
+        // so one bad message doesn't kill the entire timeline.
+        let envelope: serde_json::Value = parse_json(&resp, "get_timeline")?;
+
+        let raw_msgs = envelope
+            .get("messages")
+            .and_then(|v| v.as_array())
+            .cloned()
+            .unwrap_or_default();
+
+        let mut messages = Vec::with_capacity(raw_msgs.len());
+        let mut skipped = 0;
+
+        for raw in raw_msgs {
+            if raw.is_null() {
+                continue;
+            }
+            match serde_json::from_value::<TimelineMessage>(raw) {
+                Ok(msg) => messages.push(msg),
+                Err(e) => {
+                    skipped += 1;
+                    if skipped <= 3 {
+                        tlog!(warn, "timeline msg parse skip: {}", e);
+                    }
+                }
             }
         }
 
-        let timeline: TimelineResponse = parse_json(&resp, "get_timeline")?;
-        let messages: Vec<TimelineMessage> = timeline.messages.into_iter().flatten().collect();
-        tlog!(info, "parsed {} timeline messages", messages.len());
+        tlog!(
+            info,
+            "parsed {} timeline messages (skipped {})",
+            messages.len(),
+            skipped
+        );
         if let Some(first) = messages.first() {
+            let dt = first.display_text();
             tlog!(
                 info,
-                "first parsed msg: type={:?} status={:?} message={:?} content={:?} text='{}'",
+                "first parsed msg: type={:?} text='{}'",
                 first.msg_type,
-                first.status,
-                first.message,
-                first.content,
-                first.display_text()
+                &dt[..100.min(dt.len())]
             );
         }
         Ok(messages)

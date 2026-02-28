@@ -254,6 +254,7 @@ impl TervezoTab {
 }
 
 #[allow(dead_code)]
+#[allow(clippy::large_enum_variant)]
 pub enum TervezoDetailMsg {
     Timeline(Vec<TimelineMessage>),
     TimelineAppend(TimelineMessage),
@@ -280,6 +281,7 @@ pub struct TervezoDetailState {
     pub test_output: Option<String>,
     pub ssh_creds: Option<SshCredentials>,
     pub loading: HashSet<TervezoTab>,
+    pub timeline_visible_height: std::cell::Cell<usize>,
     pub plan_scroll: usize,
     pub changes_scroll: usize,
     pub test_scroll: usize,
@@ -305,6 +307,7 @@ impl TervezoDetailState {
             test_output: None,
             ssh_creds: None,
             loading: HashSet::new(),
+            timeline_visible_height: std::cell::Cell::new(20),
             plan_scroll: 0,
             changes_scroll: 0,
             test_scroll: 0,

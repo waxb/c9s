@@ -40,6 +40,10 @@ pub enum Action {
     TervezoTabPrev,
     TervezoScrollUp,
     TervezoScrollDown,
+    TervezoScrollHalfPageUp,
+    TervezoScrollHalfPageDown,
+    TervezoScrollToTop,
+    TervezoScrollToBottom,
     TervezoSsh,
     TervezoRefreshDetail,
     TervezoToggleExpand,
@@ -194,14 +198,24 @@ fn handle_confirm_quit_key(key: &KeyEvent) -> Action {
 }
 
 fn handle_tervezo_detail_key(key: &KeyEvent) -> Action {
+    let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
     match key.code {
         KeyCode::Esc | KeyCode::Char('q') => Action::Back,
         KeyCode::Tab | KeyCode::Char('l') => Action::TervezoTabNext,
         KeyCode::Char('h') => Action::TervezoTabPrev,
-        KeyCode::Char('j') | KeyCode::Down => Action::MoveDown,
-        KeyCode::Char('k') | KeyCode::Up => Action::MoveUp,
-        KeyCode::Char('J') => Action::TervezoScrollDown,
-        KeyCode::Char('K') => Action::TervezoScrollUp,
+        // j/k = timeline scroll, J/K = tab scroll
+        KeyCode::Char('j') | KeyCode::Down => Action::TervezoScrollDown,
+        KeyCode::Char('k') | KeyCode::Up => Action::TervezoScrollUp,
+        KeyCode::Char('J') => Action::MoveDown,
+        KeyCode::Char('K') => Action::MoveUp,
+        // Half-page / page scrolling for timeline
+        KeyCode::Char('d') if ctrl => Action::TervezoScrollHalfPageDown,
+        KeyCode::Char('u') if ctrl => Action::TervezoScrollHalfPageUp,
+        KeyCode::PageDown => Action::TervezoScrollHalfPageDown,
+        KeyCode::PageUp => Action::TervezoScrollHalfPageUp,
+        // Top / bottom
+        KeyCode::Char('g') => Action::TervezoScrollToTop,
+        KeyCode::Char('G') => Action::TervezoScrollToBottom,
         KeyCode::Enter => Action::TervezoToggleExpand,
         KeyCode::Char('s') => Action::TervezoSsh,
         KeyCode::Char('r') => Action::TervezoRefreshDetail,

@@ -1,7 +1,9 @@
 use ratatui::layout::{Constraint, Layout, Rect};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
-use ratatui::widgets::{Block, Borders, Paragraph, Wrap};
+use ratatui::widgets::{
+    Block, Borders, Paragraph, Scrollbar, ScrollbarOrientation, ScrollbarState, Wrap,
+};
 use ratatui::Frame;
 
 use crate::app::{TervezoDetailState, TervezoTab};
@@ -75,7 +77,7 @@ fn render_header(f: &mut Frame, state: &TervezoDetailState, area: Rect) {
 
 fn render_body(f: &mut Frame, state: &TervezoDetailState, area: Rect) {
     let body_chunks =
-        Layout::horizontal([Constraint::Percentage(40), Constraint::Percentage(60)]).split(area);
+        Layout::horizontal([Constraint::Percentage(65), Constraint::Percentage(35)]).split(area);
 
     render_timeline_panel(f, state, body_chunks[0]);
     render_tab_panel(f, state, body_chunks[1]);
@@ -100,51 +102,158 @@ fn render_timeline_panel(f: &mut Frame, state: &TervezoDetailState, area: Rect) 
         return;
     }
 
-    let lines: Vec<Line> = state
-        .timeline
-        .iter()
-        .map(|msg| {
-            let eff_status = msg.effective_status();
-            let icon = match eff_status {
-                Some("completed") | Some("success") | Some("merged") => "✓",
-                Some("running") | Some("in_progress") | Some("queued") => "●",
-                Some("failed") | Some("error") => "✗",
-                Some("stopped") | Some("cancelled") => "■",
-                Some("pending") => "○",
-                _ => "●",
-            };
-            let icon_style = match eff_status {
-                Some("completed") | Some("success") | Some("merged") => {
-                    Style::default().fg(Color::Green)
-                }
-                Some("running") | Some("in_progress") => Style::default()
-                    .fg(Color::Cyan)
-                    .add_modifier(Modifier::BOLD),
-                Some("queued") | Some("pending") => Style::default().fg(Color::Yellow),
-                Some("failed") | Some("error") => Style::default().fg(Color::Red),
-                Some("stopped") | Some("cancelled") => Style::default().fg(Color::DarkGray),
-                _ => Theme::tzv_timeline_icon(),
-            };
+    let mut lines: Vec<Line> = Vec::new();
 
-            Line::from(vec![
-                Span::styled(format!("  {} ", icon), icon_style),
-                Span::styled(msg.display_text().to_string(), Theme::tzv_timeline_text()),
-            ])
-        })
-        .collect();
+    for msg in &state.timeline {
+        let msg_type = msg.msg_type.as_deref().unwrap_or("");
+        let eff_status = msg.effective_status();
+
+        let (icon, icon_style, text_style) = match msg_type {
+            "tool_call" => {
+                let tool = msg.tool_name.as_deref().unwrap_or("tool");
+                let ico = match tool {
+                    "Read" => "◇",
+                    "Write" | "Edit" => "◆",
+                    "Bash" => "$",
+                    "Grep" | "Glob" => "⌕",
+                    _ => "⚙",
+                };
+                (
+                    ico,
+                    Style::default().fg(Color::Blue),
+                    Style::default().fg(Color::DarkGray),
+                )
+            }
+            "assistant_text" => (
+                "▸",
+                Style::default().fg(Color::Magenta),
+                Theme::tzv_timeline_text(),
+            ),
+            "file_change" => (
+                "±",
+                Style::default().fg(Color::Yellow),
+                Style::default().fg(Color::DarkGray),
+            ),
+            "thinking" | "assistant_thinking" => (
+                "◎",
+                Style::default().fg(Color::Cyan).add_modifier(Modifier::DIM),
+                Style::default().fg(Color::Cyan),
+            ),
+            "todo" => (
+                "☐",
+                Style::default().fg(Color::Yellow),
+                Style::default().fg(Color::DarkGray),
+            ),
+            "iteration_marker" => (
+                "─",
+                Style::default().fg(Color::DarkGray),
+                Style::default()
+                    .fg(Color::DarkGray)
+                    .add_modifier(Modifier::DIM),
+            ),
+            "status_change" => {
+                let ico = match eff_status {
+                    Some("completed") | Some("success") | Some("merged") => "✓",
+                    Some("running") | Some("in_progress") => "●",
+                    Some("queued") | Some("pending") => "○",
+                    Some("failed") | Some("error") => "✗",
+                    Some("stopped") | Some("cancelled") => "■",
+                    _ => "●",
+                };
+                let sty = match eff_status {
+                    Some("completed") | Some("success") | Some("merged") => {
+                        Style::default().fg(Color::Green)
+                    }
+                    Some("running") | Some("in_progress") => Style::default()
+                        .fg(Color::Cyan)
+                        .add_modifier(Modifier::BOLD),
+                    Some("queued") | Some("pending") => Style::default().fg(Color::Yellow),
+                    Some("failed") | Some("error") => Style::default().fg(Color::Red),
+                    Some("stopped") | Some("cancelled") => Style::default().fg(Color::DarkGray),
+                    _ => Theme::tzv_timeline_icon(),
+                };
+                (ico, sty, Theme::tzv_timeline_text())
+            }
+            _ => ("·", Theme::tzv_timeline_icon(), Theme::tzv_timeline_text()),
+        };
+
+        let display = msg.display_text();
+
+        // Header line for this message
+        lines.push(Line::from(vec![
+            Span::styled(format!("  {} ", icon), icon_style),
+            Span::styled(display, text_style),
+        ]));
+
+        // Inline diff/content for file_change messages
+        if msg.has_inline_code() {
+            if let Some(ref diff) = msg.diff {
+                for diff_line in diff.lines() {
+                    let style = if diff_line.starts_with("+++") || diff_line.starts_with("---") {
+                        Style::default()
+                            .fg(Color::White)
+                            .add_modifier(Modifier::BOLD)
+                    } else if diff_line.starts_with('+') {
+                        Theme::tzv_diff_add()
+                    } else if diff_line.starts_with('-') {
+                        Theme::tzv_diff_remove()
+                    } else if diff_line.starts_with("@@") {
+                        Theme::tzv_diff_header()
+                    } else {
+                        Style::default().fg(Color::DarkGray)
+                    };
+                    lines.push(Line::from(Span::styled(
+                        format!("      {}", diff_line),
+                        style,
+                    )));
+                }
+            } else if let Some(ref content) = msg.content {
+                // New file: render content as additions (limit to 30 lines)
+                for (i, content_line) in content.lines().enumerate() {
+                    if i >= 30 {
+                        lines.push(Line::from(Span::styled(
+                            format!(
+                                "      ... ({} more lines)",
+                                content.lines().count().saturating_sub(30)
+                            ),
+                            Style::default().fg(Color::DarkGray),
+                        )));
+                        break;
+                    }
+                    lines.push(Line::from(Span::styled(
+                        format!("      +{}", content_line),
+                        Theme::tzv_diff_add(),
+                    )));
+                }
+            }
+        }
+    }
 
     let total_lines = lines.len();
     let visible = inner.height as usize;
+
+    // Store visible height for half-page scroll calculations
+    state.timeline_visible_height.set(visible);
+
+    let max_scroll = total_lines.saturating_sub(visible);
     let scroll = if state.timeline_at_bottom && total_lines > visible {
-        total_lines.saturating_sub(visible)
+        max_scroll
     } else {
-        state
-            .timeline_scroll
-            .min(total_lines.saturating_sub(visible))
+        state.timeline_scroll.min(max_scroll)
     };
 
-    let paragraph = Paragraph::new(lines).scroll((scroll as u16, 0));
+    let paragraph = Paragraph::new(lines)
+        .wrap(Wrap { trim: false })
+        .scroll((scroll as u16, 0));
     f.render_widget(paragraph, inner);
+
+    // Scrollbar
+    if total_lines > visible {
+        let mut scrollbar_state = ScrollbarState::new(max_scroll).position(scroll);
+        let scrollbar = Scrollbar::new(ScrollbarOrientation::VerticalRight)
+            .style(Style::default().fg(Color::DarkGray));
+        f.render_stateful_widget(scrollbar, inner, &mut scrollbar_state);
+    }
 }
 
 fn render_tab_panel(f: &mut Frame, state: &TervezoDetailState, area: Rect) {
@@ -456,16 +565,16 @@ fn render_footer(f: &mut Frame, state: &TervezoDetailState, area: Rect) {
             .changes_expanded
             .contains(&state.changes_selected_file)
         {
-            "j/k:scroll(diff)  Enter:collapse  "
+            "J/K:scroll(diff)  Enter:collapse"
         } else {
-            "j/k:navigate  Enter:expand  "
+            "J/K:navigate  Enter:expand"
         }
     } else {
-        "j/k:scroll(tab)  "
+        "J/K:scroll(tab)"
     };
 
     let keys = format!(
-        " Esc:back  Tab/h/l:tabs  {}J/K:scroll(timeline)  r:refresh  {}",
+        " Esc:back  Tab/h/l:tabs  j/k:timeline  ^d/^u:page  g/G:top/btm  {}  r:refresh  {}",
         tab_hint, ssh_hint
     );
 

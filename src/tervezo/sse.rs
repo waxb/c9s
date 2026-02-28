@@ -155,14 +155,25 @@ impl SseStream {
                                     match serde_json::from_value::<TimelineMessage>(raw_msg.clone())
                                     {
                                         Ok(msg) => {
-                                            tlog!(
-                                                info,
-                                                "SSE msg: type={:?} status={:?} text={}",
-                                                msg.msg_type,
-                                                msg.effective_status(),
-                                                &msg.display_text()
-                                                    [..100.min(msg.display_text().len())]
-                                            );
+                                            let dt = msg.display_text();
+                                            if dt.is_empty() {
+                                                // Log full raw JSON for messages with no display text
+                                                let raw_str = serde_json::to_string(raw_msg)
+                                                    .unwrap_or_default();
+                                                tlog!(
+                                                    info,
+                                                    "SSE msg (no text): type={:?} raw={}",
+                                                    msg.msg_type,
+                                                    &raw_str[..300.min(raw_str.len())]
+                                                );
+                                            } else {
+                                                tlog!(
+                                                    info,
+                                                    "SSE msg: type={:?} text={}",
+                                                    msg.msg_type,
+                                                    &dt[..100.min(dt.len())]
+                                                );
+                                            }
                                             if let Some(ref id) = msg.id {
                                                 *cursor = Some(id.clone());
                                             }

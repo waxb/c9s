@@ -155,24 +155,238 @@ pub struct TimelineMessage {
     /// Generic status field (if present).
     #[serde(default)]
     pub status: Option<String>,
+    /// Tool call fields.
+    #[serde(default)]
+    pub tool_name: Option<String>,
+    #[serde(default)]
+    pub parameters: Option<serde_json::Value>,
+    /// File change fields.
+    #[serde(default)]
+    pub filename: Option<String>,
+    #[serde(default)]
+    pub diff: Option<String>,
+    /// Thinking fields — exact name TBD, capture common variants.
+    #[serde(default)]
+    pub thinking: Option<String>,
+    #[serde(default)]
+    pub thought: Option<String>,
+    #[serde(default)]
+    pub summary: Option<String>,
+    /// Title used by some message types.
+    #[serde(default)]
+    pub title: Option<String>,
+    /// Todo/task list fields.
+    #[serde(default)]
+    pub todos: Option<Vec<serde_json::Value>>,
+    /// Iteration marker fields.
+    #[serde(default)]
+    pub event: Option<String>,
+    #[serde(default)]
+    pub iteration: Option<u32>,
 }
 
 impl TimelineMessage {
     /// Best-effort display text: check all known text fields in priority order.
-    pub fn display_text(&self) -> &str {
-        self.reason
+    /// Returns owned string because tool_call messages need composing.
+    pub fn display_text(&self) -> String {
+        // status_change: use reason
+        if let Some(ref reason) = self.reason {
+            return reason.clone();
+        }
+
+        // tool_call: compose "ToolName arg"
+        if let Some(ref tool) = self.tool_name {
+            let arg = self.tool_call_summary();
+            return if arg.is_empty() {
+                tool.clone()
+            } else {
+                format!("{} {}", tool, arg)
+            };
+        }
+
+        // file_change: show filename or first line of diff
+        if self.msg_type.as_deref() == Some("file_change") {
+            if let Some(ref fname) = self.filename {
+                return format!("Changed {}", fname);
+            }
+            if let Some(ref d) = self.diff {
+                return self.diff_summary(d);
+            }
+            if self.content.is_some() {
+                return "New file".to_string();
+            }
+        }
+
+        // todo: show active tasks
+        if self.msg_type.as_deref() == Some("todo") {
+            return self.todo_summary();
+        }
+
+        // iteration_marker: show iteration boundary
+        if self.msg_type.as_deref() == Some("iteration_marker") {
+            let event = self.event.as_deref().unwrap_or("marker");
+            let iter_num = self.iteration.unwrap_or(0);
+            return match event {
+                "start" => format!("── Iteration {} started ──", iter_num),
+                "complete" => format!("── Iteration {} complete ──", iter_num),
+                _ => format!("── Iteration {} ──", iter_num),
+            };
+        }
+
+        // assistant_thinking: check thinking-related fields
+        if matches!(
+            self.msg_type.as_deref(),
+            Some("thinking") | Some("assistant_thinking")
+        ) {
+            if let Some(t) = self
+                .thinking
+                .as_deref()
+                .or(self.thought.as_deref())
+                .or(self.summary.as_deref())
+                .or(self.title.as_deref())
+                .or(self.content.as_deref())
+                .or(self.text.as_deref())
+                .or(self.message.as_deref())
+            {
+                return t.to_string();
+            }
+            return "Thinking...".to_string();
+        }
+
+        // assistant_text / agent_message / generic
+        self.text
             .as_deref()
-            .or(self.text.as_deref())
             .or(self.message.as_deref())
             .or(self.content.as_deref())
             .or(self.output.as_deref())
             .or(self.details.as_deref())
+            .or(self.summary.as_deref())
+            .or(self.thinking.as_deref())
+            .or(self.title.as_deref())
             .unwrap_or("")
+            .to_string()
+    }
+
+    /// Extract the most relevant parameter from a tool_call for display.
+    fn tool_call_summary(&self) -> String {
+        let params = match &self.parameters {
+            Some(v) => v,
+            None => return String::new(),
+        };
+        let obj = match params.as_object() {
+            Some(o) => o,
+            None => return String::new(),
+        };
+
+        // Priority: file_path > path > pattern > command > query > glob > first string value
+        for key in &["file_path", "path", "pattern", "command", "query", "glob"] {
+            if let Some(val) = obj.get(*key).and_then(|v| v.as_str()) {
+                let truncated = if val.len() > 80 {
+                    format!("{}...", &val[..77])
+                } else {
+                    val.to_string()
+                };
+                return truncated;
+            }
+        }
+
+        // Fallback: first string value
+        for val in obj.values() {
+            if let Some(s) = val.as_str() {
+                let truncated = if s.len() > 60 {
+                    format!("{}...", &s[..57])
+                } else {
+                    s.to_string()
+                };
+                return truncated;
+            }
+        }
+
+        String::new()
+    }
+
+    /// Extract a one-line summary from a unified diff.
+    fn diff_summary(&self, diff: &str) -> String {
+        // Try to find the file path from --- or +++ headers
+        for line in diff.lines() {
+            if let Some(path) = line.strip_prefix("+++ b/") {
+                return format!("Changed {}", path);
+            }
+            if let Some(path) = line.strip_prefix("+++ ") {
+                if path != "/dev/null" {
+                    return format!("Changed {}", path);
+                }
+            }
+            if let Some(path) = line.strip_prefix("--- a/") {
+                // Will be overridden by +++ if present, but use as fallback
+                if !diff.contains("+++ ") {
+                    return format!("Removed {}", path);
+                }
+            }
+        }
+        // Count additions/deletions as summary
+        let adds = diff
+            .lines()
+            .filter(|l| l.starts_with('+') && !l.starts_with("+++"))
+            .count();
+        let dels = diff
+            .lines()
+            .filter(|l| l.starts_with('-') && !l.starts_with("---"))
+            .count();
+        format!("File changed (+{} -{})", adds, dels)
+    }
+
+    /// Whether this message has inline code to render (diff or new file content).
+    pub fn has_inline_code(&self) -> bool {
+        self.msg_type.as_deref() == Some("file_change")
+            && (self.diff.is_some() || self.content.is_some())
+    }
+
+    /// Summarize todos into a one-line description.
+    fn todo_summary(&self) -> String {
+        let todos = match &self.todos {
+            Some(t) => t,
+            None => return "Tasks updated".to_string(),
+        };
+        let items: Vec<String> = todos
+            .iter()
+            .filter_map(|t| {
+                t.get("activeForm")
+                    .and_then(|v| v.as_str())
+                    .or_else(|| t.get("content").and_then(|v| v.as_str()))
+                    .map(|s| {
+                        if s.len() > 50 {
+                            format!("{}…", &s[..49])
+                        } else {
+                            s.to_string()
+                        }
+                    })
+            })
+            .collect();
+        if items.is_empty() {
+            "Tasks updated".to_string()
+        } else if items.len() == 1 {
+            items[0].clone()
+        } else {
+            format!("{} (+{} more)", items[0], items.len() - 1)
+        }
     }
 
     /// Status for icon rendering: prefer to_status, fall back to status.
     pub fn effective_status(&self) -> Option<&str> {
         self.to_status.as_deref().or(self.status.as_deref())
+    }
+
+    /// Whether this message is a tool call.
+    #[allow(dead_code)]
+    pub fn is_tool_call(&self) -> bool {
+        self.msg_type.as_deref() == Some("tool_call")
+    }
+
+    /// Whether this is assistant text.
+    #[allow(dead_code)]
+    pub fn is_assistant_text(&self) -> bool {
+        self.msg_type.as_deref() == Some("assistant_text")
     }
 }
 
@@ -245,6 +459,7 @@ pub struct ListResponse {
     pub total: Option<u64>,
 }
 
+#[allow(dead_code)]
 #[derive(Debug, Clone, Deserialize)]
 pub struct TimelineResponse {
     pub messages: Vec<Option<TimelineMessage>>,

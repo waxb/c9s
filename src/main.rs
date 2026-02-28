@@ -447,6 +447,31 @@ fn process_action(
         Action::TervezoScrollDown => {
             if let Some(ref mut state) = app.tervezo_detail {
                 state.timeline_scroll += 1;
+                state.timeline_at_bottom = false;
+            }
+        }
+        Action::TervezoScrollHalfPageUp => {
+            if let Some(ref mut state) = app.tervezo_detail {
+                let half = state.timeline_visible_height.get() / 2;
+                state.timeline_scroll = state.timeline_scroll.saturating_sub(half.max(1));
+                state.timeline_at_bottom = false;
+            }
+        }
+        Action::TervezoScrollHalfPageDown => {
+            if let Some(ref mut state) = app.tervezo_detail {
+                let half = state.timeline_visible_height.get() / 2;
+                state.timeline_scroll += half.max(1);
+            }
+        }
+        Action::TervezoScrollToTop => {
+            if let Some(ref mut state) = app.tervezo_detail {
+                state.timeline_scroll = 0;
+                state.timeline_at_bottom = false;
+            }
+        }
+        Action::TervezoScrollToBottom => {
+            if let Some(ref mut state) = app.tervezo_detail {
+                state.timeline_at_bottom = true;
             }
         }
         Action::TervezoSsh => {
