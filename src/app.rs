@@ -1,7 +1,15 @@
+use std::collections::{HashMap, HashSet};
+use std::sync::mpsc;
+
 use crate::session::config::{build_config_items, scan_session_config, ConfigItem};
 use crate::session::{Session, SessionConfig, SessionDiscovery, SessionStatus};
 use crate::store::Store;
 use crate::terminal::TerminalManager;
+use crate::tervezo::models::TestReport;
+use crate::tervezo::{
+    FileChange, Implementation, ImplementationStatus, PrDetails, SseMessage, SseStream,
+    SshCredentials, StatusResponse, TervezoConfig, TervezoFetcher, TimelineMessage,
+};
 use crate::usage::{UsageData, UsageFetcher};
 use anyhow::Result;
 
@@ -16,6 +24,11 @@ pub enum ViewMode {
     TerminalQSwitcher,
     Command,
     ConfirmQuit,
+    TervezoDetail,
+    TervezoActionMenu,
+    TervezoConfirm,
+    TervezoPromptInput,
+    Log,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -49,8 +62,458 @@ impl SortColumn {
     }
 }
 
+#[derive(Debug, Clone)]
+pub enum SessionEntry {
+    Local(Session),
+    Remote(Implementation),
+}
+
+impl SessionEntry {
+    pub fn id(&self) -> &str {
+        match self {
+            Self::Local(s) => &s.id,
+            Self::Remote(i) => &i.id,
+        }
+    }
+
+    pub fn display_name(&self) -> &str {
+        match self {
+            Self::Local(s) => &s.project_name,
+            Self::Remote(i) => i.display_name(),
+        }
+    }
+
+    pub fn status_label(&self) -> &str {
+        match self {
+            Self::Local(s) => s.status.label(),
+            Self::Remote(i) => i.status.label(),
+        }
+    }
+
+    pub fn last_activity_display(&self) -> String {
+        match self {
+            Self::Local(s) => s.last_activity_display(),
+            Self::Remote(i) => i.last_activity_display(),
+        }
+    }
+
+    pub fn is_remote(&self) -> bool {
+        matches!(self, Self::Remote(_))
+    }
+
+    pub fn matches_filter(&self, query: &str) -> bool {
+        if query.is_empty() {
+            return true;
+        }
+        let q = query.to_lowercase();
+        match self {
+            Self::Local(s) => {
+                s.project_name.to_lowercase().contains(&q)
+                    || s.cwd.to_string_lossy().to_lowercase().contains(&q)
+                    || s.git_branch
+                        .as_deref()
+                        .unwrap_or("")
+                        .to_lowercase()
+                        .contains(&q)
+                    || s.model.as_deref().unwrap_or("").to_lowercase().contains(&q)
+                    || s.status.label().to_lowercase().contains(&q)
+            }
+            Self::Remote(i) => {
+                i.display_name().to_lowercase().contains(&q)
+                    || i.branch
+                        .as_deref()
+                        .unwrap_or("")
+                        .to_lowercase()
+                        .contains(&q)
+                    || i.repo_url
+                        .as_deref()
+                        .unwrap_or("")
+                        .to_lowercase()
+                        .contains(&q)
+                    || i.status.label().to_lowercase().contains(&q)
+                    || "tervezo".contains(&q)
+            }
+        }
+    }
+
+    pub fn branch(&self) -> Option<&str> {
+        match self {
+            Self::Local(s) => s.git_branch.as_deref(),
+            Self::Remote(i) => i.branch.as_deref(),
+        }
+    }
+
+    pub fn estimated_cost(&self) -> Option<f64> {
+        match self {
+            Self::Local(s) => Some(s.estimated_cost_usd()),
+            Self::Remote(i) => i.estimated_cost_usd,
+        }
+    }
+
+    pub fn total_tokens(&self) -> Option<u64> {
+        match self {
+            Self::Local(s) => Some(s.total_tokens()),
+            Self::Remote(i) => i.total_tokens,
+        }
+    }
+
+    pub fn message_count(&self) -> Option<u32> {
+        match self {
+            Self::Local(s) => Some(s.message_count),
+            Self::Remote(i) => i.message_count,
+        }
+    }
+
+    pub fn as_local(&self) -> Option<&Session> {
+        match self {
+            Self::Local(s) => Some(s),
+            Self::Remote(_) => None,
+        }
+    }
+
+    pub fn as_remote(&self) -> Option<&Implementation> {
+        match self {
+            Self::Local(_) => None,
+            Self::Remote(i) => Some(i),
+        }
+    }
+
+    fn sort_key_last_activity(&self) -> chrono::DateTime<chrono::Utc> {
+        match self {
+            Self::Local(s) => s.last_activity,
+            Self::Remote(i) => i.updated_at.or(i.created_at).unwrap_or_default(),
+        }
+    }
+
+    fn sort_key_project(&self) -> &str {
+        self.display_name()
+    }
+
+    fn sort_key_cost(&self) -> f64 {
+        self.estimated_cost().unwrap_or(0.0)
+    }
+
+    fn sort_key_status(&self) -> u8 {
+        match self {
+            Self::Local(s) => match s.status {
+                SessionStatus::Thinking => 0,
+                SessionStatus::Active => 1,
+                SessionStatus::Idle => 2,
+                SessionStatus::Dead => 3,
+            },
+            Self::Remote(i) => match i.status {
+                ImplementationStatus::Running => 1,
+                ImplementationStatus::Pending | ImplementationStatus::Queued => 2,
+                ImplementationStatus::Completed | ImplementationStatus::Merged => 3,
+                ImplementationStatus::Failed => 4,
+                ImplementationStatus::Stopped | ImplementationStatus::Cancelled => 5,
+            },
+        }
+    }
+
+    fn sort_key_tokens(&self) -> u64 {
+        self.total_tokens().unwrap_or(0)
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum TervezoTab {
+    Plan,
+    Changes,
+    TestOutput,
+    Analysis,
+}
+
+impl TervezoTab {
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Plan => "Plan",
+            Self::Changes => "Changes",
+            Self::TestOutput => "Tests",
+            Self::Analysis => "Analysis",
+        }
+    }
+
+    pub fn all() -> &'static [TervezoTab] {
+        &[Self::Plan, Self::Changes, Self::TestOutput, Self::Analysis]
+    }
+
+    pub fn next(self) -> Self {
+        match self {
+            Self::Plan => Self::Changes,
+            Self::Changes => Self::TestOutput,
+            Self::TestOutput => Self::Analysis,
+            Self::Analysis => Self::Plan,
+        }
+    }
+
+    pub fn prev(self) -> Self {
+        match self {
+            Self::Plan => Self::Analysis,
+            Self::Changes => Self::Plan,
+            Self::TestOutput => Self::Changes,
+            Self::Analysis => Self::TestOutput,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TervezoAction {
+    CreatePr,
+    MergePr,
+    ClosePr,
+    ReopenPr,
+    Restart,
+    SendPrompt,
+}
+
+impl TervezoAction {
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::CreatePr => "Create PR",
+            Self::MergePr => "Merge PR",
+            Self::ClosePr => "Close PR",
+            Self::ReopenPr => "Reopen PR",
+            Self::Restart => "Restart",
+            Self::SendPrompt => "Send prompt",
+        }
+    }
+
+    pub fn is_destructive(self) -> bool {
+        matches!(self, Self::MergePr | Self::ClosePr | Self::Restart)
+    }
+}
+
+#[allow(clippy::large_enum_variant)]
+pub enum TervezoDetailMsg {
+    Timeline(Vec<TimelineMessage>),
+    #[allow(dead_code)]
+    TimelineAppend(TimelineMessage),
+    Plan(String),
+    Analysis(String),
+    Changes(Vec<FileChange>),
+    TestOutput(Vec<TestReport>),
+    SshCreds(SshCredentials),
+    Status(StatusResponse),
+    PrDetails(PrDetails),
+    ActionSuccess(String),
+    ActionError(String),
+    PromptSent(String),
+    PromptError(String),
+    Error(TervezoTab, String),
+}
+
+pub struct TervezoDetailState {
+    pub implementation_id: String,
+    pub implementation: Implementation,
+    pub active_tab: TervezoTab,
+    pub timeline: Vec<TimelineMessage>,
+    pub timeline_scroll: usize,
+    pub plan_content: Option<String>,
+    pub analysis_content: Option<String>,
+    pub changes: Option<Vec<FileChange>>,
+    pub changes_selected_file: usize,
+    pub changes_expanded: HashSet<usize>,
+    pub changes_diff_scroll: usize,
+    pub test_output: Option<Vec<TestReport>>,
+    pub ssh_creds: Option<SshCredentials>,
+    pub loading: HashSet<TervezoTab>,
+    pub timeline_visible_height: std::cell::Cell<usize>,
+    /// Tracks the last effective scroll offset used during rendering.
+    /// Needed to sync `timeline_scroll` when leaving autoscroll mode.
+    pub timeline_rendered_scroll: std::cell::Cell<usize>,
+    pub plan_scroll: usize,
+    pub changes_scroll: usize,
+    pub test_scroll: usize,
+    pub analysis_scroll: usize,
+    pub timeline_at_bottom: bool,
+    pub raw_markdown: bool,
+    // Steps
+    pub status_info: Option<StatusResponse>,
+    pub steps_expanded: bool,
+    // Action menu
+    pub pr_details: Option<PrDetails>,
+    pub action_menu_items: Vec<TervezoAction>,
+    pub action_menu_cursor: usize,
+    pub confirm_action: Option<TervezoAction>,
+    pub action_loading: bool,
+    pub action_result: Option<Result<String, String>>,
+    // Prompt input
+    pub prompt_input: String,
+    pub prompt_sending: bool,
+}
+
+impl TervezoDetailState {
+    pub fn new(implementation: Implementation) -> Self {
+        let id = implementation.id.clone();
+        Self {
+            implementation_id: id,
+            implementation,
+            active_tab: TervezoTab::Plan,
+            timeline: Vec::new(),
+            timeline_scroll: 0,
+            plan_content: None,
+            analysis_content: None,
+            changes: None,
+            changes_selected_file: 0,
+            changes_expanded: HashSet::new(),
+            changes_diff_scroll: 0,
+            test_output: None,
+            ssh_creds: None,
+            loading: HashSet::new(),
+            timeline_visible_height: std::cell::Cell::new(20),
+            timeline_rendered_scroll: std::cell::Cell::new(0),
+            plan_scroll: 0,
+            changes_scroll: 0,
+            test_scroll: 0,
+            analysis_scroll: 0,
+            timeline_at_bottom: true,
+            raw_markdown: false,
+            status_info: None,
+            steps_expanded: false,
+            pr_details: None,
+            action_menu_items: Vec::new(),
+            action_menu_cursor: 0,
+            confirm_action: None,
+            action_loading: false,
+            action_result: None,
+            prompt_input: String::new(),
+            prompt_sending: false,
+        }
+    }
+
+    #[allow(dead_code)]
+    pub fn active_tab_scroll(&self) -> usize {
+        match self.active_tab {
+            TervezoTab::Plan => self.plan_scroll,
+            TervezoTab::Changes => self.changes_scroll,
+            TervezoTab::TestOutput => self.test_scroll,
+            TervezoTab::Analysis => self.analysis_scroll,
+        }
+    }
+
+    pub fn scroll_active_tab_up(&mut self) {
+        match self.active_tab {
+            TervezoTab::Plan => {
+                self.plan_scroll = self.plan_scroll.saturating_sub(1);
+            }
+            TervezoTab::Changes => {
+                if self.changes_expanded.contains(&self.changes_selected_file) {
+                    // Scroll diff content
+                    self.changes_diff_scroll = self.changes_diff_scroll.saturating_sub(1);
+                } else {
+                    // Navigate file list
+                    self.changes_selected_file = self.changes_selected_file.saturating_sub(1);
+                    self.changes_diff_scroll = 0;
+                }
+            }
+            TervezoTab::TestOutput => {
+                self.test_scroll = self.test_scroll.saturating_sub(1);
+            }
+            TervezoTab::Analysis => {
+                self.analysis_scroll = self.analysis_scroll.saturating_sub(1);
+            }
+        }
+    }
+
+    pub fn scroll_active_tab_down(&mut self) {
+        match self.active_tab {
+            TervezoTab::Plan => self.plan_scroll += 1,
+            TervezoTab::Changes => {
+                if self.changes_expanded.contains(&self.changes_selected_file) {
+                    // Scroll diff content
+                    self.changes_diff_scroll += 1;
+                } else {
+                    // Navigate file list
+                    let max = self
+                        .changes
+                        .as_ref()
+                        .map(|c| c.len().saturating_sub(1))
+                        .unwrap_or(0);
+                    if self.changes_selected_file < max {
+                        self.changes_selected_file += 1;
+                        self.changes_diff_scroll = 0;
+                    }
+                }
+            }
+            TervezoTab::TestOutput => self.test_scroll += 1,
+            TervezoTab::Analysis => self.analysis_scroll += 1,
+        }
+    }
+
+    pub fn compute_available_actions(&self) -> Vec<TervezoAction> {
+        let mut actions = Vec::new();
+        let status = &self.implementation.status;
+        let has_pr = self.pr_details.is_some() || self.implementation.pr_url.is_some();
+        let pr_open = self
+            .pr_details
+            .as_ref()
+            .map(|pr| pr.is_open())
+            .unwrap_or(false);
+        let pr_closed = self
+            .pr_details
+            .as_ref()
+            .map(|pr| pr.is_closed())
+            .unwrap_or(false);
+        let pr_merged = self
+            .pr_details
+            .as_ref()
+            .map(|pr| pr.merged)
+            .unwrap_or(false);
+
+        // Create PR: completed and no PR
+        if *status == ImplementationStatus::Completed && !has_pr {
+            actions.push(TervezoAction::CreatePr);
+        }
+
+        // Merge PR: PR is open and not merged
+        if pr_open && !pr_merged {
+            actions.push(TervezoAction::MergePr);
+        }
+
+        // Close PR: PR is open and not merged
+        if pr_open && !pr_merged {
+            actions.push(TervezoAction::ClosePr);
+        }
+
+        // Reopen PR: PR is closed and not merged
+        if pr_closed && !pr_merged {
+            actions.push(TervezoAction::ReopenPr);
+        }
+
+        // Restart: terminal status
+        if status.is_terminal() {
+            actions.push(TervezoAction::Restart);
+        }
+
+        // Send prompt: waiting for input or terminal status
+        let waiting = self
+            .status_info
+            .as_ref()
+            .map(|s| s.waiting_for_input)
+            .unwrap_or(false);
+        if waiting || status.is_terminal() {
+            actions.push(TervezoAction::SendPrompt);
+        }
+
+        actions
+    }
+
+    pub fn toggle_changes_expand(&mut self) {
+        let idx = self.changes_selected_file;
+        if self.changes_expanded.contains(&idx) {
+            self.changes_expanded.remove(&idx);
+            self.changes_diff_scroll = 0;
+        } else {
+            self.changes_expanded.insert(idx);
+            self.changes_diff_scroll = 0;
+        }
+    }
+}
+
 pub struct App {
-    sessions: Vec<Session>,
+    local_sessions: Vec<Session>,
+    entries: Vec<SessionEntry>,
     filtered: Vec<usize>,
     selected: usize,
     view_mode: ViewMode,
@@ -68,6 +531,15 @@ pub struct App {
     detail_preview_scroll: usize,
     usage_fetcher: UsageFetcher,
     usage: UsageData,
+    tervezo_config: Option<TervezoConfig>,
+    tervezo_fetcher: Option<TervezoFetcher>,
+    pub tervezo_detail: Option<TervezoDetailState>,
+    pub tervezo_detail_tx: Option<mpsc::Sender<TervezoDetailMsg>>,
+    tervezo_detail_rx: Option<mpsc::Receiver<TervezoDetailMsg>>,
+    ssh_cache: HashMap<String, SshCredentials>,
+    sse_stream: Option<SseStream>,
+    sse_rx: Option<mpsc::Receiver<SseMessage>>,
+    log_scroll: usize,
 }
 
 impl App {
@@ -75,8 +547,12 @@ impl App {
         let discovery = SessionDiscovery::new();
         let store = Store::open().ok();
 
+        let tervezo_config = TervezoConfig::load();
+        let tervezo_fetcher = tervezo_config.as_ref().map(TervezoFetcher::spawn);
+
         let mut app = Self {
-            sessions: Vec::new(),
+            local_sessions: Vec::new(),
+            entries: Vec::new(),
             filtered: Vec::new(),
             selected: 0,
             view_mode: ViewMode::List,
@@ -94,6 +570,15 @@ impl App {
             detail_preview_scroll: 0,
             usage_fetcher: UsageFetcher::new(),
             usage: UsageData::default(),
+            tervezo_config,
+            tervezo_fetcher,
+            tervezo_detail: None,
+            tervezo_detail_tx: None,
+            tervezo_detail_rx: None,
+            ssh_cache: HashMap::new(),
+            sse_stream: None,
+            sse_rx: None,
+            log_scroll: 0,
         };
 
         app.refresh()?;
@@ -101,14 +586,15 @@ impl App {
     }
 
     pub fn refresh(&mut self) -> Result<()> {
-        self.sessions = self.discovery.discover_all().unwrap_or_default();
+        self.local_sessions = self.discovery.discover_all().unwrap_or_default();
 
         if let Some(ref store) = self.store {
-            for session in &self.sessions {
+            for session in &self.local_sessions {
                 let _ = store.upsert_session(session);
             }
         }
 
+        self.merge_entries();
         self.apply_sort();
         self.apply_filter();
 
@@ -121,6 +607,190 @@ impl App {
         Ok(())
     }
 
+    pub fn check_tervezo_dirty(&mut self) -> bool {
+        if let Some(ref fetcher) = self.tervezo_fetcher {
+            if fetcher.take_dirty() {
+                self.merge_entries();
+                self.apply_sort();
+                self.apply_filter();
+                if self.selected >= self.filtered.len() && !self.filtered.is_empty() {
+                    self.selected = self.filtered.len() - 1;
+                }
+                return true;
+            }
+        }
+        false
+    }
+
+    pub fn drain_tervezo_detail_messages(&mut self) -> bool {
+        let rx = match self.tervezo_detail_rx.as_ref() {
+            Some(rx) => rx,
+            None => return false,
+        };
+
+        let mut changed = false;
+        while let Ok(msg) = rx.try_recv() {
+            if let Some(ref mut state) = self.tervezo_detail {
+                match msg {
+                    TervezoDetailMsg::Timeline(msgs) => {
+                        state.timeline = msgs;
+                        changed = true;
+                    }
+                    TervezoDetailMsg::TimelineAppend(msg) => {
+                        state.timeline.push(msg);
+                        if state.timeline.len() > 1000 {
+                            state.timeline.drain(..state.timeline.len() - 1000);
+                        }
+                        changed = true;
+                    }
+                    TervezoDetailMsg::Plan(content) => {
+                        state.plan_content = Some(content);
+                        state.loading.remove(&TervezoTab::Plan);
+                        changed = true;
+                    }
+                    TervezoDetailMsg::Analysis(content) => {
+                        state.analysis_content = Some(content);
+                        state.loading.remove(&TervezoTab::Analysis);
+                        changed = true;
+                    }
+                    TervezoDetailMsg::Changes(changes) => {
+                        state.changes = Some(changes);
+                        state.loading.remove(&TervezoTab::Changes);
+                        changed = true;
+                    }
+                    TervezoDetailMsg::TestOutput(reports) => {
+                        state.test_output = Some(reports);
+                        state.loading.remove(&TervezoTab::TestOutput);
+                        changed = true;
+                    }
+                    TervezoDetailMsg::SshCreds(creds) => {
+                        let id = state.implementation_id.clone();
+                        state.ssh_creds = Some(creds.clone());
+                        self.ssh_cache.insert(id, creds);
+                        changed = true;
+                    }
+                    TervezoDetailMsg::Status(status) => {
+                        state.status_info = Some(status);
+                        changed = true;
+                    }
+                    TervezoDetailMsg::PrDetails(pr) => {
+                        state.pr_details = Some(pr);
+                        changed = true;
+                    }
+                    TervezoDetailMsg::ActionSuccess(msg) => {
+                        state.action_loading = false;
+                        state.action_result = Some(Ok(msg));
+                        changed = true;
+                    }
+                    TervezoDetailMsg::ActionError(msg) => {
+                        state.action_loading = false;
+                        state.action_result = Some(Err(msg));
+                        changed = true;
+                    }
+                    TervezoDetailMsg::PromptSent(msg) => {
+                        state.prompt_sending = false;
+                        state.prompt_input.clear();
+                        state.action_result = Some(Ok(msg));
+                        changed = true;
+                    }
+                    TervezoDetailMsg::PromptError(msg) => {
+                        state.prompt_sending = false;
+                        state.action_result = Some(Err(msg));
+                        changed = true;
+                    }
+                    TervezoDetailMsg::Error(tab, _err) => {
+                        state.loading.remove(&tab);
+                        changed = true;
+                    }
+                }
+            }
+        }
+        changed
+    }
+
+    pub fn drain_sse_messages(&mut self) -> bool {
+        let rx = match self.sse_rx.as_ref() {
+            Some(rx) => rx,
+            None => return false,
+        };
+
+        let mut changed = false;
+        while let Ok(msg) = rx.try_recv() {
+            if let Some(ref mut state) = self.tervezo_detail {
+                match msg {
+                    SseMessage::Event(timeline_msg) => {
+                        state.timeline.push(*timeline_msg);
+                        if state.timeline.len() > 1000 {
+                            let excess = state.timeline.len() - 1000;
+                            state.timeline.drain(..excess);
+                            // Adjust scroll position so it stays on the same content
+                            state.timeline_scroll = state.timeline_scroll.saturating_sub(excess);
+                        }
+                        changed = true;
+                    }
+                    SseMessage::WaitingForInput(waiting) => {
+                        if let Some(ref mut status) = state.status_info {
+                            status.waiting_for_input = waiting;
+                        } else {
+                            // Create minimal status info to hold the waiting flag
+                            state.status_info = Some(StatusResponse {
+                                status: state.implementation.status.label().to_string(),
+                                waiting_for_input: waiting,
+                                current_step_name: None,
+                                started_at: None,
+                                completed_at: None,
+                                duration: None,
+                                steps: Vec::new(),
+                            });
+                        }
+                        changed = true;
+                    }
+                    SseMessage::Error(_) => {
+                        // SSE errors are handled by reconnection logic in the stream itself
+                    }
+                }
+            }
+        }
+        changed
+    }
+
+    pub fn start_sse_stream(&mut self, implementation_id: &str) {
+        self.stop_sse_stream();
+
+        let config = match self.tervezo_config.as_ref() {
+            Some(c) => c.clone(),
+            None => return,
+        };
+
+        let (tx, rx) = mpsc::channel();
+        let stream = SseStream::connect(&config, implementation_id, None, tx);
+        self.sse_stream = Some(stream);
+        self.sse_rx = Some(rx);
+    }
+
+    pub fn stop_sse_stream(&mut self) {
+        self.sse_stream = None;
+        self.sse_rx = None;
+    }
+
+    fn merge_entries(&mut self) {
+        let mut entries: Vec<SessionEntry> = self
+            .local_sessions
+            .iter()
+            .cloned()
+            .map(SessionEntry::Local)
+            .collect();
+
+        if let Some(ref fetcher) = self.tervezo_fetcher {
+            let remote = fetcher.implementations();
+            for imp in remote {
+                entries.push(SessionEntry::Remote(imp));
+            }
+        }
+
+        self.entries = entries;
+    }
+
     pub fn usage(&self) -> &UsageData {
         &self.usage
     }
@@ -128,36 +798,26 @@ impl App {
     fn apply_sort(&mut self) {
         match self.sort_column {
             SortColumn::LastActive => {
-                self.sessions
-                    .sort_by(|a, b| b.last_activity.cmp(&a.last_activity));
+                self.entries
+                    .sort_by_key(|e| std::cmp::Reverse(e.sort_key_last_activity()));
             }
             SortColumn::Project => {
-                self.sessions
-                    .sort_by(|a, b| a.project_name.cmp(&b.project_name));
+                self.entries
+                    .sort_by(|a, b| a.sort_key_project().cmp(b.sort_key_project()));
             }
             SortColumn::Cost => {
-                self.sessions.sort_by(|a, b| {
-                    b.estimated_cost_usd()
-                        .partial_cmp(&a.estimated_cost_usd())
+                self.entries.sort_by(|a, b| {
+                    b.sort_key_cost()
+                        .partial_cmp(&a.sort_key_cost())
                         .unwrap_or(std::cmp::Ordering::Equal)
                 });
             }
             SortColumn::Status => {
-                self.sessions.sort_by(|a, b| {
-                    let rank = |s: &SessionStatus| -> u8 {
-                        match s {
-                            SessionStatus::Thinking => 0,
-                            SessionStatus::Active => 1,
-                            SessionStatus::Idle => 2,
-                            SessionStatus::Dead => 3,
-                        }
-                    };
-                    rank(&a.status).cmp(&rank(&b.status))
-                });
+                self.entries.sort_by_key(|e| e.sort_key_status());
             }
             SortColumn::Tokens => {
-                self.sessions
-                    .sort_by_key(|b| std::cmp::Reverse(b.total_tokens()));
+                self.entries
+                    .sort_by_key(|e| std::cmp::Reverse(e.sort_key_tokens()));
             }
         }
     }
@@ -165,46 +825,33 @@ impl App {
     fn apply_filter(&mut self) {
         let query = self.filter_query.to_lowercase();
         self.filtered = self
-            .sessions
+            .entries
             .iter()
             .enumerate()
-            .filter(|(_, s)| {
-                if query.is_empty() {
-                    return true;
-                }
-                s.project_name.to_lowercase().contains(&query)
-                    || s.cwd.to_string_lossy().to_lowercase().contains(&query)
-                    || s.git_branch
-                        .as_deref()
-                        .unwrap_or("")
-                        .to_lowercase()
-                        .contains(&query)
-                    || s.model
-                        .as_deref()
-                        .unwrap_or("")
-                        .to_lowercase()
-                        .contains(&query)
-                    || s.status.label().to_lowercase().contains(&query)
-            })
+            .filter(|(_, e)| e.matches_filter(&query))
             .map(|(i, _)| i)
             .collect();
     }
 
-    pub fn filtered_sessions(&self) -> Vec<&Session> {
+    pub fn filtered_sessions(&self) -> Vec<&SessionEntry> {
         self.filtered
             .iter()
-            .filter_map(|&i| self.sessions.get(i))
+            .filter_map(|&i| self.entries.get(i))
             .collect()
     }
 
-    pub fn selected_session(&self) -> Option<&Session> {
+    pub fn selected_session(&self) -> Option<&SessionEntry> {
         self.filtered
             .get(self.selected)
-            .and_then(|&i| self.sessions.get(i))
+            .and_then(|&i| self.entries.get(i))
     }
 
     pub fn selected_index(&self) -> usize {
         self.selected
+    }
+
+    pub fn set_selected(&mut self, idx: usize) {
+        self.selected = idx;
     }
 
     pub fn view_mode(&self) -> &ViewMode {
@@ -219,20 +866,64 @@ impl App {
             }
         }
         if mode == ViewMode::Detail {
-            if let Some(session) = self.selected_session() {
-                let cfg = scan_session_config(&session.cwd);
-                self.detail_items = build_config_items(&cfg, &session.cwd);
-                self.detail_config = Some(cfg);
-                self.detail_cursor = 0;
-                self.detail_preview = None;
-                self.detail_preview_scroll = 0;
+            if let Some(entry) = self.selected_session() {
+                if let Some(session) = entry.as_local() {
+                    let cfg = scan_session_config(&session.cwd);
+                    self.detail_items = build_config_items(&cfg, &session.cwd);
+                    self.detail_config = Some(cfg);
+                    self.detail_cursor = 0;
+                    self.detail_preview = None;
+                    self.detail_preview_scroll = 0;
+                }
             }
-        } else {
+        } else if !matches!(
+            mode,
+            ViewMode::TervezoDetail
+                | ViewMode::TervezoActionMenu
+                | ViewMode::TervezoConfirm
+                | ViewMode::TervezoPromptInput
+        ) {
             self.detail_config = None;
             self.detail_items.clear();
             self.detail_preview = None;
         }
+        if mode == ViewMode::TervezoDetail {
+            if let Some(entry) = self.selected_session() {
+                if let Some(imp) = entry.as_remote() {
+                    let state = TervezoDetailState::new(imp.clone());
+                    self.tervezo_detail = Some(state);
+                    let (tx, rx) = mpsc::channel();
+                    self.tervezo_detail_tx = Some(tx);
+                    self.tervezo_detail_rx = Some(rx);
+                }
+            }
+        } else if !matches!(
+            mode,
+            ViewMode::TervezoActionMenu | ViewMode::TervezoConfirm | ViewMode::TervezoPromptInput
+        ) {
+            self.tervezo_detail = None;
+            self.tervezo_detail_tx = None;
+            self.tervezo_detail_rx = None;
+            self.stop_sse_stream();
+        }
         self.view_mode = mode;
+    }
+
+    pub fn tervezo_config(&self) -> Option<&TervezoConfig> {
+        self.tervezo_config.as_ref()
+    }
+
+    pub fn has_tervezo(&self) -> bool {
+        self.tervezo_config.is_some()
+    }
+
+    pub fn remote_count(&self) -> usize {
+        self.entries.iter().filter(|e| e.is_remote()).count()
+    }
+
+    #[allow(dead_code)]
+    pub fn ssh_cache(&self) -> &HashMap<String, SshCredentials> {
+        &self.ssh_cache
     }
 
     pub fn detail_items(&self) -> &[ConfigItem] {
@@ -290,6 +981,16 @@ impl App {
             }
             return;
         }
+        if self.view_mode == ViewMode::TervezoDetail {
+            if let Some(ref mut state) = self.tervezo_detail {
+                state.scroll_active_tab_up();
+            }
+            return;
+        }
+        if self.view_mode == ViewMode::Log {
+            self.log_scroll_up();
+            return;
+        }
         if self.selected > 0 {
             self.selected -= 1;
         }
@@ -302,6 +1003,16 @@ impl App {
             } else if self.detail_cursor + 1 < self.detail_items.len() {
                 self.detail_cursor += 1;
             }
+            return;
+        }
+        if self.view_mode == ViewMode::TervezoDetail {
+            if let Some(ref mut state) = self.tervezo_detail {
+                state.scroll_active_tab_down();
+            }
+            return;
+        }
+        if self.view_mode == ViewMode::Log {
+            self.log_scroll_down();
             return;
         }
         let limit = if matches!(
@@ -318,10 +1029,18 @@ impl App {
     }
 
     pub fn move_to_top(&mut self) {
+        if self.view_mode == ViewMode::Log {
+            self.log_scroll_to_top();
+            return;
+        }
         self.selected = 0;
     }
 
     pub fn move_to_bottom(&mut self) {
+        if self.view_mode == ViewMode::Log {
+            self.log_scroll_to_bottom();
+            return;
+        }
         if !self.filtered.is_empty() {
             self.selected = self.filtered.len() - 1;
         }
@@ -385,7 +1104,7 @@ impl App {
     }
 
     pub fn active_attached_sessions(&self) -> Vec<String> {
-        self.sessions
+        self.local_sessions
             .iter()
             .filter(|s| {
                 self.terminal_manager.is_attached(&s.id)
@@ -412,11 +1131,40 @@ impl App {
     }
 
     pub fn all_sessions(&self) -> &[Session] {
-        &self.sessions
+        &self.local_sessions
     }
 
     #[allow(dead_code)]
     pub fn live_sessions(&self) -> Vec<&Session> {
-        self.sessions.iter().filter(|s| s.pid.is_some()).collect()
+        self.local_sessions
+            .iter()
+            .filter(|s| s.pid.is_some())
+            .collect()
+    }
+
+    pub fn log_scroll(&self) -> usize {
+        self.log_scroll
+    }
+
+    pub fn log_scroll_up(&mut self) {
+        self.log_scroll = self.log_scroll.saturating_sub(1);
+    }
+
+    pub fn log_scroll_down(&mut self) {
+        self.log_scroll += 1;
+    }
+
+    pub fn log_scroll_to_top(&mut self) {
+        self.log_scroll = 0;
+    }
+
+    pub fn log_scroll_to_bottom(&mut self) {
+        let count = crate::log::entry_count();
+        self.log_scroll = count.saturating_sub(1);
+    }
+
+    pub fn clear_log(&mut self) {
+        crate::log::clear();
+        self.log_scroll = 0;
     }
 }
