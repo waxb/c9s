@@ -47,6 +47,7 @@ pub enum Action {
     TervezoSsh,
     TervezoRefreshDetail,
     TervezoToggleExpand,
+    TervezoToggleRaw,
     ToggleLog,
     ClearLog,
     None,
@@ -219,6 +220,7 @@ fn handle_tervezo_detail_key(key: &KeyEvent) -> Action {
         KeyCode::Enter => Action::TervezoToggleExpand,
         KeyCode::Char('s') => Action::TervezoSsh,
         KeyCode::Char('r') => Action::TervezoRefreshDetail,
+        KeyCode::Char('m') => Action::TervezoToggleRaw,
         _ => Action::None,
     }
 }

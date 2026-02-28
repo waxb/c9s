@@ -3,7 +3,7 @@ use crate::tlog;
 use super::config::TervezoConfig;
 use super::models::{
     AnalysisResponse, ChangesResponse, FileChange, Implementation, ListResponse, PlanResponse,
-    SshCredentials, Step, StepsResponse, TestOutputResponse, TimelineMessage,
+    SshCredentials, Step, StepsResponse, TestOutputResponse, TestReport, TimelineMessage,
 };
 
 /// Helper to parse JSON with detailed logging on failure.
@@ -148,15 +148,32 @@ impl TervezoClient {
         Ok(files)
     }
 
-    pub fn get_test_output(&self, id: &str) -> Result<String, String> {
+    pub fn get_test_output(&self, id: &str) -> Result<Vec<TestReport>, String> {
         let url = format!("{}/implementations/{}/test-output", self.base_url, id);
         let resp = self.get(&url)?;
         let tests: TestOutputResponse = parse_json(&resp, "get_test_output")?;
-        // Render test reports as pretty JSON since the schema is loosely typed
-        let output = serde_json::to_string_pretty(&tests.test_reports)
-            .unwrap_or_else(|_| "(no test data)".to_string());
-        tlog!(info, "parsed {} test reports", tests.test_reports.len());
-        Ok(output)
+
+        let mut reports = Vec::with_capacity(tests.test_reports.len());
+        let mut skipped = 0;
+        for raw in tests.test_reports {
+            match serde_json::from_value::<TestReport>(raw) {
+                Ok(report) => reports.push(report),
+                Err(e) => {
+                    skipped += 1;
+                    if skipped <= 3 {
+                        tlog!(warn, "test report parse skip: {}", e);
+                    }
+                }
+            }
+        }
+
+        tlog!(
+            info,
+            "parsed {} test reports (skipped {})",
+            reports.len(),
+            skipped
+        );
+        Ok(reports)
     }
 
     pub fn get_ssh(&self, id: &str) -> Result<SshCredentials, String> {

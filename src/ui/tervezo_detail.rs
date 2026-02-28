@@ -1,13 +1,13 @@
 use ratatui::layout::{Constraint, Layout, Rect};
 use ratatui::style::{Color, Modifier, Style};
-use ratatui::text::{Line, Span};
+use ratatui::text::{Line, Span, Text};
 use ratatui::widgets::{
     Block, Borders, Paragraph, Scrollbar, ScrollbarOrientation, ScrollbarState, Wrap,
 };
 use ratatui::Frame;
 
 use crate::app::{TervezoDetailState, TervezoTab};
-use crate::tervezo::models::FileChange;
+use crate::tervezo::models::{FileChange, TestReport};
 use crate::tervezo::ImplementationStatus;
 use crate::ui::theme::Theme;
 
@@ -174,6 +174,35 @@ fn render_timeline_panel(f: &mut Frame, state: &TervezoDetailState, area: Rect) 
                 };
                 (ico, sty, Theme::tzv_timeline_text())
             }
+            "pr_created" => (
+                "⇡",
+                Style::default().fg(Color::Cyan),
+                Style::default().fg(Color::Cyan),
+            ),
+            "git_operation" => (
+                "⎇",
+                Style::default().fg(Color::Magenta),
+                Style::default().fg(Color::DarkGray),
+            ),
+            "error" => {
+                let sev = msg.severity.as_deref().unwrap_or("error");
+                let color = match sev {
+                    "fatal" => Color::Red,
+                    "warning" => Color::Yellow,
+                    _ => Color::Red,
+                };
+                ("✗", Style::default().fg(color), Style::default().fg(color))
+            }
+            "test_report" => (
+                "⊘",
+                Style::default().fg(Color::Green),
+                Style::default().fg(Color::White),
+            ),
+            "tool_result" => (
+                "←",
+                Style::default().fg(Color::Blue),
+                Style::default().fg(Color::DarkGray),
+            ),
             _ => ("·", Theme::tzv_timeline_icon(), Theme::tzv_timeline_text()),
         };
 
@@ -305,8 +334,8 @@ fn render_tab_content(f: &mut Frame, state: &TervezoDetailState, area: Rect) {
 fn render_plan_tab(f: &mut Frame, state: &TervezoDetailState, area: Rect) {
     match &state.plan_content {
         Some(content) => {
-            let lines = format_text_content(content);
-            let paragraph = Paragraph::new(lines)
+            let text = render_markdown_or_raw(content, state.raw_markdown);
+            let paragraph = Paragraph::new(text)
                 .wrap(Wrap { trim: false })
                 .scroll((state.plan_scroll as u16, 0));
             f.render_widget(paragraph, area);
@@ -464,23 +493,15 @@ fn render_diff_view(f: &mut Frame, state: &TervezoDetailState, changes: &[FileCh
 
 fn render_test_tab(f: &mut Frame, state: &TervezoDetailState, area: Rect) {
     match &state.test_output {
-        Some(output) => {
-            let lines: Vec<Line> = output
-                .lines()
-                .map(|line| {
-                    let style = if line.contains("PASS") || line.contains("passed") {
-                        Style::default().fg(Color::Green)
-                    } else if line.contains("FAIL") || line.contains("failed") {
-                        Style::default().fg(Color::Red)
-                    } else {
-                        Style::default().fg(Color::White)
-                    };
-                    Line::from(Span::styled(format!("  {}", line), style))
-                })
-                .collect();
-
-            let paragraph = Paragraph::new(lines).scroll((state.test_scroll as u16, 0));
+        Some(reports) if !reports.is_empty() => {
+            let lines = build_test_report_lines(reports);
+            let paragraph = Paragraph::new(lines)
+                .wrap(Wrap { trim: false })
+                .scroll((state.test_scroll as u16, 0));
             f.render_widget(paragraph, area);
+        }
+        Some(_) => {
+            render_empty(f, "No test reports", area);
         }
         None => {
             if state.loading.contains(&TervezoTab::TestOutput) {
@@ -492,11 +513,194 @@ fn render_test_tab(f: &mut Frame, state: &TervezoDetailState, area: Rect) {
     }
 }
 
+fn build_test_report_lines(reports: &[TestReport]) -> Vec<Line<'static>> {
+    let mut lines: Vec<Line<'static>> = Vec::new();
+
+    for (i, report) in reports.iter().enumerate() {
+        if i > 0 {
+            lines.push(Line::from(""));
+            lines.push(Line::from(Span::styled(
+                "  ────────────────────────────────",
+                Style::default().fg(Color::DarkGray),
+            )));
+            lines.push(Line::from(""));
+        }
+
+        // Summary header
+        if let Some(ref summary) = report.summary {
+            let status = summary.status.as_deref().unwrap_or("unknown");
+            let (badge, badge_style) = match status {
+                "passing" => (
+                    " PASSING ",
+                    Style::default()
+                        .fg(Color::Black)
+                        .bg(Color::Green)
+                        .add_modifier(Modifier::BOLD),
+                ),
+                "failing" => (
+                    " FAILING ",
+                    Style::default()
+                        .fg(Color::White)
+                        .bg(Color::Red)
+                        .add_modifier(Modifier::BOLD),
+                ),
+                "partial" => (
+                    " PARTIAL ",
+                    Style::default()
+                        .fg(Color::Black)
+                        .bg(Color::Yellow)
+                        .add_modifier(Modifier::BOLD),
+                ),
+                _ => (
+                    " UNKNOWN ",
+                    Style::default()
+                        .fg(Color::White)
+                        .bg(Color::DarkGray)
+                        .add_modifier(Modifier::BOLD),
+                ),
+            };
+
+            let mut header_spans = vec![
+                Span::raw("  "),
+                Span::styled(badge.to_string(), badge_style),
+            ];
+
+            // Stats
+            if let Some(ref stats) = summary.stats {
+                let mut stat_parts: Vec<String> = Vec::new();
+                if let Some(n) = stats.new_tests {
+                    stat_parts.push(format!("New: {}", n));
+                }
+                if let (Some(before), Some(after)) = (stats.total_before, stats.total_after) {
+                    stat_parts.push(format!("Total: {}>{}", before, after));
+                }
+                if let Some(pre) = stats.pre_existing_failures {
+                    if pre > 0 {
+                        stat_parts.push(format!("Pre-existing: {}", pre));
+                    }
+                }
+                if !stat_parts.is_empty() {
+                    header_spans.push(Span::styled(
+                        format!("  {}", stat_parts.join("  ")),
+                        Style::default().fg(Color::DarkGray),
+                    ));
+                }
+            }
+
+            lines.push(Line::from(header_spans));
+            lines.push(Line::from(""));
+
+            // Summary message
+            if let Some(ref msg) = summary.message {
+                let msg_style = match status {
+                    "passing" => Style::default().fg(Color::Green),
+                    "failing" => Style::default().fg(Color::Red),
+                    "partial" => Style::default().fg(Color::Yellow),
+                    _ => Style::default().fg(Color::White),
+                };
+                lines.push(Line::from(Span::styled(
+                    "  Summary",
+                    Style::default()
+                        .fg(Color::White)
+                        .add_modifier(Modifier::BOLD),
+                )));
+                for l in msg.lines() {
+                    lines.push(Line::from(Span::styled(format!("  {}", l), msg_style)));
+                }
+                lines.push(Line::from(""));
+            }
+        }
+
+        // Approach
+        if let Some(ref approach) = report.approach {
+            lines.push(Line::from(Span::styled(
+                "  Approach",
+                Style::default()
+                    .fg(Color::White)
+                    .add_modifier(Modifier::BOLD),
+            )));
+            for l in approach.lines() {
+                lines.push(Line::from(Span::styled(
+                    format!("  {}", l),
+                    Style::default().fg(Color::White),
+                )));
+            }
+            lines.push(Line::from(""));
+        }
+
+        // Tests Added
+        if !report.tests_added.is_empty() {
+            lines.push(Line::from(Span::styled(
+                "  Tests Added",
+                Style::default()
+                    .fg(Color::White)
+                    .add_modifier(Modifier::BOLD),
+            )));
+            for test in &report.tests_added {
+                let file = test.file.as_deref().unwrap_or("(unknown)");
+                let count_str = test.count.map(|c| format!(" (+{})", c)).unwrap_or_default();
+                let critical_str = if test.critical_path == Some(true) {
+                    " critical"
+                } else {
+                    ""
+                };
+                let critical_style = if test.critical_path == Some(true) {
+                    Style::default().fg(Color::Yellow)
+                } else {
+                    Style::default().fg(Color::DarkGray)
+                };
+                lines.push(Line::from(vec![
+                    Span::styled("    * ", Style::default().fg(Color::Green)),
+                    Span::styled(file.to_string(), Style::default().fg(Color::White)),
+                    Span::styled(count_str, Style::default().fg(Color::DarkGray)),
+                    Span::styled(critical_str.to_string(), critical_style),
+                ]));
+            }
+            lines.push(Line::from(""));
+        }
+
+        // Uncovered Paths
+        if !report.uncovered_paths.is_empty() {
+            lines.push(Line::from(Span::styled(
+                "  Uncovered Paths",
+                Style::default()
+                    .fg(Color::Yellow)
+                    .add_modifier(Modifier::BOLD),
+            )));
+            for path in &report.uncovered_paths {
+                let name = path.name.as_deref().unwrap_or("(unnamed)");
+                lines.push(Line::from(vec![
+                    Span::styled("    ! ", Style::default().fg(Color::Yellow)),
+                    Span::styled(name.to_string(), Style::default().fg(Color::Yellow)),
+                ]));
+                if let Some(ref detail) = path.detail {
+                    for l in detail.lines() {
+                        lines.push(Line::from(Span::styled(
+                            format!("      {}", l),
+                            Style::default().fg(Color::DarkGray),
+                        )));
+                    }
+                }
+                if let Some(ref method) = path.verification_method {
+                    lines.push(Line::from(Span::styled(
+                        format!("      Verify: {}", method),
+                        Style::default()
+                            .fg(Color::Cyan)
+                            .add_modifier(Modifier::ITALIC),
+                    )));
+                }
+            }
+        }
+    }
+
+    lines
+}
+
 fn render_analysis_tab(f: &mut Frame, state: &TervezoDetailState, area: Rect) {
     match &state.analysis_content {
         Some(content) => {
-            let lines = format_text_content(content);
-            let paragraph = Paragraph::new(lines)
+            let text = render_markdown_or_raw(content, state.raw_markdown);
+            let paragraph = Paragraph::new(text)
                 .wrap(Wrap { trim: false })
                 .scroll((state.analysis_scroll as u16, 0));
             f.render_widget(paragraph, area);
@@ -511,26 +715,38 @@ fn render_analysis_tab(f: &mut Frame, state: &TervezoDetailState, area: Rect) {
     }
 }
 
-fn format_text_content(content: &str) -> Vec<Line<'static>> {
-    content
-        .lines()
-        .map(|line| {
-            let style = if line.starts_with('#') {
-                Style::default()
-                    .fg(Color::Cyan)
-                    .add_modifier(Modifier::BOLD)
-            } else if line.starts_with("- ") || line.starts_with("  - ") {
-                Style::default().fg(Color::White)
-            } else if line.starts_with("**") || line.starts_with("  **") {
-                Style::default()
-                    .fg(Color::Yellow)
-                    .add_modifier(Modifier::BOLD)
-            } else {
-                Style::default().fg(Color::White)
-            };
-            Line::from(Span::styled(format!("  {}", line), style))
-        })
-        .collect()
+fn render_markdown_or_raw(content: &str, raw: bool) -> Text<'static> {
+    if raw {
+        // Raw mode: simple line-by-line rendering
+        let lines: Vec<Line<'static>> = content
+            .lines()
+            .map(|line| {
+                Line::from(Span::styled(
+                    format!("  {}", line),
+                    Style::default().fg(Color::White),
+                ))
+            })
+            .collect();
+        Text::from(lines)
+    } else {
+        // Rendered mode: use tui-markdown for rich formatting.
+        // Convert to owned to satisfy 'static lifetime.
+        let rendered = tui_markdown::from_str(content);
+        Text::from(
+            rendered
+                .lines
+                .into_iter()
+                .map(|line| {
+                    Line::from(
+                        line.spans
+                            .into_iter()
+                            .map(|span| Span::styled(span.content.into_owned(), span.style))
+                            .collect::<Vec<_>>(),
+                    )
+                })
+                .collect::<Vec<_>>(),
+        )
+    }
 }
 
 fn render_loading(f: &mut Frame, area: Rect) {
@@ -573,9 +789,19 @@ fn render_footer(f: &mut Frame, state: &TervezoDetailState, area: Rect) {
         "J/K:scroll(tab)"
     };
 
+    let md_hint = if matches!(state.active_tab, TervezoTab::Plan | TervezoTab::Analysis) {
+        if state.raw_markdown {
+            "m:md"
+        } else {
+            "m:raw"
+        }
+    } else {
+        ""
+    };
+
     let keys = format!(
-        " Esc:back  Tab/h/l:tabs  j/k:timeline  ^d/^u:page  g/G:top/btm  {}  r:refresh  {}",
-        tab_hint, ssh_hint
+        " Esc:back  Tab/h/l:tabs  j/k:timeline  ^d/^u:page  g/G:top/btm  {}  {}  r:refresh  {}",
+        tab_hint, md_hint, ssh_hint
     );
 
     let footer = Line::from(Span::styled(keys, Theme::footer()));

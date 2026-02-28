@@ -498,6 +498,11 @@ fn process_action(
         Action::TervezoRefreshDetail => {
             trigger_tervezo_initial_fetch(app);
         }
+        Action::TervezoToggleRaw => {
+            if let Some(ref mut state) = app.tervezo_detail {
+                state.raw_markdown = !state.raw_markdown;
+            }
+        }
         Action::TervezoToggleExpand => {
             if let Some(ref mut state) = app.tervezo_detail {
                 if state.active_tab == TervezoTab::Changes {
@@ -654,8 +659,8 @@ fn trigger_tervezo_tab_fetch(app: &mut App) {
                 }
             },
             TervezoTab::TestOutput => match client.get_test_output(&impl_id) {
-                Ok(output) => {
-                    let _ = tx.send(TervezoDetailMsg::TestOutput(output));
+                Ok(reports) => {
+                    let _ = tx.send(TervezoDetailMsg::TestOutput(reports));
                 }
                 Err(e) => {
                     let _ = tx.send(TervezoDetailMsg::Error(tab, e));

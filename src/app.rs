@@ -5,6 +5,7 @@ use crate::session::config::{build_config_items, scan_session_config, ConfigItem
 use crate::session::{Session, SessionConfig, SessionDiscovery, SessionStatus};
 use crate::store::Store;
 use crate::terminal::TerminalManager;
+use crate::tervezo::models::TestReport;
 use crate::tervezo::{
     FileChange, Implementation, ImplementationStatus, SseMessage, SseStream, SshCredentials,
     TervezoConfig, TervezoFetcher, TimelineMessage,
@@ -261,7 +262,7 @@ pub enum TervezoDetailMsg {
     Plan(String),
     Analysis(String),
     Changes(Vec<FileChange>),
-    TestOutput(String),
+    TestOutput(Vec<TestReport>),
     SshCreds(SshCredentials),
     Error(TervezoTab, String),
 }
@@ -278,7 +279,7 @@ pub struct TervezoDetailState {
     pub changes_selected_file: usize,
     pub changes_expanded: HashSet<usize>,
     pub changes_diff_scroll: usize,
-    pub test_output: Option<String>,
+    pub test_output: Option<Vec<TestReport>>,
     pub ssh_creds: Option<SshCredentials>,
     pub loading: HashSet<TervezoTab>,
     pub timeline_visible_height: std::cell::Cell<usize>,
@@ -287,6 +288,7 @@ pub struct TervezoDetailState {
     pub test_scroll: usize,
     pub analysis_scroll: usize,
     pub timeline_at_bottom: bool,
+    pub raw_markdown: bool,
 }
 
 impl TervezoDetailState {
@@ -313,6 +315,7 @@ impl TervezoDetailState {
             test_scroll: 0,
             analysis_scroll: 0,
             timeline_at_bottom: true,
+            raw_markdown: false,
         }
     }
 
@@ -534,8 +537,8 @@ impl App {
                         state.loading.remove(&TervezoTab::Changes);
                         changed = true;
                     }
-                    TervezoDetailMsg::TestOutput(output) => {
-                        state.test_output = Some(output);
+                    TervezoDetailMsg::TestOutput(reports) => {
+                        state.test_output = Some(reports);
                         state.loading.remove(&TervezoTab::TestOutput);
                         changed = true;
                     }

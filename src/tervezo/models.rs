@@ -67,7 +67,7 @@ pub struct Implementation {
     pub estimated_cost_usd: Option<f64>,
     #[serde(default)]
     pub total_tokens: Option<u64>,
-    #[serde(default)]
+    #[serde(default, alias = "timelineMessageCount")]
     pub message_count: Option<u32>,
     #[serde(default)]
     pub pr_url: Option<String>,
@@ -161,8 +161,8 @@ pub struct TimelineMessage {
     #[serde(default)]
     pub parameters: Option<serde_json::Value>,
     /// File change fields.
-    #[serde(default)]
-    pub filename: Option<String>,
+    #[serde(default, alias = "filePath", alias = "filename")]
+    pub file_path: Option<String>,
     #[serde(default)]
     pub diff: Option<String>,
     /// Thinking fields — exact name TBD, capture common variants.
@@ -171,7 +171,7 @@ pub struct TimelineMessage {
     #[serde(default)]
     pub thought: Option<String>,
     #[serde(default)]
-    pub summary: Option<String>,
+    pub summary: Option<serde_json::Value>,
     /// Title used by some message types.
     #[serde(default)]
     pub title: Option<String>,
@@ -183,6 +183,43 @@ pub struct TimelineMessage {
     pub event: Option<String>,
     #[serde(default)]
     pub iteration: Option<u32>,
+    /// Tool call correlation.
+    #[serde(default)]
+    pub tool_call_id: Option<String>,
+    /// Error flag on tool_result.
+    #[serde(default)]
+    pub is_error: Option<bool>,
+    /// Operation type for file_change ("create"/"edit"/"delete") and git_operation.
+    #[serde(default)]
+    pub operation: Option<String>,
+    /// Success flag for git_operation.
+    #[serde(default)]
+    pub success: Option<bool>,
+    /// Git operation fields.
+    #[serde(default)]
+    pub branch: Option<String>,
+    #[serde(default)]
+    pub commit_hash: Option<String>,
+    #[serde(default)]
+    pub commit_message: Option<String>,
+    /// PR created fields.
+    #[serde(default)]
+    pub pr_url: Option<String>,
+    #[serde(default)]
+    pub pr_number: Option<u32>,
+    /// Error severity ("warning"/"error"/"fatal").
+    #[serde(default)]
+    pub severity: Option<String>,
+    /// Partial flag for assistant_text.
+    #[serde(default)]
+    pub is_partial: Option<bool>,
+    /// Test report fields (on test_report messages).
+    #[serde(default)]
+    pub tests_added: Option<Vec<TestAdded>>,
+    #[serde(default)]
+    pub approach: Option<String>,
+    #[serde(default)]
+    pub uncovered_paths: Option<Vec<UncoveredPath>>,
 }
 
 impl TimelineMessage {
@@ -204,10 +241,17 @@ impl TimelineMessage {
             };
         }
 
-        // file_change: show filename or first line of diff
+        // file_change: show file_path or first line of diff
         if self.msg_type.as_deref() == Some("file_change") {
-            if let Some(ref fname) = self.filename {
-                return format!("Changed {}", fname);
+            let op = self.operation.as_deref().unwrap_or("Changed");
+            let op_label = match op {
+                "create" => "Created",
+                "delete" => "Deleted",
+                "edit" => "Changed",
+                _ => "Changed",
+            };
+            if let Some(ref fpath) = self.file_path {
+                return format!("{} {}", op_label, fpath);
             }
             if let Some(ref d) = self.diff {
                 return self.diff_summary(d);
@@ -215,6 +259,54 @@ impl TimelineMessage {
             if self.content.is_some() {
                 return "New file".to_string();
             }
+        }
+
+        // pr_created: show PR URL/number
+        if self.msg_type.as_deref() == Some("pr_created") {
+            if let Some(ref url) = self.pr_url {
+                return format!("PR created: {}", url);
+            }
+            if let Some(num) = self.pr_number {
+                return format!("PR #{} created", num);
+            }
+            return "PR created".to_string();
+        }
+
+        // git_operation: show operation + branch/commit
+        if self.msg_type.as_deref() == Some("git_operation") {
+            let op = self.operation.as_deref().unwrap_or("git");
+            let detail = self
+                .commit_message
+                .as_deref()
+                .or(self.branch.as_deref())
+                .or(self.commit_hash.as_deref())
+                .unwrap_or("");
+            let status_icon = if self.success == Some(true) {
+                "ok"
+            } else if self.success == Some(false) {
+                "failed"
+            } else {
+                ""
+            };
+            return if detail.is_empty() {
+                format!("{} {}", op, status_icon).trim().to_string()
+            } else {
+                format!("{} {} {}", op, detail, status_icon)
+                    .trim()
+                    .to_string()
+            };
+        }
+
+        // error: show severity + message
+        if self.msg_type.as_deref() == Some("error") {
+            let sev = self.severity.as_deref().unwrap_or("error");
+            let msg = self
+                .message
+                .as_deref()
+                .or(self.content.as_deref())
+                .or(self.details.as_deref())
+                .unwrap_or("Unknown error");
+            return format!("[{}] {}", sev, msg);
         }
 
         // todo: show active tasks
@@ -242,7 +334,7 @@ impl TimelineMessage {
                 .thinking
                 .as_deref()
                 .or(self.thought.as_deref())
-                .or(self.summary.as_deref())
+                .or(self.summary_as_str())
                 .or(self.title.as_deref())
                 .or(self.content.as_deref())
                 .or(self.text.as_deref())
@@ -260,7 +352,7 @@ impl TimelineMessage {
             .or(self.content.as_deref())
             .or(self.output.as_deref())
             .or(self.details.as_deref())
-            .or(self.summary.as_deref())
+            .or(self.summary_as_str())
             .or(self.thinking.as_deref())
             .or(self.title.as_deref())
             .unwrap_or("")
@@ -334,6 +426,12 @@ impl TimelineMessage {
             .filter(|l| l.starts_with('-') && !l.starts_with("---"))
             .count();
         format!("File changed (+{} -{})", adds, dels)
+    }
+
+    /// Extract a string from the `summary` field, which can be either a JSON string
+    /// or an object (for test_report messages).
+    fn summary_as_str(&self) -> Option<&str> {
+        self.summary.as_ref().and_then(|v| v.as_str())
     }
 
     /// Whether this message has inline code to render (diff or new file content).
@@ -491,4 +589,65 @@ pub struct AnalysisResponse {
 pub struct TestOutputResponse {
     #[serde(default)]
     pub test_reports: Vec<serde_json::Value>,
+}
+
+// --- Typed test report structs ---
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TestReportSummary {
+    #[serde(default)]
+    pub status: Option<String>,
+    #[serde(default)]
+    pub message: Option<String>,
+    #[serde(default)]
+    pub stats: Option<TestReportStats>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TestReportStats {
+    #[serde(default)]
+    pub new_tests: Option<u32>,
+    #[serde(default)]
+    pub total_before: Option<u32>,
+    #[serde(default)]
+    pub total_after: Option<u32>,
+    #[serde(default)]
+    pub pre_existing_failures: Option<u32>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TestAdded {
+    #[serde(default)]
+    pub file: Option<String>,
+    #[serde(default)]
+    pub count: Option<u32>,
+    #[serde(default)]
+    pub critical_path: Option<bool>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct UncoveredPath {
+    #[serde(default)]
+    pub name: Option<String>,
+    #[serde(default)]
+    pub detail: Option<String>,
+    #[serde(default)]
+    pub verification_method: Option<String>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TestReport {
+    #[serde(default)]
+    pub summary: Option<TestReportSummary>,
+    #[serde(default)]
+    pub tests_added: Vec<TestAdded>,
+    #[serde(default)]
+    pub approach: Option<String>,
+    #[serde(default)]
+    pub uncovered_paths: Vec<UncoveredPath>,
 }
