@@ -36,6 +36,15 @@ pub enum Action {
     ScrollDown(usize),
     ConfirmQuit,
     CancelQuit,
+    TervezoTabNext,
+    TervezoTabPrev,
+    TervezoScrollUp,
+    TervezoScrollDown,
+    TervezoSsh,
+    TervezoRefreshDetail,
+    TervezoToggleExpand,
+    ToggleLog,
+    ClearLog,
     None,
 }
 
@@ -51,16 +60,20 @@ fn handle_mouse(kind: MouseEventKind, mode: &ViewMode) -> Action {
     match kind {
         MouseEventKind::ScrollUp => match mode {
             ViewMode::Terminal | ViewMode::TerminalQSwitcher => Action::ScrollUp(3),
-            ViewMode::List | ViewMode::Filter | ViewMode::QSwitcher | ViewMode::Detail => {
-                Action::MoveUp
-            }
+            ViewMode::List
+            | ViewMode::Filter
+            | ViewMode::QSwitcher
+            | ViewMode::Detail
+            | ViewMode::Log => Action::MoveUp,
             _ => Action::None,
         },
         MouseEventKind::ScrollDown => match mode {
             ViewMode::Terminal | ViewMode::TerminalQSwitcher => Action::ScrollDown(3),
-            ViewMode::List | ViewMode::Filter | ViewMode::QSwitcher | ViewMode::Detail => {
-                Action::MoveDown
-            }
+            ViewMode::List
+            | ViewMode::Filter
+            | ViewMode::QSwitcher
+            | ViewMode::Detail
+            | ViewMode::Log => Action::MoveDown,
             _ => Action::None,
         },
         _ => Action::None,
@@ -84,6 +97,8 @@ fn handle_key(key: &KeyEvent, mode: &ViewMode) -> Action {
         ViewMode::TerminalQSwitcher => handle_terminal_qswitcher_key(key),
         ViewMode::Command => handle_command_key(key),
         ViewMode::ConfirmQuit => handle_confirm_quit_key(key),
+        ViewMode::TervezoDetail => handle_tervezo_detail_key(key),
+        ViewMode::Log => handle_log_key(key),
         _ => handle_normal_key(key),
     }
 }
@@ -104,6 +119,7 @@ fn handle_normal_key(key: &KeyEvent) -> Action {
         KeyCode::Char('s') => Action::CycleSort,
         KeyCode::Char('r') => Action::Refresh,
         KeyCode::Char('n') => Action::LaunchNew,
+        KeyCode::Char('L') => Action::ToggleLog,
         KeyCode::Char(' ') => Action::ToggleQSwitcher,
         KeyCode::Char(c @ '1'..='9') => Action::AttachByIndex((c as usize) - ('1' as usize)),
         _ => Action::None,
@@ -173,6 +189,34 @@ fn handle_confirm_quit_key(key: &KeyEvent) -> Action {
         KeyCode::Esc | KeyCode::Char('q') => Action::CancelQuit,
         KeyCode::Char('y') => Action::ConfirmQuit,
         KeyCode::Char('n') => Action::CancelQuit,
+        _ => Action::None,
+    }
+}
+
+fn handle_tervezo_detail_key(key: &KeyEvent) -> Action {
+    match key.code {
+        KeyCode::Esc | KeyCode::Char('q') => Action::Back,
+        KeyCode::Tab | KeyCode::Char('l') => Action::TervezoTabNext,
+        KeyCode::Char('h') => Action::TervezoTabPrev,
+        KeyCode::Char('j') | KeyCode::Down => Action::MoveDown,
+        KeyCode::Char('k') | KeyCode::Up => Action::MoveUp,
+        KeyCode::Char('J') => Action::TervezoScrollDown,
+        KeyCode::Char('K') => Action::TervezoScrollUp,
+        KeyCode::Enter => Action::TervezoToggleExpand,
+        KeyCode::Char('s') => Action::TervezoSsh,
+        KeyCode::Char('r') => Action::TervezoRefreshDetail,
+        _ => Action::None,
+    }
+}
+
+fn handle_log_key(key: &KeyEvent) -> Action {
+    match key.code {
+        KeyCode::Esc | KeyCode::Char('q') | KeyCode::Char('L') => Action::ToggleLog,
+        KeyCode::Char('j') | KeyCode::Down => Action::MoveDown,
+        KeyCode::Char('k') | KeyCode::Up => Action::MoveUp,
+        KeyCode::Char('g') => Action::MoveToTop,
+        KeyCode::Char('G') => Action::MoveToBottom,
+        KeyCode::Char('c') => Action::ClearLog,
         _ => Action::None,
     }
 }

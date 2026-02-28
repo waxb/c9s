@@ -4,10 +4,11 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Clear, Paragraph};
 use ratatui::Frame;
 
-use crate::app::App;
+use crate::app::{App, SessionEntry};
 use crate::session::SessionStatus;
+use crate::tervezo::ImplementationStatus;
 
-const POPUP_WIDTH: u16 = 62;
+const POPUP_WIDTH: u16 = 65;
 const NAME_COL: usize = 20;
 const STATUS_COL: usize = 9;
 const BRANCH_COL: usize = 20;
@@ -40,8 +41,8 @@ pub fn render_qswitcher(f: &mut Frame, app: &App, area: Rect) {
         .iter()
         .take(9)
         .enumerate()
-        .map(|(i, session)| {
-            let is_attached = attached_id == Some(session.id.as_str());
+        .map(|(i, entry)| {
+            let is_attached = attached_id == Some(entry.id());
             let is_selected = i == selected;
 
             let base_mod = if is_selected {
@@ -50,28 +51,61 @@ pub fn render_qswitcher(f: &mut Frame, app: &App, area: Rect) {
                 Modifier::empty()
             };
 
-            let status_fg = match session.status {
-                SessionStatus::Active => Color::Green,
-                SessionStatus::Idle => Color::Yellow,
-                SessionStatus::Thinking => Color::Magenta,
-                SessionStatus::Dead => Color::DarkGray,
-            };
-            let status_mod = if matches!(session.status, SessionStatus::Thinking) {
-                base_mod | Modifier::BOLD
-            } else {
-                base_mod
+            let (status_fg, status_mod) = match entry {
+                SessionEntry::Local(s) => {
+                    let fg = match s.status {
+                        SessionStatus::Active => Color::Green,
+                        SessionStatus::Idle => Color::Yellow,
+                        SessionStatus::Thinking => Color::Magenta,
+                        SessionStatus::Dead => Color::DarkGray,
+                    };
+                    let m = if matches!(s.status, SessionStatus::Thinking) {
+                        base_mod | Modifier::BOLD
+                    } else {
+                        base_mod
+                    };
+                    (fg, m)
+                }
+                SessionEntry::Remote(imp) => {
+                    let fg = match imp.status {
+                        ImplementationStatus::Running => Color::Green,
+                        ImplementationStatus::Pending | ImplementationStatus::Queued => {
+                            Color::Yellow
+                        }
+                        ImplementationStatus::Completed | ImplementationStatus::Merged => {
+                            Color::Cyan
+                        }
+                        ImplementationStatus::Failed => Color::Red,
+                        ImplementationStatus::Stopped | ImplementationStatus::Cancelled => {
+                            Color::DarkGray
+                        }
+                    };
+                    (fg, base_mod)
+                }
             };
 
-            let marker = if is_attached { ">>" } else { "  " };
-            let marker_style = if is_attached {
-                Style::default()
-                    .fg(Color::Cyan)
-                    .add_modifier(Modifier::BOLD | base_mod)
+            let (marker, marker_style) = if entry.is_remote() {
+                (
+                    "[T]",
+                    Style::default()
+                        .fg(Color::Magenta)
+                        .add_modifier(Modifier::BOLD | base_mod),
+                )
+            } else if is_attached {
+                (
+                    ">> ",
+                    Style::default()
+                        .fg(Color::Cyan)
+                        .add_modifier(Modifier::BOLD | base_mod),
+                )
             } else {
-                Style::default().fg(Color::DarkGray).add_modifier(base_mod)
+                (
+                    "   ",
+                    Style::default().fg(Color::DarkGray).add_modifier(base_mod),
+                )
             };
 
-            let branch = session.git_branch.as_deref().unwrap_or("");
+            let branch = entry.branch().unwrap_or("");
             let branch_display = truncate(branch, BRANCH_COL);
 
             let name_style = if is_selected {
@@ -83,16 +117,16 @@ pub fn render_qswitcher(f: &mut Frame, app: &App, area: Rect) {
             };
 
             Line::from(vec![
-                Span::styled(format!(" {} ", marker), marker_style),
+                Span::styled(format!(" {}", marker), marker_style),
                 Span::styled(
                     format!("{} ", i + 1),
                     Style::default()
                         .fg(Color::Cyan)
                         .add_modifier(Modifier::BOLD | base_mod),
                 ),
-                Span::styled(truncate(&session.project_name, NAME_COL), name_style),
+                Span::styled(truncate(entry.display_name(), NAME_COL), name_style),
                 Span::styled(
-                    truncate(session.status.label(), STATUS_COL),
+                    truncate(entry.status_label(), STATUS_COL),
                     Style::default().fg(status_fg).add_modifier(status_mod),
                 ),
                 Span::styled(

@@ -4,10 +4,15 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Paragraph};
 use ratatui::Frame;
 
-use crate::session::Session;
+use crate::app::SessionEntry;
 use crate::usage::UsageData;
 
-pub fn render_usage_panel(f: &mut Frame, usage: &UsageData, sessions: &[&Session], area: Rect) {
+pub fn render_usage_panel(
+    f: &mut Frame,
+    usage: &UsageData,
+    sessions: &[&SessionEntry],
+    area: Rect,
+) {
     let block = Block::default()
         .borders(Borders::ALL)
         .border_style(Style::default().fg(Color::DarkGray))
@@ -42,14 +47,16 @@ pub fn render_usage_panel(f: &mut Frame, usage: &UsageData, sessions: &[&Session
         }
     }
 
-    let today_cost: f64 = sessions.iter().map(|s| s.estimated_cost_usd()).sum();
-    let today_tokens: u64 = sessions.iter().map(|s| s.total_tokens()).sum();
-    let live_count = sessions.iter().filter(|s| s.pid.is_some()).count();
-    let total_count = sessions.len();
+    let local_sessions: Vec<_> = sessions.iter().filter_map(|e| e.as_local()).collect();
+
+    let today_cost: f64 = local_sessions.iter().map(|s| s.estimated_cost_usd()).sum();
+    let today_tokens: u64 = local_sessions.iter().map(|s| s.total_tokens()).sum();
+    let live_count = local_sessions.iter().filter(|s| s.pid.is_some()).count();
+    let total_count = local_sessions.len();
 
     let mut model_tokens: [(&str, u64); 4] =
         [("opus", 0), ("sonnet", 0), ("haiku", 0), ("other", 0)];
-    for s in sessions {
+    for s in &local_sessions {
         let idx = match s.model.as_deref() {
             Some(m) if m.contains("opus") => 0,
             Some(m) if m.contains("sonnet") => 1,
@@ -59,15 +66,28 @@ pub fn render_usage_panel(f: &mut Frame, usage: &UsageData, sessions: &[&Session
         model_tokens[idx].1 += s.total_tokens();
     }
 
+    let remote_count = sessions.iter().filter(|e| e.is_remote()).count();
+
     lines.push(make_title("Sessions"));
 
-    let stats = format!(
-        " ${:.2} | {} tokens | {} live / {} total",
-        today_cost,
-        format_tokens(today_tokens),
-        live_count,
-        total_count,
-    );
+    let stats = if remote_count > 0 {
+        format!(
+            " ${:.2} | {} tokens | {} live / {} local + {}T remote",
+            today_cost,
+            format_tokens(today_tokens),
+            live_count,
+            total_count,
+            remote_count,
+        )
+    } else {
+        format!(
+            " ${:.2} | {} tokens | {} live / {} total",
+            today_cost,
+            format_tokens(today_tokens),
+            live_count,
+            total_count,
+        )
+    };
     lines.push(Line::from(Span::styled(
         stats,
         Style::default().fg(Color::White),

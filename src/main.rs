@@ -1,13 +1,15 @@
 mod app;
 mod input;
+mod log;
 mod session;
 mod store;
 mod terminal;
+mod tervezo;
 mod ui;
 mod usage;
 
 use anyhow::Result;
-use app::{App, ViewMode};
+use app::{App, SessionEntry, TervezoDetailMsg, TervezoTab, ViewMode};
 use crossterm::event;
 use crossterm::event::{DisableMouseCapture, EnableMouseCapture};
 use crossterm::terminal::{
@@ -21,6 +23,7 @@ use session::SessionManager;
 use std::io::{stdout, IsTerminal};
 use std::path::PathBuf;
 use std::time::{Duration, Instant};
+use tervezo::TervezoClient;
 
 fn main() -> Result<()> {
     let args: Vec<String> = std::env::args().collect();
@@ -96,6 +99,22 @@ fn run_loop(
             }
         }
 
+        if app.check_tervezo_dirty() {
+            needs_draw = true;
+        }
+
+        if app.drain_tervezo_detail_messages() {
+            needs_draw = true;
+        }
+
+        if app.drain_sse_messages() {
+            needs_draw = true;
+        }
+
+        if *app.view_mode() == ViewMode::Log && log::take_dirty() {
+            needs_draw = true;
+        }
+
         if needs_draw {
             terminal.draw(|f| {
                 let area = f.area();
@@ -104,21 +123,28 @@ fn run_loop(
                         ui::render_session_list(f, app, area);
                     }
                     ViewMode::Detail => {
-                        if let Some(session) = app.selected_session() {
-                            let session = session.clone();
-                            let items = app.detail_items().to_vec();
-                            let cursor = app.detail_cursor();
-                            let preview = app.detail_preview().cloned();
-                            let preview_scroll = app.detail_preview_scroll();
-                            ui::render_session_detail(
-                                f,
-                                &session,
-                                &items,
-                                cursor,
-                                preview.as_ref(),
-                                preview_scroll,
-                                area,
-                            );
+                        if let Some(entry) = app.selected_session() {
+                            if let Some(session) = entry.as_local() {
+                                let session = session.clone();
+                                let items = app.detail_items().to_vec();
+                                let cursor = app.detail_cursor();
+                                let preview = app.detail_preview().cloned();
+                                let preview_scroll = app.detail_preview_scroll();
+                                ui::render_session_detail(
+                                    f,
+                                    &session,
+                                    &items,
+                                    cursor,
+                                    preview.as_ref(),
+                                    preview_scroll,
+                                    area,
+                                );
+                            }
+                        }
+                    }
+                    ViewMode::TervezoDetail => {
+                        if let Some(ref state) = app.tervezo_detail {
+                            ui::render_tervezo_detail(f, state, area);
                         }
                     }
                     ViewMode::QSwitcher => {
@@ -144,6 +170,10 @@ fn run_loop(
                         ui::render_session_list(f, app, area);
                         let active = app.active_attached_sessions();
                         ui::render_confirm_quit(f, &active, area);
+                    }
+                    ViewMode::Log => {
+                        let entries = log::entries();
+                        ui::render_log_panel(f, &entries, app.log_scroll(), area);
                     }
                 }
             })?;
@@ -182,18 +212,22 @@ fn run_loop(
             }
         }
 
-        let in_terminal = matches!(
+        let needs_native_mouse = matches!(
             app.view_mode(),
-            ViewMode::Terminal | ViewMode::TerminalQSwitcher
+            ViewMode::Terminal | ViewMode::TerminalQSwitcher | ViewMode::Log
         );
-        if in_terminal && mouse_captured {
+        if needs_native_mouse && mouse_captured {
             stdout().execute(DisableMouseCapture)?;
             mouse_captured = false;
-        } else if !in_terminal && !mouse_captured {
+        } else if !needs_native_mouse && !mouse_captured {
             stdout().execute(EnableMouseCapture)?;
             mouse_captured = true;
         }
 
+        let in_terminal = matches!(
+            app.view_mode(),
+            ViewMode::Terminal | ViewMode::TerminalQSwitcher
+        );
         app.terminal_manager_mut()
             .check_and_forward_notifications(in_terminal);
 
@@ -320,7 +354,12 @@ fn process_action(
                     app.set_view_mode(ViewMode::List);
                 }
             }
-            ViewMode::Help | ViewMode::QSwitcher => app.set_view_mode(ViewMode::List),
+            ViewMode::TervezoDetail => {
+                app.set_view_mode(ViewMode::List);
+            }
+            ViewMode::Log | ViewMode::Help | ViewMode::QSwitcher => {
+                app.set_view_mode(ViewMode::List)
+            }
             ViewMode::TerminalQSwitcher => app.set_view_mode(ViewMode::Terminal),
             ViewMode::Filter => {
                 app.set_view_mode(ViewMode::List);
@@ -333,8 +372,16 @@ fn process_action(
             _ => {}
         },
         Action::ShowDetail => {
-            if app.selected_session().is_some() {
-                app.set_view_mode(ViewMode::Detail);
+            if let Some(entry) = app.selected_session() {
+                match entry {
+                    SessionEntry::Local(_) => {
+                        app.set_view_mode(ViewMode::Detail);
+                    }
+                    SessionEntry::Remote(_) => {
+                        app.set_view_mode(ViewMode::TervezoDetail);
+                        trigger_tervezo_initial_fetch(app);
+                    }
+                }
             }
         }
         Action::ShowHelp => {
@@ -379,48 +426,292 @@ fn process_action(
             app.command_take();
             app.set_view_mode(ViewMode::List);
         }
+        Action::TervezoTabNext => {
+            if let Some(ref mut state) = app.tervezo_detail {
+                state.active_tab = state.active_tab.next();
+                trigger_tervezo_tab_fetch(app);
+            }
+        }
+        Action::TervezoTabPrev => {
+            if let Some(ref mut state) = app.tervezo_detail {
+                state.active_tab = state.active_tab.prev();
+                trigger_tervezo_tab_fetch(app);
+            }
+        }
+        Action::TervezoScrollUp => {
+            if let Some(ref mut state) = app.tervezo_detail {
+                state.timeline_scroll = state.timeline_scroll.saturating_sub(1);
+                state.timeline_at_bottom = false;
+            }
+        }
+        Action::TervezoScrollDown => {
+            if let Some(ref mut state) = app.tervezo_detail {
+                state.timeline_scroll += 1;
+            }
+        }
+        Action::TervezoSsh => {
+            if let Some(ref state) = app.tervezo_detail {
+                if state.implementation.status.is_running() {
+                    if let Some(creds) = state.ssh_creds.clone() {
+                        let area = terminal.size()?;
+                        let rows = area.height.saturating_sub(1);
+                        let cols = area.width;
+                        let id = state.implementation_id.clone();
+                        let name = state.implementation.display_name().to_string();
+                        let _ = app.terminal_manager_mut().attach_ssh(
+                            &id,
+                            &name,
+                            &creds.ssh_command,
+                            rows,
+                            cols,
+                        );
+                        app.set_view_mode(ViewMode::Terminal);
+                    }
+                }
+            }
+        }
+        Action::TervezoRefreshDetail => {
+            trigger_tervezo_initial_fetch(app);
+        }
+        Action::TervezoToggleExpand => {
+            if let Some(ref mut state) = app.tervezo_detail {
+                if state.active_tab == TervezoTab::Changes {
+                    state.toggle_changes_expand();
+                }
+            }
+        }
+        Action::ToggleLog => {
+            if *app.view_mode() == ViewMode::Log {
+                app.set_view_mode(ViewMode::List);
+            } else {
+                app.log_scroll_to_bottom();
+                app.set_view_mode(ViewMode::Log);
+            }
+        }
+        Action::ClearLog => {
+            app.clear_log();
+        }
         Action::None => {}
     }
     Ok(())
+}
+
+fn trigger_tervezo_initial_fetch(app: &mut App) {
+    let config = match app.tervezo_config() {
+        Some(c) => c.clone(),
+        None => return,
+    };
+    let tx = match app.tervezo_detail_tx.clone() {
+        Some(tx) => tx,
+        None => return,
+    };
+    let impl_id = match app.tervezo_detail.as_ref() {
+        Some(state) => state.implementation_id.clone(),
+        None => return,
+    };
+
+    if let Some(ref mut state) = app.tervezo_detail {
+        state.loading.insert(TervezoTab::Plan);
+    }
+
+    // Fetch timeline + plan on background threads
+    let tx_timeline = tx.clone();
+    let tx_plan = tx.clone();
+    let config_timeline = config.clone();
+    let id_timeline = impl_id.clone();
+    let id_plan = impl_id;
+
+    std::thread::spawn(move || {
+        let client = TervezoClient::new(&config_timeline);
+        match client.get_timeline(&id_timeline, None) {
+            Ok(msgs) => {
+                let _ = tx_timeline.send(TervezoDetailMsg::Timeline(msgs));
+            }
+            Err(e) => {
+                let _ = tx_timeline.send(TervezoDetailMsg::Error(TervezoTab::Plan, e));
+            }
+        }
+    });
+
+    std::thread::spawn(move || {
+        let client = TervezoClient::new(&config);
+        match client.get_plan(&id_plan) {
+            Ok(plan) => {
+                let _ = tx_plan.send(TervezoDetailMsg::Plan(plan));
+            }
+            Err(e) => {
+                let _ = tx_plan.send(TervezoDetailMsg::Error(TervezoTab::Plan, e));
+            }
+        }
+    });
+
+    // For running implementations: start SSE stream + fetch SSH creds
+    let running_info = app.tervezo_detail.as_ref().and_then(|s| {
+        if s.implementation.status.is_running() {
+            Some(s.implementation_id.clone())
+        } else {
+            None
+        }
+    });
+
+    if let Some(impl_id_sse) = running_info {
+        app.start_sse_stream(&impl_id_sse);
+
+        // Fetch SSH credentials in background
+        if let Some(config) = app.tervezo_config() {
+            let ssh_config = config.clone();
+            let ssh_id = impl_id_sse;
+            let ssh_tx = match app.tervezo_detail_tx.clone() {
+                Some(tx) => tx,
+                None => return,
+            };
+
+            std::thread::spawn(move || {
+                let client = TervezoClient::new(&ssh_config);
+                if let Ok(creds) = client.get_ssh(&ssh_id) {
+                    let _ = ssh_tx.send(TervezoDetailMsg::SshCreds(creds));
+                }
+            });
+        }
+    }
+}
+
+fn trigger_tervezo_tab_fetch(app: &mut App) {
+    let config = match app.tervezo_config() {
+        Some(c) => c.clone(),
+        None => return,
+    };
+    let tx = match app.tervezo_detail_tx.clone() {
+        Some(tx) => tx,
+        None => return,
+    };
+    let (impl_id, tab, already_loaded) = match app.tervezo_detail.as_ref() {
+        Some(state) => {
+            let loaded = match state.active_tab {
+                TervezoTab::Plan => state.plan_content.is_some(),
+                TervezoTab::Changes => state.changes.is_some(),
+                TervezoTab::TestOutput => state.test_output.is_some(),
+                TervezoTab::Analysis => state.analysis_content.is_some(),
+            };
+            (state.implementation_id.clone(), state.active_tab, loaded)
+        }
+        None => return,
+    };
+
+    if already_loaded {
+        return;
+    }
+
+    if let Some(ref mut state) = app.tervezo_detail {
+        if state.loading.contains(&tab) {
+            return;
+        }
+        state.loading.insert(tab);
+    }
+
+    std::thread::spawn(move || {
+        let client = TervezoClient::new(&config);
+        match tab {
+            TervezoTab::Plan => match client.get_plan(&impl_id) {
+                Ok(plan) => {
+                    let _ = tx.send(TervezoDetailMsg::Plan(plan));
+                }
+                Err(e) => {
+                    let _ = tx.send(TervezoDetailMsg::Error(tab, e));
+                }
+            },
+            TervezoTab::Changes => match client.get_changes(&impl_id) {
+                Ok(changes) => {
+                    let _ = tx.send(TervezoDetailMsg::Changes(changes));
+                }
+                Err(e) => {
+                    let _ = tx.send(TervezoDetailMsg::Error(tab, e));
+                }
+            },
+            TervezoTab::TestOutput => match client.get_test_output(&impl_id) {
+                Ok(output) => {
+                    let _ = tx.send(TervezoDetailMsg::TestOutput(output));
+                }
+                Err(e) => {
+                    let _ = tx.send(TervezoDetailMsg::Error(tab, e));
+                }
+            },
+            TervezoTab::Analysis => match client.get_analysis(&impl_id) {
+                Ok(analysis) => {
+                    let _ = tx.send(TervezoDetailMsg::Analysis(analysis));
+                }
+                Err(e) => {
+                    let _ = tx.send(TervezoDetailMsg::Error(tab, e));
+                }
+            },
+        }
+    });
 }
 
 fn attach_selected(
     app: &mut App,
     terminal: &Terminal<CrosstermBackend<std::io::Stdout>>,
 ) -> Result<()> {
-    if let Some(session) = app.selected_session() {
-        let id = session.id.clone();
-        let name = session.project_name.clone();
-        let cwd = session.cwd.clone();
-        let pid = session.pid;
-        let area = terminal.size()?;
-        let rows = area.height.saturating_sub(1);
-        let cols = area.width;
-        app.terminal_manager_mut()
-            .attach(&id, &name, &cwd, pid, rows, cols)?;
-        app.set_view_mode(ViewMode::Terminal);
+    if let Some(entry) = app.selected_session() {
+        match entry {
+            SessionEntry::Local(session) => {
+                let id = session.id.clone();
+                let name = session.project_name.clone();
+                let cwd = session.cwd.clone();
+                let pid = session.pid;
+                let area = terminal.size()?;
+                let rows = area.height.saturating_sub(1);
+                let cols = area.width;
+                app.terminal_manager_mut()
+                    .attach(&id, &name, &cwd, pid, rows, cols)?;
+                app.set_view_mode(ViewMode::Terminal);
+            }
+            SessionEntry::Remote(_) => {
+                app.set_view_mode(ViewMode::TervezoDetail);
+                trigger_tervezo_initial_fetch(app);
+            }
+        }
     }
     Ok(())
 }
+
+type EntryData = (
+    String,
+    String,
+    Option<std::path::PathBuf>,
+    Option<u32>,
+    bool,
+);
 
 fn attach_by_index(
     app: &mut App,
     idx: usize,
     terminal: &Terminal<CrosstermBackend<std::io::Stdout>>,
 ) -> Result<()> {
-    let sessions: Vec<_> = app
-        .filtered_sessions()
-        .iter()
-        .map(|s| (s.id.clone(), s.project_name.clone(), s.cwd.clone(), s.pid))
-        .collect();
+    let entry_data: Option<EntryData> = app.filtered_sessions().get(idx).map(|e| match e {
+        SessionEntry::Local(s) => (
+            s.id.clone(),
+            s.project_name.clone(),
+            Some(s.cwd.clone()),
+            s.pid,
+            false,
+        ),
+        SessionEntry::Remote(i) => (i.id.clone(), i.display_name().to_string(), None, None, true),
+    });
 
-    if let Some((id, name, cwd, pid)) = sessions.get(idx) {
-        let area = terminal.size()?;
-        let rows = area.height.saturating_sub(1);
-        let cols = area.width;
-        app.terminal_manager_mut()
-            .attach(id, name, cwd, *pid, rows, cols)?;
-        app.set_view_mode(ViewMode::Terminal);
+    if let Some((id, name, cwd, pid, is_remote)) = entry_data {
+        if is_remote {
+            app.set_selected(idx);
+            app.set_view_mode(ViewMode::TervezoDetail);
+            trigger_tervezo_initial_fetch(app);
+        } else if let Some(cwd) = cwd {
+            let area = terminal.size()?;
+            let rows = area.height.saturating_sub(1);
+            let cols = area.width;
+            app.terminal_manager_mut()
+                .attach(&id, &name, &cwd, pid, rows, cols)?;
+            app.set_view_mode(ViewMode::Terminal);
+        }
     }
     Ok(())
 }

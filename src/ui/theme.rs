@@ -96,4 +96,59 @@ impl Theme {
             .fg(Color::Cyan)
             .add_modifier(Modifier::BOLD)
     }
+
+    // Tervezo-specific styles
+
+    pub fn tzv_tab_active() -> Style {
+        Style::default()
+            .fg(Color::White)
+            .bg(Color::DarkGray)
+            .add_modifier(Modifier::BOLD)
+    }
+
+    pub fn tzv_tab_inactive() -> Style {
+        Style::default().fg(Color::DarkGray)
+    }
+
+    pub fn tzv_diff_add() -> Style {
+        Style::default().fg(Color::Green)
+    }
+
+    pub fn tzv_diff_remove() -> Style {
+        Style::default().fg(Color::Red)
+    }
+
+    pub fn tzv_diff_header() -> Style {
+        Style::default()
+            .fg(Color::Cyan)
+            .add_modifier(Modifier::BOLD)
+    }
+
+    pub fn tzv_status_done() -> Style {
+        Style::default().fg(Color::Cyan)
+    }
+
+    pub fn tzv_status_failed() -> Style {
+        Style::default().fg(Color::Red)
+    }
+
+    pub fn tzv_loading() -> Style {
+        Style::default()
+            .fg(Color::Yellow)
+            .add_modifier(Modifier::ITALIC)
+    }
+
+    pub fn tzv_remote_marker() -> Style {
+        Style::default()
+            .fg(Color::Magenta)
+            .add_modifier(Modifier::BOLD)
+    }
+
+    pub fn tzv_timeline_icon() -> Style {
+        Style::default().fg(Color::Cyan)
+    }
+
+    pub fn tzv_timeline_text() -> Style {
+        Style::default().fg(Color::White)
+    }
 }
