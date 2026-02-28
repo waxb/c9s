@@ -1,4 +1,6 @@
 use chrono::{DateTime, Utc};
+use std::fs::OpenOptions;
+use std::io::Write;
 use std::sync::{Arc, Mutex, OnceLock};
 
 const MAX_ENTRIES: usize = 500;
@@ -43,10 +45,38 @@ fn global() -> &'static Arc<Mutex<LogBuffer>> {
     })
 }
 
+fn log_file() -> &'static Mutex<Option<std::fs::File>> {
+    static FILE: OnceLock<Mutex<Option<std::fs::File>>> = OnceLock::new();
+    FILE.get_or_init(|| {
+        let file = OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open("/tmp/c9s.log")
+            .ok();
+        Mutex::new(file)
+    })
+}
+
 pub fn push(level: LogLevel, msg: String) {
+    let now = Utc::now();
+
+    // Write to file first (non-truncated)
+    if let Ok(mut guard) = log_file().lock() {
+        if let Some(ref mut file) = *guard {
+            let _ = writeln!(
+                file,
+                "[{}] {} {}",
+                now.format("%Y-%m-%d %H:%M:%S%.3f"),
+                level.label(),
+                msg
+            );
+        }
+    }
+
+    // Then push to in-memory buffer (for TUI log panel)
     let mut buf = global().lock().unwrap();
     buf.entries.push(LogEntry {
-        timestamp: Utc::now(),
+        timestamp: now,
         level,
         message: msg,
     });

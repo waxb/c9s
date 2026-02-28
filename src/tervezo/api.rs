@@ -9,13 +9,7 @@ use super::models::{
 /// Helper to parse JSON with detailed logging on failure.
 fn parse_json<T: serde::de::DeserializeOwned>(body: &str, label: &str) -> Result<T, String> {
     serde_json::from_str(body).map_err(|e| {
-        tlog!(
-            error,
-            "{} parse error: {} — body: {}",
-            label,
-            e,
-            &body[..500.min(body.len())]
-        );
+        tlog!(error, "{} parse error: {} — body: {}", label, e, body);
         format!("{} parse error: {}", label, e)
     })
 }
@@ -112,12 +106,11 @@ impl TervezoClient {
             skipped
         );
         if let Some(first) = messages.first() {
-            let dt = first.display_text();
             tlog!(
                 info,
                 "first parsed msg: type={:?} text='{}'",
                 first.msg_type,
-                &dt[..100.min(dt.len())]
+                first.display_text()
             );
         }
         Ok(messages)
@@ -215,8 +208,8 @@ impl TervezoClient {
                 .into_body()
                 .read_to_string()
                 .unwrap_or_else(|_| "(unreadable body)".to_string());
-            tlog!(error, "HTTP {}: {}", status, &body[..200.min(body.len())]);
-            return Err(format!("HTTP {}: {}", status, &body[..200.min(body.len())]));
+            tlog!(error, "HTTP {}: {}", status, body);
+            return Err(format!("HTTP {}: {}", status, body));
         }
 
         let body = resp
@@ -224,7 +217,7 @@ impl TervezoClient {
             .read_to_string()
             .map_err(|e| format!("read body failed: {}", e))?;
 
-        tlog!(info, "body: {}...", &body[..200.min(body.len())]);
+        tlog!(info, "response body: {} bytes", body.len());
 
         Ok(body)
     }

@@ -209,6 +209,7 @@ fn render_timeline_panel(f: &mut Frame, state: &TervezoDetailState, area: Rect) 
         let display = msg.display_text();
 
         // Header line for this message
+        // No `.wrap()` on the paragraph — ratatui clips at panel edge naturally.
         lines.push(Line::from(vec![
             Span::styled(format!("  {} ", icon), icon_style),
             Span::styled(display, text_style),
@@ -271,9 +272,11 @@ fn render_timeline_panel(f: &mut Frame, state: &TervezoDetailState, area: Rect) 
         state.timeline_scroll.min(max_scroll)
     };
 
-    let paragraph = Paragraph::new(lines)
-        .wrap(Wrap { trim: false })
-        .scroll((scroll as u16, 0));
+    // Keep rendered scroll in sync so action handlers can use it
+    // when transitioning from autoscroll to manual scroll.
+    state.timeline_rendered_scroll.set(scroll);
+
+    let paragraph = Paragraph::new(lines).scroll((scroll as u16, 0));
     f.render_widget(paragraph, inner);
 
     // Scrollbar

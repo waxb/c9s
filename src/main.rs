@@ -440,18 +440,28 @@ fn process_action(
         }
         Action::TervezoScrollUp => {
             if let Some(ref mut state) = app.tervezo_detail {
+                if state.timeline_at_bottom {
+                    // Sync scroll position from render before leaving autoscroll
+                    state.timeline_scroll = state.timeline_rendered_scroll.get();
+                }
                 state.timeline_scroll = state.timeline_scroll.saturating_sub(1);
                 state.timeline_at_bottom = false;
             }
         }
         Action::TervezoScrollDown => {
             if let Some(ref mut state) = app.tervezo_detail {
-                state.timeline_scroll += 1;
-                state.timeline_at_bottom = false;
+                if state.timeline_at_bottom {
+                    // Already at the bottom — nothing to scroll down to
+                } else {
+                    state.timeline_scroll += 1;
+                }
             }
         }
         Action::TervezoScrollHalfPageUp => {
             if let Some(ref mut state) = app.tervezo_detail {
+                if state.timeline_at_bottom {
+                    state.timeline_scroll = state.timeline_rendered_scroll.get();
+                }
                 let half = state.timeline_visible_height.get() / 2;
                 state.timeline_scroll = state.timeline_scroll.saturating_sub(half.max(1));
                 state.timeline_at_bottom = false;
@@ -459,8 +469,12 @@ fn process_action(
         }
         Action::TervezoScrollHalfPageDown => {
             if let Some(ref mut state) = app.tervezo_detail {
-                let half = state.timeline_visible_height.get() / 2;
-                state.timeline_scroll += half.max(1);
+                if state.timeline_at_bottom {
+                    // Already at the bottom — nothing to scroll down to
+                } else {
+                    let half = state.timeline_visible_height.get() / 2;
+                    state.timeline_scroll += half.max(1);
+                }
             }
         }
         Action::TervezoScrollToTop => {

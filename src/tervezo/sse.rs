@@ -5,13 +5,18 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc;
 use std::sync::Arc;
 use std::thread::JoinHandle;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use super::config::TervezoConfig;
 use super::models::TimelineMessage;
 
 const MAX_BACKOFF_SECS: u64 = 30;
-const SSE_TIMEOUT_SECS: u64 = 120;
+/// Only the TCP connect phase gets a timeout. All other timeouts
+/// (recv_response, recv_body, global) kill long-lived SSE streams.
+const SSE_CONNECT_TIMEOUT_SECS: u64 = 15;
+/// Minimum time a connection must survive before we consider it "healthy"
+/// and reset backoff. Prevents backoff escalation from natural reconnects.
+const HEALTHY_CONNECTION_SECS: u64 = 10;
 
 #[allow(dead_code)]
 pub enum SseMessage {
@@ -70,15 +75,27 @@ impl SseStream {
             }
 
             tlog!(info, "SSE connecting: {}", url);
+            let connected_at = Instant::now();
             match Self::open_sse(&url, &api_key) {
                 Ok(reader) => {
                     tlog!(info, "SSE connected, reading events...");
-                    backoff_secs = 1;
                     Self::read_events(reader, &stop, &tx, &mut cursor);
-                    tlog!(info, "SSE stream ended, will reconnect");
+                    let alive_secs = connected_at.elapsed().as_secs();
+                    tlog!(
+                        info,
+                        "SSE stream ended after {}s, will reconnect (cursor={:?})",
+                        alive_secs,
+                        cursor
+                    );
+
+                    // If the connection was healthy (lived long enough),
+                    // reset backoff — this was a natural stream end, not an error.
+                    if alive_secs >= HEALTHY_CONNECTION_SECS {
+                        backoff_secs = 1;
+                    }
                 }
                 Err(e) => {
-                    tlog!(error, "SSE error: {}", e);
+                    tlog!(error, "SSE connect error: {}", e);
                     let _ = tx.send(SseMessage::Error(e));
                 }
             }
@@ -87,6 +104,7 @@ impl SseStream {
                 return;
             }
 
+            tlog!(info, "SSE backoff: {}s before reconnect", backoff_secs);
             for _ in 0..(backoff_secs * 10) {
                 if stop.load(Ordering::Relaxed) {
                     return;
@@ -99,8 +117,15 @@ impl SseStream {
     }
 
     fn open_sse(url: &str, api_key: &str) -> Result<Box<dyn BufRead + Send>, String> {
+        // SSE connections are long-lived streams. Only timeout_connect is safe:
+        // - timeout_global kills the entire request after N seconds
+        // - timeout_recv_response kills the body read in ureq 3 (not just headers)
+        // - timeout_recv_body applies per-read and would kill idle SSE streams
+        // Only the TCP handshake gets a timeout. Everything else stays open
+        // until the server closes the connection or we drop the reader.
         let agent = ureq::Agent::config_builder()
-            .timeout_global(Some(Duration::from_secs(SSE_TIMEOUT_SECS)))
+            .timeout_connect(Some(Duration::from_secs(SSE_CONNECT_TIMEOUT_SECS)))
+            .http_status_as_error(false)
             .build()
             .new_agent();
 
@@ -111,6 +136,16 @@ impl SseStream {
             .header("User-Agent", "c9s/0.1")
             .call()
             .map_err(|e| format!("SSE connect failed: {}", e))?;
+
+        let status = resp.status();
+        if status != 200 {
+            let body = resp
+                .into_body()
+                .read_to_string()
+                .unwrap_or_else(|_| "(unreadable)".to_string());
+            tlog!(error, "SSE HTTP {}: {}", status, body);
+            return Err(format!("SSE HTTP {}", status));
+        }
 
         let reader = resp.into_body().into_reader();
         Ok(Box::new(std::io::BufReader::new(reader)))
@@ -132,16 +167,16 @@ impl SseStream {
 
             let line = match line_result {
                 Ok(l) => l,
-                Err(_) => return,
+                Err(e) => {
+                    tlog!(warn, "SSE read error: {}", e);
+                    return;
+                }
             };
 
             if line.is_empty() {
                 if !data_buf.is_empty() {
-                    tlog!(
-                        info,
-                        "SSE raw data: {}",
-                        &data_buf[..300.min(data_buf.len())]
-                    );
+                    // Full dump — no truncation
+                    tlog!(info, "SSE raw data: {}", &data_buf);
                     // SSE events are envelopes: {"messages":[...]}, {"plan":"..."}, etc.
                     // Extract timeline messages from the "messages" array.
                     match serde_json::from_str::<serde_json::Value>(&data_buf) {
@@ -157,21 +192,20 @@ impl SseStream {
                                         Ok(msg) => {
                                             let dt = msg.display_text();
                                             if dt.is_empty() {
-                                                // Log full raw JSON for messages with no display text
                                                 let raw_str = serde_json::to_string(raw_msg)
                                                     .unwrap_or_default();
                                                 tlog!(
                                                     info,
                                                     "SSE msg (no text): type={:?} raw={}",
                                                     msg.msg_type,
-                                                    &raw_str[..300.min(raw_str.len())]
+                                                    raw_str
                                                 );
                                             } else {
                                                 tlog!(
                                                     info,
                                                     "SSE msg: type={:?} text={}",
                                                     msg.msg_type,
-                                                    &dt[..100.min(dt.len())]
+                                                    dt
                                                 );
                                             }
                                             if let Some(ref id) = msg.id {
@@ -180,17 +214,29 @@ impl SseStream {
                                             let _ = tx.send(SseMessage::Event(Box::new(msg)));
                                         }
                                         Err(e) => {
-                                            tlog!(warn, "SSE msg parse failed: {}", e);
+                                            let raw_str =
+                                                serde_json::to_string(raw_msg).unwrap_or_default();
+                                            tlog!(
+                                                warn,
+                                                "SSE msg parse failed: {} — raw: {}",
+                                                e,
+                                                raw_str
+                                            );
                                         }
                                     }
                                 }
                             } else {
-                                // Non-message envelope (plan update, etc.) — log and skip
+                                // Non-message envelope (plan update, etc.) — log full content
                                 let keys = envelope
                                     .as_object()
                                     .map(|o| o.keys().cloned().collect::<Vec<_>>().join(", "))
                                     .unwrap_or_default();
-                                tlog!(info, "SSE non-message envelope: keys=[{}]", keys);
+                                tlog!(
+                                    info,
+                                    "SSE non-message envelope: keys=[{}] data={}",
+                                    keys,
+                                    &data_buf
+                                );
                             }
                             // Update cursor from event id if no message had one
                             if let Some(ref eid) = event_id {
@@ -200,12 +246,7 @@ impl SseStream {
                             }
                         }
                         Err(e) => {
-                            tlog!(
-                                warn,
-                                "SSE JSON parse failed: {} — raw: {}",
-                                e,
-                                &data_buf[..200.min(data_buf.len())]
-                            );
+                            tlog!(warn, "SSE JSON parse failed: {} — raw: {}", e, &data_buf);
                         }
                     }
                     data_buf.clear();

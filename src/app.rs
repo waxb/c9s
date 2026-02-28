@@ -283,6 +283,9 @@ pub struct TervezoDetailState {
     pub ssh_creds: Option<SshCredentials>,
     pub loading: HashSet<TervezoTab>,
     pub timeline_visible_height: std::cell::Cell<usize>,
+    /// Tracks the last effective scroll offset used during rendering.
+    /// Needed to sync `timeline_scroll` when leaving autoscroll mode.
+    pub timeline_rendered_scroll: std::cell::Cell<usize>,
     pub plan_scroll: usize,
     pub changes_scroll: usize,
     pub test_scroll: usize,
@@ -310,6 +313,7 @@ impl TervezoDetailState {
             ssh_creds: None,
             loading: HashSet::new(),
             timeline_visible_height: std::cell::Cell::new(20),
+            timeline_rendered_scroll: std::cell::Cell::new(0),
             plan_scroll: 0,
             changes_scroll: 0,
             test_scroll: 0,
@@ -571,7 +575,10 @@ impl App {
                     SseMessage::Event(timeline_msg) => {
                         state.timeline.push(*timeline_msg);
                         if state.timeline.len() > 1000 {
-                            state.timeline.drain(..state.timeline.len() - 1000);
+                            let excess = state.timeline.len() - 1000;
+                            state.timeline.drain(..excess);
+                            // Adjust scroll position so it stays on the same content
+                            state.timeline_scroll = state.timeline_scroll.saturating_sub(excess);
                         }
                         changed = true;
                     }
