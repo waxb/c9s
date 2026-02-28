@@ -952,23 +952,32 @@ fn render_analysis_tab(f: &mut Frame, state: &TervezoDetailState, area: Rect) {
     }
 }
 
+fn render_raw(content: &str) -> Text<'static> {
+    let lines: Vec<Line<'static>> = content
+        .lines()
+        .map(|line| {
+            Line::from(Span::styled(
+                format!("  {}", line),
+                Style::default().fg(Color::White),
+            ))
+        })
+        .collect();
+    Text::from(lines)
+}
+
 fn render_markdown_or_raw(content: &str, raw: bool) -> Text<'static> {
     if raw {
-        // Raw mode: simple line-by-line rendering
-        let lines: Vec<Line<'static>> = content
-            .lines()
-            .map(|line| {
-                Line::from(Span::styled(
-                    format!("  {}", line),
-                    Style::default().fg(Color::White),
-                ))
-            })
-            .collect();
-        Text::from(lines)
-    } else {
-        // Rendered mode: use tui-markdown for rich formatting.
-        // Convert to owned to satisfy 'static lifetime.
-        let rendered = tui_markdown::from_str(content);
+        return render_raw(content);
+    }
+
+    // tui-markdown can panic on certain markdown inputs (e.g. nested lists).
+    // Catch the panic and fall back to raw text rendering.
+    // Suppress panic output during catch_unwind to avoid spamming stderr.
+    let content_owned = content.to_string();
+    let prev_hook = std::panic::take_hook();
+    std::panic::set_hook(Box::new(|_| {}));
+    let result = std::panic::catch_unwind(|| {
+        let rendered = tui_markdown::from_str(&content_owned);
         Text::from(
             rendered
                 .lines
@@ -983,6 +992,12 @@ fn render_markdown_or_raw(content: &str, raw: bool) -> Text<'static> {
                 })
                 .collect::<Vec<_>>(),
         )
+    });
+    std::panic::set_hook(prev_hook);
+
+    match result {
+        Ok(text) => text,
+        Err(_) => render_raw(content),
     }
 }
 

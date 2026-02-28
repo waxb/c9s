@@ -62,6 +62,14 @@ fn main() -> Result<()> {
 
     let mut app = App::new()?;
 
+    // Install panic hook that logs to c9s.log before printing to stderr
+    std::panic::set_hook(Box::new(|info| {
+        let bt = std::backtrace::Backtrace::force_capture();
+        let msg = format!("PANIC: {}\n{}", info, bt);
+        tlog!(error, "{}", msg);
+        eprintln!("{}", msg);
+    }));
+
     enable_raw_mode()?;
     stdout().execute(EnterAlternateScreen)?;
     stdout().execute(EnableMouseCapture)?;
@@ -70,6 +78,10 @@ fn main() -> Result<()> {
     let mut terminal = Terminal::new(backend)?;
 
     let result = run_loop(&mut terminal, &mut app);
+
+    if let Err(ref e) = result {
+        tlog!(error, "DIAG: run_loop returned error: {}", e);
+    }
 
     stdout().execute(DisableMouseCapture)?;
     disable_raw_mode()?;
@@ -241,7 +253,15 @@ fn run_loop(
 
                 let action = handle_event(&ev, app.view_mode());
                 let is_noop = matches!(action, Action::None | Action::TerminalInput(_));
-                process_action(app, action, terminal)?;
+                if let Err(e) = process_action(app, action, terminal) {
+                    tlog!(
+                        error,
+                        "DIAG: process_action error: {} (view={:?})",
+                        e,
+                        app.view_mode()
+                    );
+                    return Err(e);
+                }
                 if !is_noop {
                     needs_draw = true;
                 }
@@ -292,6 +312,11 @@ fn run_loop(
         }
 
         if app.should_quit() {
+            tlog!(
+                info,
+                "DIAG: run_loop exiting (should_quit=true), view_mode={:?}",
+                app.view_mode()
+            );
             break;
         }
     }
@@ -416,6 +441,7 @@ fn process_action(
                 }
             }
             ViewMode::TervezoDetail => {
+                tlog!(info, "DIAG: Back action from TervezoDetail → List");
                 app.set_view_mode(ViewMode::List);
             }
             ViewMode::Log | ViewMode::Help | ViewMode::QSwitcher => {
@@ -1011,7 +1037,13 @@ fn attach_selected(
                 app.set_view_mode(ViewMode::Terminal);
             }
             SessionEntry::Remote(_) => {
+                tlog!(info, "DIAG: attach_selected → switching to TervezoDetail");
                 app.set_view_mode(ViewMode::TervezoDetail);
+                tlog!(
+                    info,
+                    "DIAG: tervezo_detail present={}",
+                    app.tervezo_detail.is_some()
+                );
                 trigger_tervezo_initial_fetch(app);
             }
         }

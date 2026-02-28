@@ -373,7 +373,13 @@ impl TimelineMessage {
         for key in &["file_path", "path", "pattern", "command", "query", "glob"] {
             if let Some(val) = obj.get(*key).and_then(|v| v.as_str()) {
                 let truncated = if val.len() > 80 {
-                    format!("{}...", &val[..77])
+                    let end = val
+                        .char_indices()
+                        .map(|(i, _)| i)
+                        .take_while(|&i| i <= 77)
+                        .last()
+                        .unwrap_or(0);
+                    format!("{}...", &val[..end])
                 } else {
                     val.to_string()
                 };
@@ -385,7 +391,13 @@ impl TimelineMessage {
         for val in obj.values() {
             if let Some(s) = val.as_str() {
                 let truncated = if s.len() > 60 {
-                    format!("{}...", &s[..57])
+                    let end = s
+                        .char_indices()
+                        .map(|(i, _)| i)
+                        .take_while(|&i| i <= 57)
+                        .last()
+                        .unwrap_or(0);
+                    format!("{}...", &s[..end])
                 } else {
                     s.to_string()
                 };
@@ -453,7 +465,13 @@ impl TimelineMessage {
                     .or_else(|| t.get("content").and_then(|v| v.as_str()))
                     .map(|s| {
                         if s.len() > 50 {
-                            format!("{}…", &s[..49])
+                            let end = s
+                                .char_indices()
+                                .map(|(i, _)| i)
+                                .take_while(|&i| i <= 49)
+                                .last()
+                                .unwrap_or(0);
+                            format!("{}…", &s[..end])
                         } else {
                             s.to_string()
                         }
