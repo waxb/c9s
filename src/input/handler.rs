@@ -36,6 +36,33 @@ pub enum Action {
     ScrollDown(usize),
     ConfirmQuit,
     CancelQuit,
+    TervezoTabNext,
+    TervezoTabPrev,
+    TervezoScrollUp,
+    TervezoScrollDown,
+    TervezoScrollHalfPageUp,
+    TervezoScrollHalfPageDown,
+    TervezoScrollToTop,
+    TervezoScrollToBottom,
+    TervezoSsh,
+    TervezoRefreshDetail,
+    TervezoToggleExpand,
+    TervezoToggleRaw,
+    TervezoToggleSteps,
+    TervezoOpenActionMenu,
+    TervezoActionMenuUp,
+    TervezoActionMenuDown,
+    TervezoActionMenuSelect,
+    TervezoActionMenuClose,
+    TervezoConfirmYes,
+    TervezoConfirmNo,
+    TervezoOpenPrompt,
+    TervezoPromptChar(char),
+    TervezoPromptBackspace,
+    TervezoPromptSubmit,
+    TervezoPromptCancel,
+    ToggleLog,
+    ClearLog,
     None,
 }
 
@@ -51,16 +78,20 @@ fn handle_mouse(kind: MouseEventKind, mode: &ViewMode) -> Action {
     match kind {
         MouseEventKind::ScrollUp => match mode {
             ViewMode::Terminal | ViewMode::TerminalQSwitcher => Action::ScrollUp(3),
-            ViewMode::List | ViewMode::Filter | ViewMode::QSwitcher | ViewMode::Detail => {
-                Action::MoveUp
-            }
+            ViewMode::List
+            | ViewMode::Filter
+            | ViewMode::QSwitcher
+            | ViewMode::Detail
+            | ViewMode::Log => Action::MoveUp,
             _ => Action::None,
         },
         MouseEventKind::ScrollDown => match mode {
             ViewMode::Terminal | ViewMode::TerminalQSwitcher => Action::ScrollDown(3),
-            ViewMode::List | ViewMode::Filter | ViewMode::QSwitcher | ViewMode::Detail => {
-                Action::MoveDown
-            }
+            ViewMode::List
+            | ViewMode::Filter
+            | ViewMode::QSwitcher
+            | ViewMode::Detail
+            | ViewMode::Log => Action::MoveDown,
             _ => Action::None,
         },
         _ => Action::None,
@@ -84,6 +115,11 @@ fn handle_key(key: &KeyEvent, mode: &ViewMode) -> Action {
         ViewMode::TerminalQSwitcher => handle_terminal_qswitcher_key(key),
         ViewMode::Command => handle_command_key(key),
         ViewMode::ConfirmQuit => handle_confirm_quit_key(key),
+        ViewMode::TervezoDetail => handle_tervezo_detail_key(key),
+        ViewMode::TervezoActionMenu => handle_tervezo_action_menu_key(key),
+        ViewMode::TervezoConfirm => handle_tervezo_confirm_key(key),
+        ViewMode::TervezoPromptInput => handle_tervezo_prompt_key(key),
+        ViewMode::Log => handle_log_key(key),
         _ => handle_normal_key(key),
     }
 }
@@ -104,6 +140,7 @@ fn handle_normal_key(key: &KeyEvent) -> Action {
         KeyCode::Char('s') => Action::CycleSort,
         KeyCode::Char('r') => Action::Refresh,
         KeyCode::Char('n') => Action::LaunchNew,
+        KeyCode::Char('L') => Action::ToggleLog,
         KeyCode::Char(' ') => Action::ToggleQSwitcher,
         KeyCode::Char(c @ '1'..='9') => Action::AttachByIndex((c as usize) - ('1' as usize)),
         _ => Action::None,
@@ -173,6 +210,76 @@ fn handle_confirm_quit_key(key: &KeyEvent) -> Action {
         KeyCode::Esc | KeyCode::Char('q') => Action::CancelQuit,
         KeyCode::Char('y') => Action::ConfirmQuit,
         KeyCode::Char('n') => Action::CancelQuit,
+        _ => Action::None,
+    }
+}
+
+fn handle_tervezo_detail_key(key: &KeyEvent) -> Action {
+    let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
+    match key.code {
+        KeyCode::Esc | KeyCode::Char('q') => Action::Back,
+        KeyCode::Tab | KeyCode::Char('l') => Action::TervezoTabNext,
+        KeyCode::Char('h') => Action::TervezoTabPrev,
+        // j/k = timeline scroll, J/K = tab scroll
+        KeyCode::Char('j') | KeyCode::Down => Action::TervezoScrollDown,
+        KeyCode::Char('k') | KeyCode::Up => Action::TervezoScrollUp,
+        KeyCode::Char('J') => Action::MoveDown,
+        KeyCode::Char('K') => Action::MoveUp,
+        // Half-page / page scrolling for timeline
+        KeyCode::Char('d') if ctrl => Action::TervezoScrollHalfPageDown,
+        KeyCode::Char('u') if ctrl => Action::TervezoScrollHalfPageUp,
+        KeyCode::PageDown => Action::TervezoScrollHalfPageDown,
+        KeyCode::PageUp => Action::TervezoScrollHalfPageUp,
+        // Top / bottom
+        KeyCode::Char('g') => Action::TervezoScrollToTop,
+        KeyCode::Char('G') => Action::TervezoScrollToBottom,
+        KeyCode::Enter => Action::TervezoToggleExpand,
+        KeyCode::Char('s') => Action::TervezoSsh,
+        KeyCode::Char('r') => Action::TervezoRefreshDetail,
+        KeyCode::Char('m') => Action::TervezoToggleRaw,
+        KeyCode::Char('w') => Action::TervezoToggleSteps,
+        KeyCode::Char('a') => Action::TervezoOpenActionMenu,
+        KeyCode::Char('p') => Action::TervezoOpenPrompt,
+        _ => Action::None,
+    }
+}
+
+fn handle_tervezo_action_menu_key(key: &KeyEvent) -> Action {
+    match key.code {
+        KeyCode::Char('j') | KeyCode::Down => Action::TervezoActionMenuDown,
+        KeyCode::Char('k') | KeyCode::Up => Action::TervezoActionMenuUp,
+        KeyCode::Enter => Action::TervezoActionMenuSelect,
+        KeyCode::Esc | KeyCode::Char('q') => Action::TervezoActionMenuClose,
+        _ => Action::None,
+    }
+}
+
+fn handle_tervezo_confirm_key(key: &KeyEvent) -> Action {
+    match key.code {
+        KeyCode::Char('y') | KeyCode::Enter => Action::TervezoConfirmYes,
+        KeyCode::Char('n') | KeyCode::Esc => Action::TervezoConfirmNo,
+        _ => Action::None,
+    }
+}
+
+fn handle_tervezo_prompt_key(key: &KeyEvent) -> Action {
+    match key.code {
+        KeyCode::Enter => Action::TervezoPromptSubmit,
+        KeyCode::Esc => Action::TervezoPromptCancel,
+        KeyCode::Backspace => Action::TervezoPromptBackspace,
+        KeyCode::Char(c) => Action::TervezoPromptChar(c),
+        _ => Action::None,
+    }
+}
+
+fn handle_log_key(key: &KeyEvent) -> Action {
+    match key.code {
+        KeyCode::Esc | KeyCode::Char('q') | KeyCode::Char('L') => Action::ToggleLog,
+        KeyCode::Char('j') | KeyCode::Down => Action::MoveDown,
+        KeyCode::Char('k') | KeyCode::Up => Action::MoveUp,
+        KeyCode::Char('g') => Action::MoveToTop,
+        KeyCode::Char('G') => Action::MoveToBottom,
+        KeyCode::Char('c') => Action::ClearLog,
         _ => Action::None,
     }
 }

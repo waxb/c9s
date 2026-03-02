@@ -80,6 +80,25 @@ impl TerminalManager {
         Ok(id)
     }
 
+    pub fn attach_ssh(
+        &mut self,
+        impl_id: &str,
+        project_name: &str,
+        ssh_command: &str,
+        rows: u16,
+        cols: u16,
+    ) -> Result<()> {
+        self.clear_active_bells();
+        if !self.terminals.contains_key(impl_id) {
+            let term = EmbeddedTerminal::spawn_ssh(impl_id, project_name, ssh_command, rows, cols)?;
+            self.order.push(impl_id.to_string());
+            self.terminals.insert(impl_id.to_string(), term);
+        }
+        self.active_id = Some(impl_id.to_string());
+        self.clear_active_bells();
+        Ok(())
+    }
+
     pub fn detach(&mut self) {
         self.active_id = None;
     }

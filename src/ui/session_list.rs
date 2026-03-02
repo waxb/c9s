@@ -4,8 +4,9 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Cell, Paragraph, Row, Table, TableState};
 use ratatui::Frame;
 
-use crate::app::{App, ViewMode};
+use crate::app::{App, SessionEntry, ViewMode};
 use crate::session::SessionStatus;
+use crate::tervezo::ImplementationStatus;
 use crate::ui::theme::Theme;
 use crate::ui::usage_panel::render_usage_panel;
 
@@ -45,17 +46,29 @@ pub fn render_session_list(f: &mut Frame, app: &App, area: Rect) {
 }
 
 fn render_header(f: &mut Frame, app: &App, area: Rect) {
-    let live_count = app
-        .filtered_sessions()
+    let sessions = app.filtered_sessions();
+    let live_count = sessions
         .iter()
-        .filter(|s| s.status != SessionStatus::Dead)
+        .filter(|e| match e {
+            SessionEntry::Local(s) => s.status != SessionStatus::Dead,
+            SessionEntry::Remote(i) => i.status.is_running(),
+        })
         .count();
-    let total_count = app.filtered_sessions().len();
+    let total_count = sessions.len();
 
-    let title = format!(
-        " c9s - Claude Code Sessions [{}/{}]",
-        live_count, total_count,
-    );
+    let title = if app.has_tervezo() {
+        let remote_count = app.remote_count();
+        let local_total = sessions.iter().filter(|e| !e.is_remote()).count();
+        format!(
+            " c9s - Claude Code Sessions [{}/{} + {}T]",
+            live_count, local_total, remote_count,
+        )
+    } else {
+        format!(
+            " c9s - Claude Code Sessions [{}/{}]",
+            live_count, total_count,
+        )
+    };
 
     let sort_info = format!(" Sort: {} ", app.sort_label());
 
@@ -91,15 +104,15 @@ fn render_command_bar(f: &mut Frame, app: &App, area: Rect) {
         let attached_name = app
             .filtered_sessions()
             .iter()
-            .find(|s| s.id == sid)
-            .map(|s| s.project_name.clone())
+            .find(|e| e.id() == sid)
+            .map(|e| e.display_name().to_string())
             .or_else(|| {
                 app.all_sessions()
                     .iter()
                     .find(|s| s.id == sid)
                     .map(|s| s.project_name.clone())
             })
-            .unwrap_or_else(|| sid[..8].to_string());
+            .unwrap_or_else(|| sid[..8.min(sid.len())].to_string());
 
         spans.push(Span::styled(" >> ", Theme::attached_marker()));
         spans.push(Span::styled(
@@ -138,34 +151,62 @@ fn render_table(f: &mut Frame, app: &App, area: Rect) {
     let sessions = app.filtered_sessions();
     let rows: Vec<Row> = sessions
         .iter()
-        .map(|session| {
-            let is_attached = app.is_attached(&session.id);
-            let has_bell = app.has_bell(&session.id);
+        .map(|entry| {
+            let entry_id = entry.id().to_string();
+            let is_attached = app.is_attached(&entry_id);
+            let has_bell = app.has_bell(&entry_id);
 
-            let status_style = match session.status {
-                SessionStatus::Active => Theme::status_active(),
-                SessionStatus::Idle => Theme::status_idle(),
-                SessionStatus::Thinking => Theme::status_thinking(),
-                SessionStatus::Dead => Theme::status_dead(),
+            let status_style = match entry {
+                SessionEntry::Local(s) => match s.status {
+                    SessionStatus::Active => Theme::status_active(),
+                    SessionStatus::Idle => Theme::status_idle(),
+                    SessionStatus::Thinking => Theme::status_thinking(),
+                    SessionStatus::Dead => Theme::status_dead(),
+                },
+                SessionEntry::Remote(i) => match i.status {
+                    ImplementationStatus::Running => Theme::status_active(),
+                    ImplementationStatus::Pending | ImplementationStatus::Queued => {
+                        Theme::status_idle()
+                    }
+                    ImplementationStatus::Completed | ImplementationStatus::Merged => {
+                        Theme::tzv_status_done()
+                    }
+                    ImplementationStatus::Failed => Theme::tzv_status_failed(),
+                    ImplementationStatus::Stopped | ImplementationStatus::Cancelled => {
+                        Theme::status_dead()
+                    }
+                },
             };
 
-            let model_short = session
-                .model
-                .as_deref()
-                .map(shorten_model)
-                .unwrap_or("-".to_string());
-
-            let marker = match (is_attached, has_bell) {
-                (true, true) => ">>*",
-                (true, false) => ">>",
-                (false, true) => " *",
-                (false, false) => "",
+            let model_short = match entry {
+                SessionEntry::Local(s) => s
+                    .model
+                    .as_deref()
+                    .map(shorten_model)
+                    .unwrap_or("-".to_string()),
+                SessionEntry::Remote(_) => "tervezo".to_string(),
             };
 
-            let marker_style = if has_bell {
-                bell_style
+            let (marker, marker_style) = if entry.is_remote() {
+                (
+                    "[T]",
+                    Style::default()
+                        .fg(Color::Magenta)
+                        .add_modifier(Modifier::BOLD),
+                )
             } else {
-                Theme::attached_marker()
+                let m = match (is_attached, has_bell) {
+                    (true, true) => ">>*",
+                    (true, false) => ">>",
+                    (false, true) => " *",
+                    (false, false) => "",
+                };
+                let s = if has_bell {
+                    bell_style
+                } else {
+                    Theme::attached_marker()
+                };
+                (m, s)
             };
 
             let name_style = if has_bell {
@@ -174,31 +215,42 @@ fn render_table(f: &mut Frame, app: &App, area: Rect) {
                 Style::default()
             };
 
+            let (tokens_in, tokens_out) = match entry {
+                SessionEntry::Local(s) => (
+                    format_tokens(s.input_tokens + s.cache_read_tokens),
+                    format_tokens(s.output_tokens),
+                ),
+                SessionEntry::Remote(_) => ("-".to_string(), "-".to_string()),
+            };
+
+            let cost_str = match entry.estimated_cost() {
+                Some(c) => format!("${:.2}", c),
+                None => "-".to_string(),
+            };
+
+            let msg_str = match entry.message_count() {
+                Some(m) => format_count(m as u64),
+                None => "-".to_string(),
+            };
+
             let cells = vec![
                 Cell::from(marker).style(marker_style),
-                Cell::from(session.project_name.clone()).style(name_style),
-                Cell::from(
-                    session
-                        .git_branch
-                        .clone()
-                        .unwrap_or_else(|| "-".to_string()),
-                ),
+                Cell::from(entry.display_name().to_string()).style(name_style),
+                Cell::from(entry.branch().unwrap_or("-").to_string()),
                 Cell::from(model_short),
-                Cell::from(session.status.label()).style(status_style),
-                Cell::from(format_count(session.message_count as u64)),
-                Cell::from(format_tokens(
-                    session.input_tokens + session.cache_read_tokens,
-                )),
-                Cell::from(format_tokens(session.output_tokens)),
-                Cell::from(format!("${:.2}", session.estimated_cost_usd())).style(Theme::cost()),
-                Cell::from(session.last_activity_display()),
+                Cell::from(entry.status_label()).style(status_style),
+                Cell::from(msg_str),
+                Cell::from(tokens_in),
+                Cell::from(tokens_out),
+                Cell::from(cost_str).style(Theme::cost()),
+                Cell::from(entry.last_activity_display()),
             ];
             Row::new(cells)
         })
         .collect();
 
     let widths = [
-        Constraint::Length(2),
+        Constraint::Length(3),
         Constraint::Min(20),
         Constraint::Length(15),
         Constraint::Length(10),
@@ -227,8 +279,8 @@ fn render_table(f: &mut Frame, app: &App, area: Rect) {
 
 fn render_footer(f: &mut Frame, app: &App, area: Rect) {
     let sessions = app.filtered_sessions();
-    let total_cost: f64 = sessions.iter().map(|s| s.estimated_cost_usd()).sum();
-    let total_tokens: u64 = sessions.iter().map(|s| s.total_tokens()).sum();
+    let total_cost: f64 = sessions.iter().filter_map(|e| e.estimated_cost()).sum();
+    let total_tokens: u64 = sessions.iter().filter_map(|e| e.total_tokens()).sum();
 
     let version = env!("CARGO_PKG_VERSION");
 

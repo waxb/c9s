@@ -10,7 +10,7 @@ const BINDINGS: &[(&str, &str)] = &[
     ("k / Up", "Move up"),
     ("g", "Jump to top"),
     ("G", "Jump to bottom"),
-    ("d", "Session detail panel"),
+    ("d", "Session detail / Tervezo detail"),
     ("a", "Attach (open terminal)"),
     ("1-9", "Attach to live session by #"),
     ("Space", "Quick switcher"),
@@ -18,6 +18,7 @@ const BINDINGS: &[(&str, &str)] = &[
     ("/", "Filter sessions"),
     ("s", "Cycle sort column"),
     ("r", "Refresh session list"),
+    ("L", "Toggle log panel"),
     ("Esc", "Back / clear filter"),
     ("q", "Quit"),
     ("Ctrl+c", "Force quit"),
@@ -28,6 +29,14 @@ const BINDINGS: &[(&str, &str)] = &[
     ("Ctrl+Space", "Quick switcher"),
     ("Ctrl+n / Ctrl+p", "Cycle next / prev session"),
     ("Ctrl+K / Ctrl+J", "Scroll history up / down"),
+    ("", ""),
+    ("Tervezo detail", ""),
+    ("Tab / l / h", "Next / prev tab"),
+    ("j / k", "Scroll tab content"),
+    ("J / K", "Scroll timeline"),
+    ("s", "SSH into running impl"),
+    ("r", "Refresh detail data"),
+    ("Esc / q", "Back to list"),
 ];
 
 pub fn render_help(f: &mut Frame, area: Rect) {
