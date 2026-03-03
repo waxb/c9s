@@ -4,7 +4,7 @@ use std::sync::mpsc;
 use crate::session::config::{build_config_items, scan_session_config, ConfigItem};
 use crate::session::{Session, SessionConfig, SessionDiscovery, SessionStatus};
 use crate::store::Store;
-use crate::terminal::TerminalManager;
+use crate::terminal::{EmbeddedTerminal, TerminalManager};
 use crate::tervezo::models::TestReport;
 use crate::tervezo::{
     FileChange, Implementation, ImplementationStatus, PrDetails, SseMessage, SseStream,
@@ -540,6 +540,9 @@ pub struct App {
     sse_stream: Option<SseStream>,
     sse_rx: Option<mpsc::Receiver<SseMessage>>,
     log_scroll: usize,
+    side_terminal: Option<EmbeddedTerminal>,
+    side_terminal_open: bool,
+    side_terminal_focused: bool,
 }
 
 impl App {
@@ -579,6 +582,9 @@ impl App {
             sse_stream: None,
             sse_rx: None,
             log_scroll: 0,
+            side_terminal: None,
+            side_terminal_open: false,
+            side_terminal_focused: false,
         };
 
         app.refresh()?;
@@ -1095,10 +1101,6 @@ impl App {
         self.terminal_manager.active_session_id()
     }
 
-    pub fn is_attached(&self, session_id: &str) -> bool {
-        self.terminal_manager.is_attached(session_id)
-    }
-
     pub fn has_bell(&self, session_id: &str) -> bool {
         self.terminal_manager.has_bell_for(session_id)
     }
@@ -1166,5 +1168,55 @@ impl App {
     pub fn clear_log(&mut self) {
         crate::log::clear();
         self.log_scroll = 0;
+    }
+
+    pub fn side_terminal(&self) -> Option<&EmbeddedTerminal> {
+        self.side_terminal.as_ref()
+    }
+
+    pub fn side_terminal_mut(&mut self) -> Option<&mut EmbeddedTerminal> {
+        self.side_terminal.as_mut()
+    }
+
+    pub fn is_side_panel_open(&self) -> bool {
+        self.side_terminal_open
+    }
+
+    pub fn is_side_panel_focused(&self) -> bool {
+        self.side_terminal_focused
+    }
+
+    pub fn open_side_panel(&mut self, rows: u16, cols: u16) {
+        if self.side_terminal.is_none() {
+            let cwd = self
+                .attached_session_id()
+                .and_then(|sid| {
+                    self.local_sessions
+                        .iter()
+                        .find(|s| s.id == sid)
+                        .map(|s| s.cwd.clone())
+                })
+                .unwrap_or_else(|| {
+                    std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("/"))
+                });
+            match EmbeddedTerminal::spawn_shell(&cwd, rows, cols) {
+                Ok(term) => {
+                    self.side_terminal = Some(term);
+                }
+                Err(_) => {
+                    return;
+                }
+            }
+        }
+        self.side_terminal_open = true;
+        self.side_terminal_focused = true;
+    }
+
+    pub fn close_side_panel(&mut self) {
+        if self.side_terminal.as_ref().is_some_and(|t| t.is_exited()) {
+            self.side_terminal = None;
+        }
+        self.side_terminal_open = false;
+        self.side_terminal_focused = false;
     }
 }

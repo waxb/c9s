@@ -28,7 +28,8 @@ enum SessionState {
 pub struct JsonlNotifier {
     jsonl_path: Option<PathBuf>,
     project_dir: PathBuf,
-    last_size: u64,
+    last_known_size: u64,
+    read_offset: u64,
     state: SessionState,
     tool_use_at: Option<u64>,
 }
@@ -65,7 +66,8 @@ impl JsonlNotifier {
         Self {
             jsonl_path: path,
             project_dir,
-            last_size: size,
+            last_known_size: size,
+            read_offset: size,
             state: SessionState::Unknown,
             tool_use_at: None,
         }
@@ -86,16 +88,17 @@ impl JsonlNotifier {
             Err(_) => return false,
         };
 
-        if current_size > self.last_size {
+        if current_size > self.last_known_size {
             debug_log(&format!(
-                "new data: {} -> {} (+{})",
-                self.last_size,
+                "new data: {} -> {} (+{}) read_offset={}",
+                self.last_known_size,
                 current_size,
-                current_size - self.last_size
+                current_size - self.last_known_size,
+                self.read_offset
             ));
         }
 
-        if current_size == self.last_size {
+        if current_size == self.last_known_size && self.read_offset >= self.last_known_size {
             if let Some(tool_at) = self.tool_use_at {
                 let elapsed = now_millis().saturating_sub(tool_at);
                 if elapsed >= TOOL_WAIT_MS {
@@ -107,8 +110,9 @@ impl JsonlNotifier {
             return false;
         }
 
-        if current_size < self.last_size {
-            self.last_size = current_size;
+        if current_size < self.read_offset {
+            self.last_known_size = current_size;
+            self.read_offset = current_size;
             return false;
         }
 
@@ -118,16 +122,28 @@ impl JsonlNotifier {
         };
 
         let mut reader = BufReader::new(file);
-        if reader.seek(SeekFrom::Start(self.last_size)).is_err() {
+        if reader.seek(SeekFrom::Start(self.read_offset)).is_err() {
             return false;
         }
 
         let mut should_notify = false;
         let mut line = String::new();
+        let mut good_offset = self.read_offset;
 
         while reader.read_line(&mut line).unwrap_or(0) > 0 {
+            if !line.ends_with('\n') {
+                debug_log(&format!(
+                    "partial line ({} bytes), will retry next tick",
+                    line.len()
+                ));
+                break;
+            }
+
+            let line_bytes = line.len() as u64;
             let trimmed = line.trim();
+
             if trimmed.is_empty() {
+                good_offset += line_bytes;
                 line.clear();
                 continue;
             }
@@ -135,13 +151,17 @@ impl JsonlNotifier {
             let value: Value = match serde_json::from_str(trimmed) {
                 Ok(v) => v,
                 Err(_) => {
+                    good_offset += line_bytes;
                     line.clear();
                     continue;
                 }
             };
 
+            good_offset += line_bytes;
+
             if value.get("isCompactSummary").and_then(|v| v.as_bool()) == Some(true) {
-                should_notify = true;
+                debug_log("compact summary seen, treating as new user turn");
+                self.state = SessionState::UserSent;
                 self.tool_use_at = None;
                 line.clear();
                 continue;
@@ -193,7 +213,25 @@ impl JsonlNotifier {
                         }
                     }
                 }
-                "progress" | "result" => {
+                "system" => {
+                    let subtype = value.get("subtype").and_then(|v| v.as_str());
+                    if matches!(subtype, Some("stop_hook_summary" | "turn_duration")) {
+                        if matches!(
+                            self.state,
+                            SessionState::UserSent | SessionState::Working | SessionState::ToolWait
+                        ) {
+                            debug_log(&format!(
+                                "BELL: {} from state {:?}",
+                                subtype.unwrap_or("?"),
+                                self.state as u8
+                            ));
+                            should_notify = true;
+                        }
+                        self.state = SessionState::Idle;
+                        self.tool_use_at = None;
+                    }
+                }
+                "progress" => {
                     if self.state != SessionState::ToolWait {
                         self.state = SessionState::Working;
                     }
@@ -204,7 +242,8 @@ impl JsonlNotifier {
             line.clear();
         }
 
-        self.last_size = current_size;
+        self.last_known_size = current_size;
+        self.read_offset = good_offset;
         should_notify
     }
 
@@ -238,7 +277,9 @@ impl JsonlNotifier {
         }
 
         if let Some((path, _)) = newest {
-            self.last_size = path.metadata().map(|m| m.len()).unwrap_or(0);
+            let size = path.metadata().map(|m| m.len()).unwrap_or(0);
+            self.last_known_size = size;
+            self.read_offset = size;
             self.jsonl_path = Some(path);
         }
     }

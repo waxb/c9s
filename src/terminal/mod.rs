@@ -61,6 +61,11 @@ impl EmbeddedTerminal {
         )
     }
 
+    pub(crate) fn spawn_shell(cwd: &Path, rows: u16, cols: u16) -> Result<Self> {
+        let id = uuid::Uuid::new_v4().to_string();
+        Self::spawn_inner(&id, "shell", "bash", &["--login"], cwd, rows, cols)
+    }
+
     pub fn spawn_new(cwd: &Path, rows: u16, cols: u16) -> Result<Self> {
         let project_name = cwd
             .file_name()
@@ -177,8 +182,7 @@ impl EmbeddedTerminal {
     }
 
     pub fn write_input(&mut self, bytes: &[u8]) -> Result<()> {
-        self.bell.store(false, Ordering::Relaxed);
-        self.bell_blink.store(false, Ordering::Relaxed);
+        self.clear_bell();
         self.parser.lock().unwrap().screen_mut().set_scrollback(0);
         self.dirty.store(true, Ordering::Relaxed);
         self.writer
@@ -237,6 +241,10 @@ impl EmbeddedTerminal {
     pub fn set_bell(&self) {
         self.bell.store(true, Ordering::Relaxed);
         self.bell_blink.store(true, Ordering::Relaxed);
+    }
+
+    pub fn clear_bell_blink(&self) {
+        self.bell_blink.store(false, Ordering::Relaxed);
     }
 
     pub fn clear_bell(&self) {

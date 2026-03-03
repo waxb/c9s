@@ -221,13 +221,20 @@ impl TerminalManager {
             .collect()
     }
 
-    pub fn check_and_forward_notifications(&mut self, _viewing_terminal: bool) {
+    pub fn check_and_forward_notifications(&mut self, viewing_active: bool) {
         self.check_count += 1;
         for (id, notifier) in &mut self.notifiers {
             if notifier.check() {
-                notifier.debug_log_ext(&format!("BELL: fired for {}", &id[..8.min(id.len())]));
-                if let Some(term) = self.terminals.get(id) {
-                    term.set_bell();
+                let is_focused = viewing_active && self.active_id.as_deref() == Some(id.as_str());
+                notifier.debug_log_ext(&format!(
+                    "BELL: fired for {} (focused={})",
+                    &id[..8.min(id.len())],
+                    is_focused
+                ));
+                if !is_focused {
+                    if let Some(term) = self.terminals.get(id) {
+                        term.set_bell();
+                    }
                 }
                 let _ = std::io::Write::write_all(&mut std::io::stderr(), b"\x07");
                 return;
@@ -237,7 +244,7 @@ impl TerminalManager {
 
     fn clear_active_bells(&self) {
         if let Some(term) = self.active_terminal() {
-            term.clear_bell();
+            term.clear_bell_blink();
         }
     }
 }

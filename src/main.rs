@@ -111,6 +111,14 @@ fn run_loop(
             }
         }
 
+        if app.is_side_panel_open() {
+            if let Some(st) = app.side_terminal() {
+                if st.take_dirty() {
+                    needs_draw = true;
+                }
+            }
+        }
+
         if app.check_tervezo_dirty() {
             needs_draw = true;
         }
@@ -155,7 +163,14 @@ fn run_loop(
 
         if needs_draw {
             terminal.draw(|f| {
-                let area = f.area();
+                let full_area = f.area();
+                let (main_area, side_area) = if app.is_side_panel_open() {
+                    ui::split_with_side_panel(full_area)
+                } else {
+                    (full_area, ratatui::layout::Rect::default())
+                };
+                let area = main_area;
+
                 match app.view_mode() {
                     ViewMode::List | ViewMode::Filter => {
                         ui::render_session_list(f, app, area);
@@ -231,6 +246,13 @@ fn run_loop(
                         ui::render_log_panel(f, &entries, app.log_scroll(), area);
                     }
                 }
+
+                if app.is_side_panel_open() {
+                    if let Some(st) = app.side_terminal() {
+                        let focused = app.is_side_panel_focused();
+                        ui::render_side_panel(f, st, focused, side_area);
+                    }
+                }
             })?;
             needs_draw = false;
         }
@@ -244,15 +266,30 @@ fn run_loop(
                         app.view_mode(),
                         ViewMode::Terminal | ViewMode::TerminalQSwitcher
                     ) {
+                        let term_cols = if app.is_side_panel_open() {
+                            cols * 60 / 100
+                        } else {
+                            cols
+                        };
                         let _ = app
                             .terminal_manager()
-                            .resize_active(rows.saturating_sub(2), cols);
+                            .resize_active(rows.saturating_sub(2), term_cols);
+                    }
+                    if app.is_side_panel_open() {
+                        let panel_cols = cols * 40 / 100;
+                        let panel_rows = rows.saturating_sub(1);
+                        if let Some(st) = app.side_terminal() {
+                            let _ = st.resize(panel_rows, panel_cols);
+                        }
                     }
                     needs_draw = true;
                 }
 
-                let action = handle_event(&ev, app.view_mode());
-                let is_noop = matches!(action, Action::None | Action::TerminalInput(_));
+                let action = handle_event(&ev, app.view_mode(), app.is_side_panel_focused());
+                let is_noop = matches!(
+                    action,
+                    Action::None | Action::TerminalInput(_) | Action::SideTerminalInput(_)
+                );
                 if let Err(e) = process_action(app, action, terminal) {
                     tlog!(
                         error,
@@ -287,19 +324,14 @@ fn run_loop(
             mouse_captured = true;
         }
 
-        let in_terminal = matches!(
+        let viewing_active = matches!(
             app.view_mode(),
             ViewMode::Terminal | ViewMode::TerminalQSwitcher
         );
         app.terminal_manager_mut()
-            .check_and_forward_notifications(in_terminal);
+            .check_and_forward_notifications(viewing_active);
 
-        if matches!(
-            app.view_mode(),
-            ViewMode::Terminal | ViewMode::TerminalQSwitcher
-        ) {
-            app.terminal_manager_mut().cleanup_inactive_exited();
-        }
+        app.terminal_manager_mut().cleanup_inactive_exited();
 
         if !matches!(
             app.view_mode(),
@@ -770,6 +802,21 @@ fn process_action(
         }
         Action::ClearLog => {
             app.clear_log();
+        }
+        Action::ToggleSideTerminal => {
+            if app.is_side_panel_open() {
+                app.close_side_panel();
+            } else {
+                let area = terminal.size()?;
+                let panel_cols = area.width * 40 / 100;
+                let panel_rows = area.height.saturating_sub(1);
+                app.open_side_panel(panel_rows, panel_cols);
+            }
+        }
+        Action::SideTerminalInput(bytes) => {
+            if let Some(st) = app.side_terminal_mut() {
+                let _ = st.write_input(&bytes);
+            }
         }
         Action::None => {}
     }

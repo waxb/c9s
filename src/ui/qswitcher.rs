@@ -43,6 +43,7 @@ pub fn render_qswitcher(f: &mut Frame, app: &App, area: Rect) {
         .enumerate()
         .map(|(i, entry)| {
             let is_attached = attached_id == Some(entry.id());
+            let has_bell = app.has_bell(entry.id());
             let is_selected = i == selected;
 
             let base_mod = if is_selected {
@@ -84,6 +85,10 @@ pub fn render_qswitcher(f: &mut Frame, app: &App, area: Rect) {
                 }
             };
 
+            let bell_style = Style::default()
+                .fg(Color::Yellow)
+                .add_modifier(Modifier::BOLD | base_mod);
+
             let (marker, marker_style) = if entry.is_remote() {
                 (
                     "[T]",
@@ -91,18 +96,26 @@ pub fn render_qswitcher(f: &mut Frame, app: &App, area: Rect) {
                         .fg(Color::Magenta)
                         .add_modifier(Modifier::BOLD | base_mod),
                 )
-            } else if is_attached {
-                (
-                    ">> ",
-                    Style::default()
-                        .fg(Color::Cyan)
-                        .add_modifier(Modifier::BOLD | base_mod),
-                )
             } else {
-                (
-                    "   ",
-                    Style::default().fg(Color::DarkGray).add_modifier(base_mod),
-                )
+                match (is_attached, has_bell) {
+                    (true, true) => (
+                        ">>*",
+                        Style::default()
+                            .fg(Color::Cyan)
+                            .add_modifier(Modifier::BOLD | base_mod),
+                    ),
+                    (true, false) => (
+                        ">> ",
+                        Style::default()
+                            .fg(Color::Cyan)
+                            .add_modifier(Modifier::BOLD | base_mod),
+                    ),
+                    (false, true) => (" * ", bell_style),
+                    (false, false) => (
+                        "   ",
+                        Style::default().fg(Color::DarkGray).add_modifier(base_mod),
+                    ),
+                }
             };
 
             let branch = entry.branch().unwrap_or("");

@@ -63,12 +63,14 @@ pub enum Action {
     TervezoPromptCancel,
     ToggleLog,
     ClearLog,
+    ToggleSideTerminal,
+    SideTerminalInput(Vec<u8>),
     None,
 }
 
-pub fn handle_event(event: &Event, mode: &ViewMode) -> Action {
+pub fn handle_event(event: &Event, mode: &ViewMode, side_focused: bool) -> Action {
     match event {
-        Event::Key(key) => handle_key(key, mode),
+        Event::Key(key) => handle_key(key, mode, side_focused),
         Event::Mouse(mouse) => handle_mouse(mouse.kind, mode),
         _ => Action::None,
     }
@@ -98,7 +100,15 @@ fn handle_mouse(kind: MouseEventKind, mode: &ViewMode) -> Action {
     }
 }
 
-fn handle_key(key: &KeyEvent, mode: &ViewMode) -> Action {
+fn handle_key(key: &KeyEvent, mode: &ViewMode, side_focused: bool) -> Action {
+    if key.modifiers.contains(KeyModifiers::CONTROL) && key.code == KeyCode::Char('t') {
+        return Action::ToggleSideTerminal;
+    }
+
+    if side_focused {
+        return Action::SideTerminalInput(key_event_to_bytes(key));
+    }
+
     match mode {
         ViewMode::Terminal | ViewMode::TerminalQSwitcher => {}
         _ => {

@@ -153,7 +153,7 @@ fn render_table(f: &mut Frame, app: &App, area: Rect) {
         .iter()
         .map(|entry| {
             let entry_id = entry.id().to_string();
-            let is_attached = app.is_attached(&entry_id);
+            let is_attached = app.attached_session_id() == Some(entry_id.as_str());
             let has_bell = app.has_bell(&entry_id);
 
             let status_style = match entry {
@@ -291,7 +291,8 @@ fn render_footer(f: &mut Frame, app: &App, area: Rect) {
         format_tokens(total_tokens)
     );
 
-    let keys = "  a:attach  d:detail  Space:switch  1-9:jump  n:new  /:filter  s:sort  ?:help";
+    let keys =
+        "  a:attach  d:detail  Space:switch  1-9:jump  n:new  /:filter  s:sort  C-t:shell  ?:help";
 
     let footer = Line::from(vec![
         Span::styled(stats, Theme::cost()),
