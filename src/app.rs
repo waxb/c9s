@@ -2020,9 +2020,7 @@ mod tests {
         let mut state = TervezoDetailState::new(imp);
         state.pr_details = Some(make_pr("open", Some("https://github.com/pr/1"), false));
         let actions = state.compute_available_actions();
-        assert!(
-            actions.contains(&TervezoAction::ViewPrInBrowser),
-        );
+        assert!(actions.contains(&TervezoAction::ViewPrInBrowser),);
     }
 
     #[test]
@@ -2033,9 +2031,7 @@ mod tests {
         );
         let state = TervezoDetailState::new(imp);
         let actions = state.compute_available_actions();
-        assert!(
-            actions.contains(&TervezoAction::ViewPrInBrowser),
-        );
+        assert!(actions.contains(&TervezoAction::ViewPrInBrowser),);
     }
 
     #[test]
@@ -2043,9 +2039,7 @@ mod tests {
         let imp = make_impl(ImplementationStatus::Completed, None);
         let state = TervezoDetailState::new(imp);
         let actions = state.compute_available_actions();
-        assert!(
-            !actions.contains(&TervezoAction::ViewPrInBrowser),
-        );
+        assert!(!actions.contains(&TervezoAction::ViewPrInBrowser),);
     }
 
     #[test]
@@ -2054,16 +2048,12 @@ mod tests {
         let mut state = TervezoDetailState::new(imp);
         state.pr_details = Some(make_pr("open", None, false));
         let actions = state.compute_available_actions();
-        assert!(
-            !actions.contains(&TervezoAction::ViewPrInBrowser),
-        );
+        assert!(!actions.contains(&TervezoAction::ViewPrInBrowser),);
     }
 
     #[test]
     fn test_view_pr_in_browser_is_not_destructive() {
-        assert!(
-            !TervezoAction::ViewPrInBrowser.is_destructive(),
-        );
+        assert!(!TervezoAction::ViewPrInBrowser.is_destructive(),);
     }
 
     #[test]
