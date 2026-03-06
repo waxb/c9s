@@ -1185,6 +1185,8 @@ mod tests {
     fn test_timeline_timeout_is_60_seconds() {
         use super::super::api::TIMELINE_TIMEOUT_SECS;
         assert_eq!(TIMELINE_TIMEOUT_SECS, 60);
+        // Must be significantly larger than the default request timeout (10s)
+        assert!(TIMELINE_TIMEOUT_SECS > 10);
     }
 
     #[test]
