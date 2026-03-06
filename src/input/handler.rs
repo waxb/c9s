@@ -96,6 +96,7 @@ fn handle_mouse(kind: MouseEventKind, mode: &ViewMode) -> Action {
             ViewMode::List
             | ViewMode::Filter
             | ViewMode::QSwitcher
+            | ViewMode::TervezoQSwitcher
             | ViewMode::Detail
             | ViewMode::Log => Action::MoveUp,
             _ => Action::None,
@@ -105,6 +106,7 @@ fn handle_mouse(kind: MouseEventKind, mode: &ViewMode) -> Action {
             ViewMode::List
             | ViewMode::Filter
             | ViewMode::QSwitcher
+            | ViewMode::TervezoQSwitcher
             | ViewMode::Detail
             | ViewMode::Log => Action::MoveDown,
             _ => Action::None,
@@ -139,6 +141,7 @@ fn handle_key(key: &KeyEvent, mode: &ViewMode, side_focused: bool) -> Action {
         ViewMode::Command => handle_command_key(key),
         ViewMode::ConfirmQuit => handle_confirm_quit_key(key),
         ViewMode::TervezoDetail => handle_tervezo_detail_key(key),
+        ViewMode::TervezoQSwitcher => handle_qswitcher_key(key),
         ViewMode::TervezoActionMenu => handle_tervezo_action_menu_key(key),
         ViewMode::TervezoConfirm => handle_tervezo_confirm_key(key),
         ViewMode::TervezoPromptInput => handle_tervezo_prompt_key(key),
@@ -266,6 +269,8 @@ fn handle_tervezo_detail_key(key: &KeyEvent) -> Action {
         KeyCode::Char('w') => Action::TervezoToggleSteps,
         KeyCode::Char('a') => Action::TervezoOpenActionMenu,
         KeyCode::Char('p') => Action::TervezoOpenPrompt,
+        KeyCode::Char(' ') => Action::ToggleQSwitcher,
+        KeyCode::Char(c @ '1'..='9') => Action::AttachByIndex((c as usize) - ('1' as usize)),
         _ => Action::None,
     }
 }
@@ -428,6 +433,77 @@ mod tests {
             kind: KeyEventKind::Press,
             state: KeyEventState::NONE,
         }
+    }
+
+    #[test]
+    fn test_tervezo_detail_space_opens_qswitcher() {
+        let action = handle_tervezo_detail_key(&key(KeyCode::Char(' ')));
+        assert_eq!(action, Action::ToggleQSwitcher);
+    }
+
+    #[test]
+    fn test_tervezo_detail_number_keys_attach_by_index() {
+        for n in 1..=9u8 {
+            let c = (b'0' + n) as char;
+            let action = handle_tervezo_detail_key(&key(KeyCode::Char(c)));
+            assert_eq!(action, Action::AttachByIndex((n as usize) - 1));
+        }
+    }
+
+    #[test]
+    fn test_tervezo_qswitcher_routing() {
+        // Space in QSwitcher should produce Back (to dismiss)
+        let action = handle_key(&key(KeyCode::Char(' ')), &ViewMode::TervezoQSwitcher, false);
+        assert_eq!(action, Action::Back);
+
+        // Number keys should produce AttachByIndex
+        let action = handle_key(&key(KeyCode::Char('3')), &ViewMode::TervezoQSwitcher, false);
+        assert_eq!(action, Action::AttachByIndex(2));
+
+        // Esc should produce Back
+        let action = handle_key(&key(KeyCode::Esc), &ViewMode::TervezoQSwitcher, false);
+        assert_eq!(action, Action::Back);
+
+        // Enter should produce AttachSession
+        let action = handle_key(&key(KeyCode::Enter), &ViewMode::TervezoQSwitcher, false);
+        assert_eq!(action, Action::AttachSession);
+    }
+
+    #[test]
+    fn test_tervezo_detail_existing_keys_unchanged() {
+        assert_eq!(handle_tervezo_detail_key(&key(KeyCode::Esc)), Action::Back);
+        assert_eq!(
+            handle_tervezo_detail_key(&key(KeyCode::Tab)),
+            Action::TervezoTabNext
+        );
+        assert_eq!(
+            handle_tervezo_detail_key(&key(KeyCode::Char('j'))),
+            Action::TervezoScrollDown
+        );
+        assert_eq!(
+            handle_tervezo_detail_key(&key(KeyCode::Char('k'))),
+            Action::TervezoScrollUp
+        );
+        assert_eq!(
+            handle_tervezo_detail_key(&key(KeyCode::Char('h'))),
+            Action::TervezoTabPrev
+        );
+        assert_eq!(
+            handle_tervezo_detail_key(&key(KeyCode::Char('q'))),
+            Action::Back
+        );
+        assert_eq!(
+            handle_tervezo_detail_key(&key(KeyCode::Char('s'))),
+            Action::TervezoSsh
+        );
+        assert_eq!(
+            handle_tervezo_detail_key(&key(KeyCode::Char('r'))),
+            Action::TervezoRefreshDetail
+        );
+        assert_eq!(
+            handle_tervezo_detail_key(&key(KeyCode::Char('a'))),
+            Action::TervezoOpenActionMenu
+        );
     }
 
     #[test]

@@ -243,6 +243,12 @@ fn run_loop(
                             ui::render_tervezo_detail_with_prompt(f, state, area);
                         }
                     }
+                    ViewMode::TervezoQSwitcher => {
+                        if let Some(ref state) = app.tervezo_detail {
+                            ui::render_tervezo_detail(f, state, area);
+                        }
+                        ui::render_qswitcher(f, app, area);
+                    }
                     ViewMode::TervezoCreateDialog => {
                         ui::render_session_list(f, app, area);
                         ui::render_tervezo_create_dialog(f, &app.tervezo_create, area);
@@ -414,6 +420,7 @@ fn process_action(
                 | ViewMode::TervezoActionMenu
                 | ViewMode::TervezoConfirm
                 | ViewMode::TervezoPromptInput
+                | ViewMode::TervezoQSwitcher
         );
         if in_tzv {
             if let Some(ref mut state) = app.tervezo_detail {
@@ -455,18 +462,21 @@ fn process_action(
             attach_by_index(app, idx, terminal)?;
             if matches!(
                 app.view_mode(),
-                ViewMode::QSwitcher | ViewMode::TerminalQSwitcher
+                ViewMode::QSwitcher | ViewMode::TerminalQSwitcher | ViewMode::TervezoQSwitcher
             ) {
-                app.set_view_mode(ViewMode::Terminal);
+                // attach_by_index already sets TervezoDetail for remote sessions;
+                // only force Terminal for local session attachments
+                if !matches!(app.view_mode(), ViewMode::TervezoDetail) {
+                    app.set_view_mode(ViewMode::Terminal);
+                }
             }
         }
-        Action::ToggleQSwitcher => {
-            if *app.view_mode() == ViewMode::QSwitcher {
-                app.set_view_mode(ViewMode::List);
-            } else {
-                app.set_view_mode(ViewMode::QSwitcher);
-            }
-        }
+        Action::ToggleQSwitcher => match app.view_mode() {
+            ViewMode::QSwitcher => app.set_view_mode(ViewMode::List),
+            ViewMode::TervezoQSwitcher => app.set_view_mode(ViewMode::TervezoDetail),
+            ViewMode::TervezoDetail => app.set_view_mode(ViewMode::TervezoQSwitcher),
+            _ => app.set_view_mode(ViewMode::QSwitcher),
+        },
         Action::TerminalQSwitcher => {
             app.set_view_mode(ViewMode::TerminalQSwitcher);
         }
@@ -510,6 +520,7 @@ fn process_action(
                 tlog!(info, "DIAG: Back action from TervezoDetail → List");
                 app.set_view_mode(ViewMode::List);
             }
+            ViewMode::TervezoQSwitcher => app.set_view_mode(ViewMode::TervezoDetail),
             ViewMode::Log | ViewMode::Help | ViewMode::QSwitcher => {
                 app.set_view_mode(ViewMode::List)
             }
