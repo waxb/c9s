@@ -391,3 +391,76 @@ fn f_key_bytes(n: u8) -> Vec<u8> {
         _ => vec![],
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crossterm::event::{KeyCode, KeyEvent, KeyEventKind, KeyEventState, KeyModifiers};
+
+    fn key(code: KeyCode) -> KeyEvent {
+        KeyEvent {
+            code,
+            modifiers: KeyModifiers::NONE,
+            kind: KeyEventKind::Press,
+            state: KeyEventState::NONE,
+        }
+    }
+
+    fn key_with_mod(code: KeyCode, modifiers: KeyModifiers) -> KeyEvent {
+        KeyEvent {
+            code,
+            modifiers,
+            kind: KeyEventKind::Press,
+            state: KeyEventState::NONE,
+        }
+    }
+
+    #[test]
+    fn test_create_dialog_esc_closes() {
+        let action = handle_tervezo_create_key(&key(KeyCode::Esc));
+        assert_eq!(action, Action::TervezoCreateClose);
+    }
+
+    #[test]
+    fn test_create_dialog_tab_navigates_fields() {
+        assert_eq!(
+            handle_tervezo_create_key(&key(KeyCode::Tab)),
+            Action::TervezoCreateFieldNext
+        );
+        assert_eq!(
+            handle_tervezo_create_key(&key(KeyCode::BackTab)),
+            Action::TervezoCreateFieldPrev
+        );
+    }
+
+    #[test]
+    fn test_create_dialog_ctrl_enter_submits() {
+        let action =
+            handle_tervezo_create_key(&key_with_mod(KeyCode::Enter, KeyModifiers::CONTROL));
+        assert_eq!(action, Action::TervezoCreateSubmit);
+    }
+
+    #[test]
+    fn test_create_dialog_enter_toggles_mode() {
+        let action = handle_tervezo_create_key(&key(KeyCode::Enter));
+        assert_eq!(action, Action::TervezoCreateToggleMode);
+    }
+
+    #[test]
+    fn test_create_dialog_char_input() {
+        let action = handle_tervezo_create_key(&key(KeyCode::Char('a')));
+        assert_eq!(action, Action::TervezoCreateChar('a'));
+    }
+
+    #[test]
+    fn test_create_dialog_backspace() {
+        let action = handle_tervezo_create_key(&key(KeyCode::Backspace));
+        assert_eq!(action, Action::TervezoCreateBackspace);
+    }
+
+    #[test]
+    fn test_normal_mode_c_opens_create_dialog() {
+        let action = handle_normal_key(&key(KeyCode::Char('c')));
+        assert_eq!(action, Action::TervezoCreateOpen);
+    }
+}

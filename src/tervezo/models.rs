@@ -790,6 +790,41 @@ pub struct CreateImplementationRequest {
     pub base_branch: Option<String>,
 }
 
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_create_implementation_request_serialization_camel_case() {
+        let req = CreateImplementationRequest {
+            prompt: "Fix login bug".to_string(),
+            mode: "bug_fix".to_string(),
+            repo_url: "https://github.com/user/repo".to_string(),
+            base_branch: Some("develop".to_string()),
+        };
+        let json: serde_json::Value = serde_json::to_value(&req).unwrap();
+        assert_eq!(json["prompt"], "Fix login bug");
+        assert_eq!(json["mode"], "bug_fix");
+        assert_eq!(json["repoUrl"], "https://github.com/user/repo");
+        assert_eq!(json["baseBranch"], "develop");
+        // Ensure snake_case keys are NOT present
+        assert!(json.get("repo_url").is_none());
+        assert!(json.get("base_branch").is_none());
+    }
+
+    #[test]
+    fn test_create_implementation_request_omits_null_base_branch() {
+        let req = CreateImplementationRequest {
+            prompt: "Add feature".to_string(),
+            mode: "feature".to_string(),
+            repo_url: "https://github.com/user/repo".to_string(),
+            base_branch: None,
+        };
+        let json: serde_json::Value = serde_json::to_value(&req).unwrap();
+        assert!(json.get("baseBranch").is_none());
+    }
+}
+
 // --- Duration formatting ---
 
 pub fn format_duration_secs(secs: f64) -> String {
