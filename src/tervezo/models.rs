@@ -854,7 +854,6 @@ mod tests {
         assert_eq!(json["mode"], "bug_fix");
         assert_eq!(json["repoUrl"], "https://github.com/user/repo");
         assert_eq!(json["baseBranch"], "develop");
-        // Ensure snake_case keys are NOT present
         assert!(json.get("repo_url").is_none());
         assert!(json.get("base_branch").is_none());
     }
@@ -1062,5 +1061,193 @@ mod tests {
         assert_eq!(format_duration_secs(125.0), "2m 5s");
         assert_eq!(format_duration_secs(3600.0), "1h");
         assert_eq!(format_duration_secs(3720.0), "1h 2m");
+    }
+
+    #[test]
+    fn test_truncate_display_short_string() {
+        assert_eq!(truncate_display("hello", 200), "hello");
+    }
+
+    #[test]
+    fn test_truncate_display_exact_limit() {
+        let s = "a".repeat(200);
+        assert_eq!(truncate_display(&s, 200), s);
+    }
+
+    #[test]
+    fn test_truncate_display_long_string_is_truncated() {
+        let s = "a".repeat(300);
+        let result = truncate_display(&s, 200);
+        assert!(result.len() <= 203);
+        assert!(result.ends_with("..."));
+    }
+
+    #[test]
+    fn test_truncate_display_multiline_takes_first_line() {
+        let s = "first line\nsecond line\nthird line";
+        assert_eq!(truncate_display(s, 200), "first line");
+    }
+
+    #[test]
+    fn test_truncate_display_multiline_long_first_line() {
+        let long_first = "a".repeat(300);
+        let s = format!("{}\nsecond line", long_first);
+        let result = truncate_display(&s, 200);
+        assert!(result.ends_with("..."));
+        assert!(!result.contains('\n'));
+    }
+
+    #[test]
+    fn test_truncate_display_empty_string() {
+        assert_eq!(truncate_display("", 200), "");
+    }
+
+    #[test]
+    fn test_truncate_display_unicode_safe() {
+        let s = "a".repeat(198) + "\u{00e9}\u{00e9}";
+        let result = truncate_display(&s, 200);
+        assert!(result.ends_with("..."));
+    }
+
+    #[test]
+    fn test_display_text_long_message_truncated() {
+        let long_text = "x".repeat(500);
+        let msg = TimelineMessage {
+            text: Some(long_text),
+            ..default_timeline_message()
+        };
+        let result = msg.display_text();
+        assert!(result.len() <= 203);
+        assert!(result.ends_with("..."));
+    }
+
+    #[test]
+    fn test_display_text_multiline_message_single_line() {
+        let multiline =
+            "Line one of a very long message\nLine two continues here\nLine three also present";
+        let msg = TimelineMessage {
+            text: Some(multiline.to_string()),
+            ..default_timeline_message()
+        };
+        let result = msg.display_text();
+        assert!(!result.contains('\n'));
+        assert_eq!(result, "Line one of a very long message");
+    }
+
+    #[test]
+    fn test_display_text_reason_field_truncated() {
+        let long_reason = "r".repeat(500);
+        let msg = TimelineMessage {
+            reason: Some(long_reason),
+            ..default_timeline_message()
+        };
+        let result = msg.display_text();
+        assert!(result.len() <= 203);
+        assert!(result.ends_with("..."));
+    }
+
+    #[test]
+    fn test_display_text_short_message_not_truncated() {
+        let msg = TimelineMessage {
+            text: Some("Hello world".to_string()),
+            ..default_timeline_message()
+        };
+        assert_eq!(msg.display_text(), "Hello world");
+    }
+
+    #[test]
+    fn test_display_text_empty_message() {
+        let msg = default_timeline_message();
+        assert_eq!(msg.display_text(), "");
+    }
+
+    #[test]
+    fn test_has_inline_code_with_diff() {
+        let msg = TimelineMessage {
+            msg_type: Some("file_change".to_string()),
+            diff: Some("--- a/file\n+++ b/file\n+new line".to_string()),
+            ..default_timeline_message()
+        };
+        assert!(msg.has_inline_code());
+    }
+
+    #[test]
+    fn test_has_inline_code_without_file_change() {
+        let msg = TimelineMessage {
+            msg_type: Some("assistant_text".to_string()),
+            diff: Some("some diff".to_string()),
+            ..default_timeline_message()
+        };
+        assert!(!msg.has_inline_code());
+    }
+
+    #[test]
+    fn test_timeline_timeout_is_60_seconds() {
+        use super::super::api::TIMELINE_TIMEOUT_SECS;
+        assert_eq!(TIMELINE_TIMEOUT_SECS, 60);
+    }
+
+    #[test]
+    fn test_tervezo_detail_state_timeline_error_default_none() {
+        let imp = Implementation {
+            id: "test-id".to_string(),
+            title: Some("Test".to_string()),
+            status: ImplementationStatus::Running,
+            branch: None,
+            repo_url: None,
+            created_at: None,
+            updated_at: None,
+            estimated_cost_usd: None,
+            total_tokens: None,
+            message_count: None,
+            pr_url: None,
+            pr_number: None,
+            pr_status: None,
+            mode: None,
+        };
+        let state = crate::app::TervezoDetailState::new(imp);
+        assert!(state.timeline_error.is_none());
+    }
+
+    fn default_timeline_message() -> TimelineMessage {
+        TimelineMessage {
+            id: None,
+            timestamp: None,
+            msg_type: None,
+            reason: None,
+            to_status: None,
+            from_status: None,
+            text: None,
+            message: None,
+            content: None,
+            output: None,
+            details: None,
+            status: None,
+            tool_name: None,
+            parameters: None,
+            file_path: None,
+            diff: None,
+            thinking: None,
+            thought: None,
+            summary: None,
+            title: None,
+            todos: None,
+            event: None,
+            iteration: None,
+            tool_call_id: None,
+            is_error: None,
+            operation: None,
+            success: None,
+            branch: None,
+            commit_hash: None,
+            commit_message: None,
+            pr_url: None,
+            pr_number: None,
+            severity: None,
+            is_partial: None,
+            tests_added: None,
+            approach: None,
+            uncovered_paths: None,
+        }
     }
 }

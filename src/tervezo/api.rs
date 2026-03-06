@@ -31,7 +31,7 @@ fn parse_json<T: serde::de::DeserializeOwned>(body: &str, label: &str) -> Result
 }
 
 const REQUEST_TIMEOUT_SECS: u64 = 10;
-const TIMELINE_TIMEOUT_SECS: u64 = 60;
+pub const TIMELINE_TIMEOUT_SECS: u64 = 60;
 
 pub struct TervezoClient {
     agent: ureq::Agent,
