@@ -391,6 +391,13 @@ impl TervezoCreateMode {
     }
 }
 
+#[derive(Debug, Clone)]
+pub struct SessionTabEntry {
+    pub name: String,
+    pub is_active: bool,
+    pub is_remote: bool,
+}
+
 pub struct TervezoCreateState {
     pub active_field: TervezoCreateField,
     pub prompt: String,
@@ -1065,6 +1072,17 @@ impl App {
         self.filtered
             .iter()
             .filter_map(|&i| self.entries.get(i))
+            .collect()
+    }
+
+    pub fn session_tab_entries(&self, active_id: &str) -> Vec<SessionTabEntry> {
+        self.filtered_sessions()
+            .iter()
+            .map(|entry| SessionTabEntry {
+                name: entry.display_name().to_string(),
+                is_active: entry.id() == active_id,
+                is_remote: entry.is_remote(),
+            })
             .collect()
     }
 
