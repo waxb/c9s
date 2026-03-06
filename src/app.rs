@@ -1303,3 +1303,100 @@ fn longest_common_prefix(strings: &[String]) -> String {
     }
     first[..len].to_string()
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::tervezo::models::{Implementation, ImplementationStatus, PrDetails};
+
+    /// Build a minimal Implementation for tests.
+    fn make_impl(status: ImplementationStatus, pr_url: Option<&str>) -> Implementation {
+        Implementation {
+            id: "test-id".into(),
+            title: None,
+            status,
+            branch: None,
+            repo_url: None,
+            created_at: None,
+            updated_at: None,
+            estimated_cost_usd: None,
+            total_tokens: None,
+            message_count: None,
+            pr_url: pr_url.map(String::from),
+            pr_number: None,
+            pr_status: None,
+            mode: None,
+        }
+    }
+
+    fn make_pr(status: &str, url: Option<&str>, merged: bool) -> PrDetails {
+        PrDetails {
+            url: url.map(String::from),
+            number: Some(1),
+            status: Some(status.into()),
+            title: None,
+            mergeable: None,
+            merged,
+            draft: false,
+        }
+    }
+
+    #[test]
+    fn test_view_pr_in_browser_available_when_pr_details_has_url() {
+        let imp = make_impl(ImplementationStatus::Completed, None);
+        let mut state = TervezoDetailState::new(imp);
+        state.pr_details = Some(make_pr("open", Some("https://github.com/pr/1"), false));
+        let actions = state.compute_available_actions();
+        assert!(
+            actions.contains(&TervezoAction::ViewPrInBrowser),
+            "ViewPrInBrowser should be available when pr_details has a URL"
+        );
+    }
+
+    #[test]
+    fn test_view_pr_in_browser_available_via_implementation_pr_url() {
+        let imp = make_impl(
+            ImplementationStatus::Completed,
+            Some("https://github.com/pr/2"),
+        );
+        let state = TervezoDetailState::new(imp);
+        // No pr_details, but implementation.pr_url is set → has_pr = true, url available
+        let actions = state.compute_available_actions();
+        assert!(
+            actions.contains(&TervezoAction::ViewPrInBrowser),
+            "ViewPrInBrowser should be available when implementation.pr_url is set"
+        );
+    }
+
+    #[test]
+    fn test_view_pr_in_browser_not_available_without_pr() {
+        let imp = make_impl(ImplementationStatus::Completed, None);
+        let state = TervezoDetailState::new(imp);
+        let actions = state.compute_available_actions();
+        assert!(
+            !actions.contains(&TervezoAction::ViewPrInBrowser),
+            "ViewPrInBrowser should NOT appear when no PR exists"
+        );
+    }
+
+    #[test]
+    fn test_view_pr_in_browser_not_available_when_pr_has_no_url() {
+        let imp = make_impl(ImplementationStatus::Completed, None);
+        let mut state = TervezoDetailState::new(imp);
+        // PR details exist but url is None
+        state.pr_details = Some(make_pr("open", None, false));
+        let actions = state.compute_available_actions();
+        assert!(
+            !actions.contains(&TervezoAction::ViewPrInBrowser),
+            "ViewPrInBrowser should NOT appear when PR has no URL"
+        );
+    }
+
+    #[test]
+    fn test_view_pr_in_browser_is_not_destructive() {
+        assert!(
+            !TervezoAction::ViewPrInBrowser.is_destructive(),
+            "ViewPrInBrowser must not be destructive (no confirmation dialog)"
+        );
+    }
+}
