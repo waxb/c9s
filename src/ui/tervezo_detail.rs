@@ -6,12 +6,67 @@ use ratatui::widgets::{
 };
 use ratatui::Frame;
 
-use crate::app::{TervezoDetailState, TervezoTab};
+use crate::app::{SessionTabEntry, TervezoDetailState, TervezoTab};
 use crate::tervezo::models::{format_duration_secs, FileChange, TestReport};
 use crate::tervezo::ImplementationStatus;
 use crate::ui::theme::Theme;
 
-pub fn render_tervezo_detail(f: &mut Frame, state: &TervezoDetailState, area: Rect) {
+fn render_session_top_bar(f: &mut Frame, tabs: &[SessionTabEntry], area: Rect) {
+    let bg = Color::Indexed(236);
+    let buf = f.buffer_mut();
+
+    for x in area.x..area.x + area.width {
+        let cell = &mut buf[(x, area.y)];
+        cell.set_style(Style::default().bg(bg));
+        cell.set_symbol(" ");
+    }
+
+    let mut col = area.x + 1;
+    let max_col = area.x + area.width;
+
+    for (i, tab) in tabs.iter().enumerate() {
+        if i > 0 {
+            let sep_style = Style::default().fg(Color::DarkGray).bg(bg);
+            for ch in " | ".chars() {
+                if col >= max_col {
+                    break;
+                }
+                let cell = &mut buf[(col, area.y)];
+                cell.set_style(sep_style);
+                cell.set_symbol(&ch.to_string());
+                col += 1;
+            }
+        }
+
+        let (fg, modifier) = if tab.is_active {
+            (Color::Cyan, Modifier::BOLD)
+        } else {
+            (Color::White, Modifier::empty())
+        };
+
+        let tab_style = Style::default().fg(fg).bg(bg).add_modifier(modifier);
+
+        let marker = if tab.is_remote { "[T] " } else { "" };
+        let text = format!("{}: {}{}", i + 1, marker, tab.name);
+
+        for ch in text.chars() {
+            if col >= max_col {
+                break;
+            }
+            let cell = &mut buf[(col, area.y)];
+            cell.set_style(tab_style);
+            cell.set_symbol(&ch.to_string());
+            col += 1;
+        }
+    }
+}
+
+pub fn render_tervezo_detail(
+    f: &mut Frame,
+    state: &TervezoDetailState,
+    area: Rect,
+    session_tabs: &[SessionTabEntry],
+) {
     let has_steps = state
         .status_info
         .as_ref()
@@ -21,15 +76,17 @@ pub fn render_tervezo_detail(f: &mut Frame, state: &TervezoDetailState, area: Re
     let footer_height = if state.action_result.is_some() { 2 } else { 1 };
 
     let chunks = Layout::vertical([
+        Constraint::Length(1),
         Constraint::Length(header_height),
         Constraint::Min(5),
         Constraint::Length(footer_height),
     ])
     .split(area);
 
-    render_header(f, state, chunks[0]);
-    render_body(f, state, chunks[1]);
-    render_footer(f, state, chunks[2]);
+    render_session_top_bar(f, session_tabs, chunks[0]);
+    render_header(f, state, chunks[1]);
+    render_body(f, state, chunks[2]);
+    render_footer(f, state, chunks[3]);
 
     // Step detail overlay
     if state.steps_expanded {
@@ -41,7 +98,12 @@ pub fn render_tervezo_detail(f: &mut Frame, state: &TervezoDetailState, area: Re
     }
 }
 
-pub fn render_tervezo_detail_with_prompt(f: &mut Frame, state: &TervezoDetailState, area: Rect) {
+pub fn render_tervezo_detail_with_prompt(
+    f: &mut Frame,
+    state: &TervezoDetailState,
+    area: Rect,
+    session_tabs: &[SessionTabEntry],
+) {
     let has_steps = state
         .status_info
         .as_ref()
@@ -50,15 +112,17 @@ pub fn render_tervezo_detail_with_prompt(f: &mut Frame, state: &TervezoDetailSta
     let header_height = if has_steps { 4 } else { 3 };
 
     let chunks = Layout::vertical([
+        Constraint::Length(1),
         Constraint::Length(header_height),
         Constraint::Min(5),
         Constraint::Length(3),
     ])
     .split(area);
 
-    render_header(f, state, chunks[0]);
-    render_body(f, state, chunks[1]);
-    render_prompt_input(f, state, chunks[2]);
+    render_session_top_bar(f, session_tabs, chunks[0]);
+    render_header(f, state, chunks[1]);
+    render_body(f, state, chunks[2]);
+    render_prompt_input(f, state, chunks[3]);
 }
 
 pub fn render_tervezo_action_menu(f: &mut Frame, state: &TervezoDetailState, area: Rect) {

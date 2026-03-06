@@ -243,29 +243,34 @@ fn run_loop(
                     }
                     ViewMode::TervezoDetail => {
                         if let Some(ref state) = app.tervezo_detail {
-                            ui::render_tervezo_detail(f, state, area);
+                            let tabs = app.session_tab_entries(&state.implementation_id);
+                            ui::render_tervezo_detail(f, state, area, &tabs);
                         }
                     }
                     ViewMode::TervezoActionMenu => {
                         if let Some(ref state) = app.tervezo_detail {
-                            ui::render_tervezo_detail(f, state, area);
+                            let tabs = app.session_tab_entries(&state.implementation_id);
+                            ui::render_tervezo_detail(f, state, area, &tabs);
                             ui::render_tervezo_action_menu(f, state, area);
                         }
                     }
                     ViewMode::TervezoConfirm => {
                         if let Some(ref state) = app.tervezo_detail {
-                            ui::render_tervezo_detail(f, state, area);
+                            let tabs = app.session_tab_entries(&state.implementation_id);
+                            ui::render_tervezo_detail(f, state, area, &tabs);
                             ui::render_tervezo_confirm(f, state, area);
                         }
                     }
                     ViewMode::TervezoPromptInput => {
                         if let Some(ref state) = app.tervezo_detail {
-                            ui::render_tervezo_detail_with_prompt(f, state, area);
+                            let tabs = app.session_tab_entries(&state.implementation_id);
+                            ui::render_tervezo_detail_with_prompt(f, state, area, &tabs);
                         }
                     }
                     ViewMode::TervezoQSwitcher => {
                         if let Some(ref state) = app.tervezo_detail {
-                            ui::render_tervezo_detail(f, state, area);
+                            let tabs = app.session_tab_entries(&state.implementation_id);
+                            ui::render_tervezo_detail(f, state, area, &tabs);
                         }
                         ui::render_qswitcher(f, app, area);
                     }
