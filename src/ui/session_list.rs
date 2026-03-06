@@ -292,7 +292,7 @@ fn render_footer(f: &mut Frame, app: &App, area: Rect) {
     );
 
     let keys = if app.has_tervezo() {
-        "  a:attach  d:detail  Space:switch  n:new  c:create  /:filter  s:sort  C-t:shell  ?:help"
+        "  a:attach  d:detail  Space:switch  n:new  /:filter  s:sort  C-t:shell  ?:help"
     } else {
         "  a:attach  d:detail  Space:switch  1-9:jump  n:new  /:filter  s:sort  C-t:shell  ?:help"
     };

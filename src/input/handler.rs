@@ -62,7 +62,10 @@ pub enum Action {
     TervezoPromptBackspace,
     TervezoPromptSubmit,
     TervezoPromptCancel,
-    TervezoCreateOpen,
+    NewSessionMenuUp,
+    NewSessionMenuDown,
+    NewSessionMenuSelect,
+    NewSessionMenuClose,
     TervezoCreateClose,
     TervezoCreateFieldNext,
     TervezoCreateFieldPrev,
@@ -139,6 +142,7 @@ fn handle_key(key: &KeyEvent, mode: &ViewMode, side_focused: bool) -> Action {
         ViewMode::TervezoConfirm => handle_tervezo_confirm_key(key),
         ViewMode::TervezoPromptInput => handle_tervezo_prompt_key(key),
         ViewMode::TervezoCreateDialog => handle_tervezo_create_key(key),
+        ViewMode::NewSessionMenu => handle_new_session_menu_key(key),
         ViewMode::Log => handle_log_key(key),
         _ => handle_normal_key(key),
     }
@@ -160,7 +164,7 @@ fn handle_normal_key(key: &KeyEvent) -> Action {
         KeyCode::Char('s') => Action::CycleSort,
         KeyCode::Char('r') => Action::Refresh,
         KeyCode::Char('n') => Action::LaunchNew,
-        KeyCode::Char('c') => Action::TervezoCreateOpen,
+
         KeyCode::Char('L') => Action::ToggleLog,
         KeyCode::Char(' ') => Action::ToggleQSwitcher,
         KeyCode::Char(c @ '1'..='9') => Action::AttachByIndex((c as usize) - ('1' as usize)),
@@ -303,6 +307,16 @@ fn handle_tervezo_create_key(key: &KeyEvent) -> Action {
         KeyCode::Enter => Action::TervezoCreateToggleMode, // handled contextually in process_action
         KeyCode::Backspace => Action::TervezoCreateBackspace,
         KeyCode::Char(c) => Action::TervezoCreateChar(c),
+        _ => Action::None,
+    }
+}
+
+fn handle_new_session_menu_key(key: &KeyEvent) -> Action {
+    match key.code {
+        KeyCode::Char('j') | KeyCode::Down => Action::NewSessionMenuDown,
+        KeyCode::Char('k') | KeyCode::Up => Action::NewSessionMenuUp,
+        KeyCode::Enter => Action::NewSessionMenuSelect,
+        KeyCode::Esc | KeyCode::Char('q') => Action::NewSessionMenuClose,
         _ => Action::None,
     }
 }
@@ -456,11 +470,5 @@ mod tests {
     fn test_create_dialog_backspace() {
         let action = handle_tervezo_create_key(&key(KeyCode::Backspace));
         assert_eq!(action, Action::TervezoCreateBackspace);
-    }
-
-    #[test]
-    fn test_normal_mode_c_opens_create_dialog() {
-        let action = handle_normal_key(&key(KeyCode::Char('c')));
-        assert_eq!(action, Action::TervezoCreateOpen);
     }
 }
