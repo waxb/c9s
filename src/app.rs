@@ -265,6 +265,7 @@ pub enum TervezoAction {
     ReopenPr,
     Restart,
     SendPrompt,
+    ViewPrInBrowser,
 }
 
 impl TervezoAction {
@@ -276,6 +277,7 @@ impl TervezoAction {
             Self::ReopenPr => "Reopen PR",
             Self::Restart => "Restart",
             Self::SendPrompt => "Send prompt",
+            Self::ViewPrInBrowser => "View PR",
         }
     }
 
@@ -479,6 +481,17 @@ impl TervezoDetailState {
         // Reopen PR: PR is closed and not merged
         if pr_closed && !pr_merged {
             actions.push(TervezoAction::ReopenPr);
+        }
+
+        // View PR in browser: PR exists and has a URL
+        let pr_url_available = self
+            .pr_details
+            .as_ref()
+            .and_then(|pr| pr.url.as_ref())
+            .or(self.implementation.pr_url.as_ref())
+            .is_some();
+        if has_pr && pr_url_available {
+            actions.push(TervezoAction::ViewPrInBrowser);
         }
 
         // Restart: terminal status
