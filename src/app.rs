@@ -312,18 +312,6 @@ impl TervezoCreateField {
         }
     }
 
-    pub fn label(self) -> &'static str {
-        match self {
-            Self::Prompt => "Prompt",
-            Self::Mode => "Mode",
-            Self::RepoUrl => "Repository",
-            Self::BaseBranch => "Base branch",
-        }
-    }
-
-    pub fn is_text_field(self) -> bool {
-        matches!(self, Self::Prompt | Self::RepoUrl | Self::BaseBranch)
-    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
