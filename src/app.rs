@@ -366,6 +366,7 @@ impl TervezoCreateState {
     }
 }
 
+#[allow(clippy::large_enum_variant)]
 pub enum TervezoCreateMsg {
     Success(Implementation),
     Error(String),

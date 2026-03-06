@@ -165,7 +165,7 @@ fn run_loop(
                 TervezoCreateMsg::Success(_impl) => {
                     app.set_view_mode(ViewMode::List);
                     // Force refresh so the new session appears
-                    if let Some(ref fetcher) = app.tervezo_fetcher_ref() {
+                    if let Some(fetcher) = app.tervezo_fetcher_ref() {
                         fetcher.mark_dirty();
                     }
                     let _ = app.refresh();
