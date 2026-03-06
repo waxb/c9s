@@ -62,7 +62,10 @@ impl UsageFetcher {
         };
 
         if should_fetch {
-            self.cached = fetch_usage();
+            let result = fetch_usage();
+            if result.api_available || !self.cached.api_available {
+                self.cached = result;
+            }
             self.last_fetch = Some(Instant::now());
         }
 
