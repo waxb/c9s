@@ -28,6 +28,7 @@ pub enum ViewMode {
     TervezoActionMenu,
     TervezoConfirm,
     TervezoPromptInput,
+    TervezoQSwitcher,
     Log,
 }
 
@@ -863,7 +864,7 @@ impl App {
     }
 
     pub fn set_view_mode(&mut self, mode: ViewMode) {
-        if matches!(mode, ViewMode::QSwitcher | ViewMode::TerminalQSwitcher) {
+        if matches!(mode, ViewMode::QSwitcher | ViewMode::TerminalQSwitcher | ViewMode::TervezoQSwitcher) {
             let max = self.filtered.len().min(9);
             if self.selected >= max && max > 0 {
                 self.selected = max - 1;
@@ -903,7 +904,7 @@ impl App {
             }
         } else if !matches!(
             mode,
-            ViewMode::TervezoActionMenu | ViewMode::TervezoConfirm | ViewMode::TervezoPromptInput
+            ViewMode::TervezoActionMenu | ViewMode::TervezoConfirm | ViewMode::TervezoPromptInput | ViewMode::TervezoQSwitcher
         ) {
             self.tervezo_detail = None;
             self.tervezo_detail_tx = None;
@@ -1021,7 +1022,7 @@ impl App {
         }
         let limit = if matches!(
             self.view_mode,
-            ViewMode::QSwitcher | ViewMode::TerminalQSwitcher
+            ViewMode::QSwitcher | ViewMode::TerminalQSwitcher | ViewMode::TervezoQSwitcher
         ) {
             self.filtered.len().min(9)
         } else {
