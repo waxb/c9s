@@ -11,6 +11,7 @@ mod usage;
 use anyhow::Result;
 use app::{
     App, SessionEntry, TervezoAction, TervezoCreateMsg, TervezoDetailMsg, TervezoTab, ViewMode,
+    WorkspaceMsg,
 };
 use crossterm::event;
 use crossterm::event::{DisableMouseCapture, EnableMouseCapture};
@@ -161,12 +162,29 @@ fn run_loop(
             needs_draw = true;
         }
 
-        // Drain create dialog messages
+        if let Some(msg) = app.drain_workspace_messages() {
+            match msg {
+                WorkspaceMsg::Loaded(workspaces) => {
+                    if let Some(ref mut state) = app.tervezo_create {
+                        state.workspaces_loading = false;
+                        state.workspaces = workspaces;
+                        state.workspaces_error = None;
+                    }
+                }
+                WorkspaceMsg::Error(e) => {
+                    if let Some(ref mut state) = app.tervezo_create {
+                        state.workspaces_loading = false;
+                        state.workspaces_error = Some(e);
+                    }
+                }
+            }
+            needs_draw = true;
+        }
+
         if let Some(msg) = app.drain_tervezo_create_messages() {
             match msg {
                 TervezoCreateMsg::Success(_impl) => {
                     app.set_view_mode(ViewMode::List);
-                    // Force refresh so the new session appears
                     if let Some(fetcher) = app.tervezo_fetcher_ref() {
                         fetcher.mark_dirty();
                     }
@@ -899,25 +917,32 @@ fn process_action(
         }
         Action::TervezoCreateToggleMode => {
             if let Some(ref mut state) = app.tervezo_create {
-                if state.active_field == app::TervezoCreateField::Mode {
-                    state.mode = state.mode.toggle();
-                } else if state.active_field == app::TervezoCreateField::BaseBranch {
-                    // Enter on BaseBranch field submits
-                    submit_tervezo_create(app);
+                match state.active_field {
+                    app::TervezoCreateField::Mode => {
+                        state.mode = state.mode.toggle();
+                    }
+                    app::TervezoCreateField::Workspace => {
+                        if !state.workspaces.is_empty() {
+                            state.selected_workspace =
+                                (state.selected_workspace + 1) % state.workspaces.len();
+                        }
+                    }
+                    app::TervezoCreateField::BaseBranch => {
+                        submit_tervezo_create(app);
+                    }
+                    _ => {}
                 }
-                // Enter on text fields (Prompt, RepoUrl) is ignored (use Ctrl+Enter)
             }
         }
         Action::TervezoCreateChar(c) => {
             if let Some(ref mut state) = app.tervezo_create {
                 if state.submitting {
-                    // Ignore input while submitting
                 } else {
                     match state.active_field {
                         app::TervezoCreateField::Prompt => state.prompt.push(c),
                         app::TervezoCreateField::RepoUrl => state.repo_url.push(c),
                         app::TervezoCreateField::BaseBranch => state.base_branch.push(c),
-                        app::TervezoCreateField::Mode => {} // Mode uses toggle, not text
+                        app::TervezoCreateField::Mode | app::TervezoCreateField::Workspace => {}
                     }
                     state.error = None;
                 }
@@ -936,7 +961,8 @@ fn process_action(
                         app::TervezoCreateField::BaseBranch => {
                             state.base_branch.pop();
                         }
-                        app::TervezoCreateField::Mode => {}
+                        app::TervezoCreateField::Mode
+                        | app::TervezoCreateField::Workspace => {}
                     }
                     state.error = None;
                 }
@@ -1444,34 +1470,42 @@ fn execute_tervezo_action(app: &mut App, action: TervezoAction) {
 }
 
 fn submit_tervezo_create(app: &mut App) {
-    let (prompt, mode, repo_url, base_branch) = match app.tervezo_create.as_ref() {
-        Some(state) => {
-            if state.submitting {
-                return;
+    let (prompt, mode, workspace_id, repo_name, base_branch) =
+        match app.tervezo_create.as_ref() {
+            Some(state) => {
+                if state.submitting {
+                    return;
+                }
+                let ws_id = state
+                    .workspaces
+                    .get(state.selected_workspace)
+                    .map(|w| w.id.clone());
+                (
+                    state.prompt.clone(),
+                    state.mode.api_value().to_string(),
+                    ws_id,
+                    state.repo_url.clone(),
+                    state.base_branch.clone(),
+                )
             }
-            (
-                state.prompt.clone(),
-                state.mode.api_value().to_string(),
-                state.repo_url.clone(),
-                state.base_branch.clone(),
-            )
-        }
-        None => return,
-    };
+            None => return,
+        };
 
-    // Validate
     if prompt.trim().is_empty() {
         if let Some(ref mut state) = app.tervezo_create {
             state.error = Some("Prompt cannot be empty".to_string());
         }
         return;
     }
-    if repo_url.trim().is_empty() {
-        if let Some(ref mut state) = app.tervezo_create {
-            state.error = Some("Repository URL cannot be empty".to_string());
+    let workspace_id = match workspace_id {
+        Some(id) => id,
+        None => {
+            if let Some(ref mut state) = app.tervezo_create {
+                state.error = Some("No workspace selected".to_string());
+            }
+            return;
         }
-        return;
-    }
+    };
 
     if let Some(ref mut state) = app.tervezo_create {
         state.submitting = true;
@@ -1487,10 +1521,16 @@ fn submit_tervezo_create(app: &mut App) {
         None => return,
     };
 
+    let repository_name = if repo_name.trim().is_empty() {
+        None
+    } else {
+        Some(repo_name)
+    };
     let request = CreateImplementationRequest {
         prompt,
         mode,
-        repo_url,
+        workspace_id,
+        repository_name,
         base_branch: if base_branch.trim().is_empty() {
             None
         } else {

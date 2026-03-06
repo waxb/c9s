@@ -5,7 +5,7 @@ use super::models::{
     AnalysisResponse, ChangesResponse, CreateImplementationRequest, CreatePrResponse, FileChange,
     Implementation, ListResponse, PlanResponse, PrDetails, PromptRequest, PromptResponse,
     RestartResponse, SshCredentials, StatusResponse, Step, StepsResponse, SuccessResponse,
-    TestOutputResponse, TestReport, TimelineMessage,
+    TestOutputResponse, TestReport, TimelineMessage, Workspace, WorkspacesResponse,
 };
 
 fn simple_percent_encode(input: &str) -> String {
@@ -66,6 +66,14 @@ impl TervezoClient {
         let resp = self.get(&url)?;
         let list: ListResponse = parse_json(&resp, "list_implementations")?;
         tlog!(info, "parsed {} implementations", list.items.len());
+        Ok(list.items)
+    }
+
+    pub fn list_workspaces(&self) -> Result<Vec<Workspace>, String> {
+        let url = format!("{}/workspaces", self.base_url);
+        let resp = self.get(&url)?;
+        let list: WorkspacesResponse = parse_json(&resp, "list_workspaces")?;
+        tlog!(info, "parsed {} workspaces", list.items.len());
         Ok(list.items)
     }
 

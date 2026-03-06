@@ -798,6 +798,22 @@ pub struct PromptRequest {
     pub message: String,
 }
 
+// --- Workspace ---
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct Workspace {
+    pub id: String,
+    pub name: String,
+    pub slug: String,
+    #[serde(default)]
+    pub logo: Option<String>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct WorkspacesResponse {
+    pub items: Vec<Workspace>,
+}
+
 // --- Create implementation request body ---
 
 #[allow(dead_code)]
@@ -806,7 +822,9 @@ pub struct PromptRequest {
 pub struct CreateImplementationRequest {
     pub prompt: String,
     pub mode: String,
-    pub repo_url: String,
+    pub workspace_id: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub repository_name: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub base_branch: Option<String>,
 }
@@ -846,28 +864,34 @@ mod tests {
         let req = CreateImplementationRequest {
             prompt: "Fix login bug".to_string(),
             mode: "bug_fix".to_string(),
-            repo_url: "https://github.com/user/repo".to_string(),
+            workspace_id: "ws-123".to_string(),
+            repository_name: Some("user/repo".to_string()),
             base_branch: Some("develop".to_string()),
         };
         let json: serde_json::Value = serde_json::to_value(&req).unwrap();
         assert_eq!(json["prompt"], "Fix login bug");
         assert_eq!(json["mode"], "bug_fix");
-        assert_eq!(json["repoUrl"], "https://github.com/user/repo");
+        assert_eq!(json["workspaceId"], "ws-123");
+        assert_eq!(json["repositoryName"], "user/repo");
         assert_eq!(json["baseBranch"], "develop");
-        assert!(json.get("repo_url").is_none());
+        assert!(json.get("workspace_id").is_none());
+        assert!(json.get("repository_name").is_none());
         assert!(json.get("base_branch").is_none());
     }
 
     #[test]
-    fn test_create_implementation_request_omits_null_base_branch() {
+    fn test_create_implementation_request_omits_null_optional_fields() {
         let req = CreateImplementationRequest {
             prompt: "Add feature".to_string(),
             mode: "feature".to_string(),
-            repo_url: "https://github.com/user/repo".to_string(),
+            workspace_id: "ws-456".to_string(),
+            repository_name: None,
             base_branch: None,
         };
         let json: serde_json::Value = serde_json::to_value(&req).unwrap();
         assert!(json.get("baseBranch").is_none());
+        assert!(json.get("repositoryName").is_none());
+        assert_eq!(json["workspaceId"], "ws-456");
     }
 
     #[test]
