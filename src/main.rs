@@ -1082,7 +1082,56 @@ fn process_action(
             }
         }
         Action::CycleNextTervezo | Action::CyclePrevTervezo => {
-            // Implemented in task 5: cycle through sessions from tervezo detail view
+            let current_id = app
+                .tervezo_detail
+                .as_ref()
+                .map(|s| s.implementation_id.clone());
+            if let Some(current_id) = current_id {
+                let sessions = app.filtered_sessions();
+                let len = sessions.len();
+                if len > 1 {
+                    let current_idx = sessions
+                        .iter()
+                        .position(|e| e.id() == current_id)
+                        .unwrap_or(0);
+                    let target_idx = if action == Action::CycleNextTervezo {
+                        (current_idx + 1) % len
+                    } else {
+                        (current_idx + len - 1) % len
+                    };
+                    let entry_data: Option<EntryData> =
+                        sessions.get(target_idx).map(|e| match e {
+                            SessionEntry::Local(s) => (
+                                s.id.clone(),
+                                s.project_name.clone(),
+                                Some(s.cwd.clone()),
+                                s.pid,
+                                false,
+                            ),
+                            SessionEntry::Remote(i) => (
+                                i.id.clone(),
+                                i.display_name().to_string(),
+                                None,
+                                None,
+                                true,
+                            ),
+                        });
+                    if let Some((id, name, cwd, pid, is_remote)) = entry_data {
+                        if is_remote {
+                            app.set_selected(target_idx);
+                            app.set_view_mode(ViewMode::TervezoDetail);
+                            trigger_tervezo_initial_fetch(app);
+                        } else if let Some(cwd) = cwd {
+                            let area = terminal.size()?;
+                            let rows = area.height.saturating_sub(1);
+                            let cols = area.width;
+                            app.terminal_manager_mut()
+                                .attach(&id, &name, &cwd, pid, rows, cols)?;
+                            app.set_view_mode(ViewMode::Terminal);
+                        }
+                    }
+                }
+            }
         }
         Action::None => {}
     }
