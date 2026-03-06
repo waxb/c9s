@@ -51,11 +51,23 @@ pub fn render_tervezo_detail_with_prompt(f: &mut Frame, state: &TervezoDetailSta
 
     // Compute dynamic prompt height based on content
     // Inner width = total width - 2 (borders) - 1 (leading space)
-    let inner_width = if area.width > 3 { (area.width - 3) as usize } else { 1 };
-    let visual_lines: usize = state.prompt_input.split('\n').map(|line| {
-        let char_count = line.chars().count();
-        if char_count == 0 { 1 } else { (char_count + inner_width - 1) / inner_width }
-    }).sum();
+    let inner_width = if area.width > 3 {
+        (area.width - 3) as usize
+    } else {
+        1
+    };
+    let visual_lines: usize = state
+        .prompt_input
+        .split('\n')
+        .map(|line| {
+            let char_count = line.chars().count();
+            if char_count == 0 {
+                1
+            } else {
+                char_count.div_ceil(inner_width)
+            }
+        })
+        .sum();
     let max_prompt_height = (area.height / 3).max(3);
     let prompt_height = (visual_lines as u16 + 2).clamp(3, max_prompt_height);
 
@@ -1176,7 +1188,10 @@ fn render_prompt_input(f: &mut Frame, state: &TervezoDetailState, area: Rect) {
             Span::styled(after_cursor.to_string(), Style::default().fg(Color::White)),
         ];
         if state.prompt_sending {
-            line_spans.push(Span::styled(" (sending...)", Style::default().fg(Color::DarkGray)));
+            line_spans.push(Span::styled(
+                " (sending...)",
+                Style::default().fg(Color::DarkGray),
+            ));
         }
         display_lines.push(Line::from(line_spans));
     } else {
@@ -1194,33 +1209,51 @@ fn render_prompt_input(f: &mut Frame, state: &TervezoDetailState, area: Rect) {
         let cursor_line_before = lines_before.last().unwrap_or(&"");
         let cursor_line_after = lines_after.first().unwrap_or(&"");
         let cursor_spans = vec![
-            Span::styled(cursor_line_before.to_string(), Style::default().fg(Color::White)),
+            Span::styled(
+                cursor_line_before.to_string(),
+                Style::default().fg(Color::White),
+            ),
             Span::styled("█", Style::default().fg(Color::Cyan)),
-            Span::styled(cursor_line_after.to_string(), Style::default().fg(Color::White)),
+            Span::styled(
+                cursor_line_after.to_string(),
+                Style::default().fg(Color::White),
+            ),
         ];
         display_lines.push(Line::from(cursor_spans));
         // Lines after cursor (remaining complete lines)
-        for i in 1..lines_after.len() {
+        for line in lines_after.iter().skip(1) {
             display_lines.push(Line::from(Span::styled(
-                lines_after[i].to_string(),
+                line.to_string(),
                 Style::default().fg(Color::White),
             )));
         }
     }
 
     // Compute scroll offset to keep cursor row visible
-    let inner_width = if inner.width > 0 { inner.width as usize } else { 1 };
+    let inner_width = if inner.width > 0 {
+        inner.width as usize
+    } else {
+        1
+    };
     // Find cursor visual row considering wrapping
     let mut cursor_visual_row: usize = 0;
     let text_before_cursor = format!(" {}", before_cursor);
     for (i, logical_line) in text_before_cursor.split('\n').enumerate() {
         let char_count = logical_line.chars().count();
-        let wrapped_lines = if char_count == 0 { 1 } else { (char_count + inner_width - 1) / inner_width };
+        let wrapped_lines = if char_count == 0 {
+            1
+        } else {
+            char_count.div_ceil(inner_width)
+        };
         if i < text_before_cursor.split('\n').count() - 1 {
             cursor_visual_row += wrapped_lines;
         } else {
             // Last line before cursor — cursor is at end of this line
-            cursor_visual_row += if char_count == 0 { 0 } else { (char_count - 1) / inner_width };
+            cursor_visual_row += if char_count == 0 {
+                0
+            } else {
+                (char_count - 1) / inner_width
+            };
         }
     }
 

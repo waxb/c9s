@@ -895,7 +895,8 @@ fn process_action(
                     let prev_line_len = prev_line.chars().count();
                     let target_col = col.min(prev_line_len);
                     // Convert char count to byte offset
-                    let byte_offset: usize = prev_line.char_indices()
+                    let byte_offset: usize = prev_line
+                        .char_indices()
                         .take(target_col)
                         .last()
                         .map(|(i, c)| i + c.len_utf8())
@@ -913,13 +914,15 @@ fn process_action(
                 if let Some(newline_pos) = after.find('\n') {
                     let next_line_start = state.prompt_cursor + newline_pos + 1;
                     let rest_after_next = &state.prompt_input[next_line_start..];
-                    let next_line_end = rest_after_next.find('\n')
+                    let next_line_end = rest_after_next
+                        .find('\n')
                         .map(|i| next_line_start + i)
                         .unwrap_or(state.prompt_input.len());
                     let next_line = &state.prompt_input[next_line_start..next_line_end];
                     let next_line_len = next_line.chars().count();
                     let target_col = col.min(next_line_len);
-                    let byte_offset: usize = next_line.char_indices()
+                    let byte_offset: usize = next_line
+                        .char_indices()
                         .take(target_col)
                         .last()
                         .map(|(i, c)| i + c.len_utf8())
@@ -937,7 +940,8 @@ fn process_action(
         Action::TervezoPromptEnd => {
             if let Some(ref mut state) = app.tervezo_detail {
                 let after = &state.prompt_input[state.prompt_cursor..];
-                let line_end = after.find('\n')
+                let line_end = after
+                    .find('\n')
                     .map(|i| state.prompt_cursor + i)
                     .unwrap_or(state.prompt_input.len());
                 state.prompt_cursor = line_end;

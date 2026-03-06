@@ -1818,11 +1818,17 @@ mod prompt_tests {
     #[test]
     fn test_newline_insertion_and_multiline_cursor_navigation() {
         let mut s = make_state();
-        for c in "abc".chars() { prompt_char(&mut s, c); }
+        for c in "abc".chars() {
+            prompt_char(&mut s, c);
+        }
         prompt_newline(&mut s);
-        for c in "def".chars() { prompt_char(&mut s, c); }
+        for c in "def".chars() {
+            prompt_char(&mut s, c);
+        }
         prompt_newline(&mut s);
-        for c in "ghi".chars() { prompt_char(&mut s, c); }
+        for c in "ghi".chars() {
+            prompt_char(&mut s, c);
+        }
         assert_eq!(s.prompt_input, "abc\ndef\nghi");
         assert_eq!(s.prompt_cursor, 11);
 
@@ -1848,9 +1854,13 @@ mod prompt_tests {
     #[test]
     fn test_cursor_up_clamps_column_to_shorter_line() {
         let mut s = make_state();
-        for c in "abcdef".chars() { prompt_char(&mut s, c); }
+        for c in "abcdef".chars() {
+            prompt_char(&mut s, c);
+        }
         prompt_newline(&mut s);
-        for c in "xy".chars() { prompt_char(&mut s, c); }
+        for c in "xy".chars() {
+            prompt_char(&mut s, c);
+        }
         assert_eq!(s.prompt_cursor, 9);
 
         prompt_cursor_up(&mut s);
@@ -1869,9 +1879,13 @@ mod prompt_tests {
     #[test]
     fn test_home_end_on_multiline() {
         let mut s = make_state();
-        for c in "hello".chars() { prompt_char(&mut s, c); }
+        for c in "hello".chars() {
+            prompt_char(&mut s, c);
+        }
         prompt_newline(&mut s);
-        for c in "world".chars() { prompt_char(&mut s, c); }
+        for c in "world".chars() {
+            prompt_char(&mut s, c);
+        }
 
         prompt_home(&mut s);
         assert_eq!(s.prompt_cursor, 6);
@@ -1890,9 +1904,13 @@ mod prompt_tests {
     #[test]
     fn test_backspace_and_delete_across_newline() {
         let mut s = make_state();
-        for c in "ab".chars() { prompt_char(&mut s, c); }
+        for c in "ab".chars() {
+            prompt_char(&mut s, c);
+        }
         prompt_newline(&mut s);
-        for c in "cd".chars() { prompt_char(&mut s, c); }
+        for c in "cd".chars() {
+            prompt_char(&mut s, c);
+        }
 
         prompt_home(&mut s);
         assert_eq!(s.prompt_cursor, 3);
@@ -1934,7 +1952,11 @@ mod prompt_tests {
     fn test_cancel_clears_input_and_cursor() {
         let mut s = make_state();
         for c in "hello\nworld".chars() {
-            if c == '\n' { prompt_newline(&mut s); } else { prompt_char(&mut s, c); }
+            if c == '\n' {
+                prompt_newline(&mut s);
+            } else {
+                prompt_char(&mut s, c);
+            }
         }
         assert!(!s.prompt_input.is_empty());
         assert!(s.prompt_cursor > 0);
