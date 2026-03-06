@@ -29,6 +29,7 @@ pub struct TerminalManager {
     active_id: Option<String>,
     order: Vec<String>,
     check_count: u64,
+    side_terminals: HashMap<String, EmbeddedTerminal>,
 }
 
 impl TerminalManager {
@@ -39,6 +40,7 @@ impl TerminalManager {
             active_id: None,
             order: Vec::new(),
             check_count: 0,
+            side_terminals: HashMap::new(),
         }
     }
 
@@ -221,13 +223,20 @@ impl TerminalManager {
             .collect()
     }
 
-    pub fn check_and_forward_notifications(&mut self, _viewing_terminal: bool) {
+    pub fn check_and_forward_notifications(&mut self, viewing_active: bool) {
         self.check_count += 1;
         for (id, notifier) in &mut self.notifiers {
             if notifier.check() {
-                notifier.debug_log_ext(&format!("BELL: fired for {}", &id[..8.min(id.len())]));
-                if let Some(term) = self.terminals.get(id) {
-                    term.set_bell();
+                let is_focused = viewing_active && self.active_id.as_deref() == Some(id.as_str());
+                notifier.debug_log_ext(&format!(
+                    "BELL: fired for {} (focused={})",
+                    &id[..8.min(id.len())],
+                    is_focused
+                ));
+                if !is_focused {
+                    if let Some(term) = self.terminals.get(id) {
+                        term.set_bell();
+                    }
                 }
                 let _ = std::io::Write::write_all(&mut std::io::stderr(), b"\x07");
                 return;
@@ -237,8 +246,50 @@ impl TerminalManager {
 
     fn clear_active_bells(&self) {
         if let Some(term) = self.active_terminal() {
-            term.clear_bell();
+            term.clear_bell_blink();
         }
+    }
+
+    pub fn active_side_terminal(&self) -> Option<&EmbeddedTerminal> {
+        let id = self.active_id.as_ref()?;
+        self.side_terminals.get(id)
+    }
+
+    pub fn active_side_terminal_mut(&mut self) -> Option<&mut EmbeddedTerminal> {
+        let id = self.active_id.clone()?;
+        self.side_terminals.get_mut(&id)
+    }
+
+    pub fn open_side_terminal(&mut self, cwd: &std::path::Path, rows: u16, cols: u16) -> bool {
+        let id = match &self.active_id {
+            Some(id) => id.clone(),
+            None => return false,
+        };
+        if let Some(existing) = self.side_terminals.get(&id) {
+            if !existing.is_exited() {
+                return true;
+            }
+            self.side_terminals.remove(&id);
+        }
+        match EmbeddedTerminal::spawn_shell(cwd, rows, cols) {
+            Ok(term) => {
+                self.side_terminals.insert(id, term);
+                true
+            }
+            Err(_) => false,
+        }
+    }
+
+    pub fn close_side_terminal(&mut self) {
+        if let Some(id) = &self.active_id {
+            if self.side_terminals.get(id).is_some_and(|t| t.is_exited()) {
+                self.side_terminals.remove(id);
+            }
+        }
+    }
+
+    pub fn has_active_side_terminal(&self) -> bool {
+        self.active_side_terminal().is_some()
     }
 }
 

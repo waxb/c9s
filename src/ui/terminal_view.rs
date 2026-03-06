@@ -55,7 +55,7 @@ pub fn render_terminal(
             scroll_indicator,
             Span::styled(
                 format!(
-                    "  C-d:list  C-Space:switch  C-n/p:cycle  C-j/k:scroll  {}",
+                    "  C-d:list  C-Space:switch  C-n/p:cycle  C-j/k:scroll  C-t:shell  {}",
                     project
                 ),
                 Theme::footer(),
@@ -65,7 +65,7 @@ pub fn render_terminal(
     f.render_widget(Paragraph::new(status_line), chunks[2]);
 }
 
-fn render_screen(f: &mut Frame, screen: &vt100::Screen, area: Rect) {
+pub(crate) fn render_screen(f: &mut Frame, screen: &vt100::Screen, area: Rect) {
     let buf = f.buffer_mut();
     for row in 0..area.height {
         for col in 0..area.width {
@@ -177,7 +177,7 @@ fn render_tab_bar(f: &mut Frame, tabs: &[TabEntry], area: Rect) {
     }
 }
 
-fn convert_color(c: vt100::Color) -> Color {
+pub(crate) fn convert_color(c: vt100::Color) -> Color {
     match c {
         vt100::Color::Default => Color::Reset,
         vt100::Color::Idx(i) => Color::Indexed(i),
