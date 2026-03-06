@@ -15,6 +15,7 @@ const BINDINGS: &[(&str, &str)] = &[
     ("1-9", "Attach to live session by #"),
     ("Space", "Quick switcher"),
     ("n", "New session (/new path)"),
+    ("c", "Create tervezo implementation"),
     ("/", "Filter sessions"),
     ("s", "Cycle sort column"),
     ("r", "Refresh session list"),

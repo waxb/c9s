@@ -86,6 +86,11 @@ impl TervezoFetcher {
         was_dirty
     }
 
+    pub fn mark_dirty(&self) {
+        let mut s = self.state.lock().unwrap_or_else(|e| e.into_inner());
+        s.dirty = true;
+    }
+
     pub fn implementations(&self) -> Vec<Implementation> {
         self.state
             .lock()
