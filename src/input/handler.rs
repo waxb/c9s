@@ -62,6 +62,14 @@ pub enum Action {
     TervezoPromptBackspace,
     TervezoPromptSubmit,
     TervezoPromptCancel,
+    TervezoPromptNewline,
+    TervezoPromptCursorLeft,
+    TervezoPromptCursorRight,
+    TervezoPromptCursorUp,
+    TervezoPromptCursorDown,
+    TervezoPromptHome,
+    TervezoPromptEnd,
+    TervezoPromptDelete,
     NewSessionMenuUp,
     NewSessionMenuDown,
     NewSessionMenuSelect,
@@ -294,10 +302,20 @@ fn handle_tervezo_confirm_key(key: &KeyEvent) -> Action {
 }
 
 fn handle_tervezo_prompt_key(key: &KeyEvent) -> Action {
+    let has_shift = key.modifiers.contains(KeyModifiers::SHIFT);
+    let has_alt = key.modifiers.contains(KeyModifiers::ALT);
     match key.code {
+        KeyCode::Enter if has_shift || has_alt => Action::TervezoPromptNewline,
         KeyCode::Enter => Action::TervezoPromptSubmit,
         KeyCode::Esc => Action::TervezoPromptCancel,
         KeyCode::Backspace => Action::TervezoPromptBackspace,
+        KeyCode::Delete => Action::TervezoPromptDelete,
+        KeyCode::Left => Action::TervezoPromptCursorLeft,
+        KeyCode::Right => Action::TervezoPromptCursorRight,
+        KeyCode::Up => Action::TervezoPromptCursorUp,
+        KeyCode::Down => Action::TervezoPromptCursorDown,
+        KeyCode::Home => Action::TervezoPromptHome,
+        KeyCode::End => Action::TervezoPromptEnd,
         KeyCode::Char(c) => Action::TervezoPromptChar(c),
         _ => Action::None,
     }

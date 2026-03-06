@@ -822,18 +822,125 @@ fn process_action(
                 if let Some(ref mut state) = app.tervezo_detail {
                     state.action_result = None;
                     state.prompt_input.clear();
+                    state.prompt_cursor = 0;
                 }
                 app.set_view_mode(ViewMode::TervezoPromptInput);
             }
         }
         Action::TervezoPromptChar(c) => {
             if let Some(ref mut state) = app.tervezo_detail {
-                state.prompt_input.push(c);
+                state.prompt_input.insert(state.prompt_cursor, c);
+                state.prompt_cursor += c.len_utf8();
+            }
+        }
+        Action::TervezoPromptNewline => {
+            if let Some(ref mut state) = app.tervezo_detail {
+                state.prompt_input.insert(state.prompt_cursor, '\n');
+                state.prompt_cursor += 1;
             }
         }
         Action::TervezoPromptBackspace => {
             if let Some(ref mut state) = app.tervezo_detail {
-                state.prompt_input.pop();
+                if state.prompt_cursor > 0 {
+                    // Find the previous char boundary
+                    let prev = state.prompt_input[..state.prompt_cursor]
+                        .char_indices()
+                        .next_back()
+                        .map(|(i, _)| i)
+                        .unwrap_or(0);
+                    state.prompt_input.remove(prev);
+                    state.prompt_cursor = prev;
+                }
+            }
+        }
+        Action::TervezoPromptDelete => {
+            if let Some(ref mut state) = app.tervezo_detail {
+                if state.prompt_cursor < state.prompt_input.len() {
+                    state.prompt_input.remove(state.prompt_cursor);
+                }
+            }
+        }
+        Action::TervezoPromptCursorLeft => {
+            if let Some(ref mut state) = app.tervezo_detail {
+                if state.prompt_cursor > 0 {
+                    state.prompt_cursor = state.prompt_input[..state.prompt_cursor]
+                        .char_indices()
+                        .next_back()
+                        .map(|(i, _)| i)
+                        .unwrap_or(0);
+                }
+            }
+        }
+        Action::TervezoPromptCursorRight => {
+            if let Some(ref mut state) = app.tervezo_detail {
+                if state.prompt_cursor < state.prompt_input.len() {
+                    let rest = &state.prompt_input[state.prompt_cursor..];
+                    let next_char_len = rest.chars().next().map(|c| c.len_utf8()).unwrap_or(0);
+                    state.prompt_cursor += next_char_len;
+                }
+            }
+        }
+        Action::TervezoPromptCursorUp => {
+            if let Some(ref mut state) = app.tervezo_detail {
+                // Find start of current logical line and column
+                let before = &state.prompt_input[..state.prompt_cursor];
+                let current_line_start = before.rfind('\n').map(|i| i + 1).unwrap_or(0);
+                let col = before[current_line_start..].chars().count();
+                if current_line_start > 0 {
+                    // There is a previous line
+                    let prev_line_end = current_line_start - 1; // the '\n' char
+                    let prev_before = &state.prompt_input[..prev_line_end];
+                    let prev_line_start = prev_before.rfind('\n').map(|i| i + 1).unwrap_or(0);
+                    let prev_line = &state.prompt_input[prev_line_start..prev_line_end];
+                    let prev_line_len = prev_line.chars().count();
+                    let target_col = col.min(prev_line_len);
+                    // Convert char count to byte offset
+                    let byte_offset: usize = prev_line.char_indices()
+                        .take(target_col)
+                        .last()
+                        .map(|(i, c)| i + c.len_utf8())
+                        .unwrap_or(0);
+                    state.prompt_cursor = prev_line_start + byte_offset;
+                }
+            }
+        }
+        Action::TervezoPromptCursorDown => {
+            if let Some(ref mut state) = app.tervezo_detail {
+                let before = &state.prompt_input[..state.prompt_cursor];
+                let current_line_start = before.rfind('\n').map(|i| i + 1).unwrap_or(0);
+                let col = before[current_line_start..].chars().count();
+                let after = &state.prompt_input[state.prompt_cursor..];
+                if let Some(newline_pos) = after.find('\n') {
+                    let next_line_start = state.prompt_cursor + newline_pos + 1;
+                    let rest_after_next = &state.prompt_input[next_line_start..];
+                    let next_line_end = rest_after_next.find('\n')
+                        .map(|i| next_line_start + i)
+                        .unwrap_or(state.prompt_input.len());
+                    let next_line = &state.prompt_input[next_line_start..next_line_end];
+                    let next_line_len = next_line.chars().count();
+                    let target_col = col.min(next_line_len);
+                    let byte_offset: usize = next_line.char_indices()
+                        .take(target_col)
+                        .last()
+                        .map(|(i, c)| i + c.len_utf8())
+                        .unwrap_or(0);
+                    state.prompt_cursor = next_line_start + byte_offset;
+                }
+            }
+        }
+        Action::TervezoPromptHome => {
+            if let Some(ref mut state) = app.tervezo_detail {
+                let before = &state.prompt_input[..state.prompt_cursor];
+                state.prompt_cursor = before.rfind('\n').map(|i| i + 1).unwrap_or(0);
+            }
+        }
+        Action::TervezoPromptEnd => {
+            if let Some(ref mut state) = app.tervezo_detail {
+                let after = &state.prompt_input[state.prompt_cursor..];
+                let line_end = after.find('\n')
+                    .map(|i| state.prompt_cursor + i)
+                    .unwrap_or(state.prompt_input.len());
+                state.prompt_cursor = line_end;
             }
         }
         Action::TervezoPromptSubmit => {
@@ -881,6 +988,7 @@ fn process_action(
         Action::TervezoPromptCancel => {
             if let Some(ref mut state) = app.tervezo_detail {
                 state.prompt_input.clear();
+                state.prompt_cursor = 0;
             }
             app.set_view_mode(ViewMode::TervezoDetail);
         }

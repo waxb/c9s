@@ -475,6 +475,7 @@ pub struct TervezoDetailState {
     pub action_result: Option<Result<String, String>>,
     // Prompt input
     pub prompt_input: String,
+    pub prompt_cursor: usize,
     pub prompt_sending: bool,
 }
 
@@ -514,6 +515,7 @@ impl TervezoDetailState {
             action_loading: false,
             action_result: None,
             prompt_input: String::new(),
+            prompt_cursor: 0,
             prompt_sending: false,
         }
     }

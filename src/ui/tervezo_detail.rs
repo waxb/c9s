@@ -49,10 +49,20 @@ pub fn render_tervezo_detail_with_prompt(f: &mut Frame, state: &TervezoDetailSta
         .unwrap_or(false);
     let header_height = if has_steps { 4 } else { 3 };
 
+    // Compute dynamic prompt height based on content
+    // Inner width = total width - 2 (borders) - 1 (leading space)
+    let inner_width = if area.width > 3 { (area.width - 3) as usize } else { 1 };
+    let visual_lines: usize = state.prompt_input.split('\n').map(|line| {
+        let char_count = line.chars().count();
+        if char_count == 0 { 1 } else { (char_count + inner_width - 1) / inner_width }
+    }).sum();
+    let max_prompt_height = (area.height / 3).max(3);
+    let prompt_height = (visual_lines as u16 + 2).clamp(3, max_prompt_height);
+
     let chunks = Layout::vertical([
         Constraint::Length(header_height),
         Constraint::Min(5),
-        Constraint::Length(3),
+        Constraint::Length(prompt_height),
     ])
     .split(area);
 
@@ -1132,26 +1142,98 @@ fn render_prompt_input(f: &mut Frame, state: &TervezoDetailState, area: Rect) {
         .unwrap_or(false);
     let label = if waiting { "Reply" } else { "Follow-up" };
 
-    let sending_indicator = if state.prompt_sending {
-        " (sending...)"
+    let title = if state.prompt_sending {
+        format!(" {} (sending...) ", label)
     } else {
-        ""
+        format!(" {} (Shift+Enter for newline) ", label)
     };
 
     let block = Block::default()
         .borders(Borders::ALL)
         .border_style(Style::default().fg(Color::Cyan))
-        .title(format!(" {} ", label));
+        .title(title);
 
     let inner = block.inner(area);
     f.render_widget(block, area);
 
-    let text = format!(" {}{}", state.prompt_input, sending_indicator);
-    let cursor_line = Line::from(vec![
-        Span::styled(text, Style::default().fg(Color::White)),
-        Span::styled("█", Style::default().fg(Color::Cyan)),
-    ]);
-    let paragraph = Paragraph::new(cursor_line);
+    // Build display text with cursor block character inserted at cursor position
+    let cursor_pos = state.prompt_cursor.min(state.prompt_input.len());
+    let before_cursor = &state.prompt_input[..cursor_pos];
+    let after_cursor = &state.prompt_input[cursor_pos..];
+
+    // Build lines from the text, splitting on newlines for proper multi-line display
+    let full_before = format!(" {}", before_cursor);
+    let lines_before: Vec<&str> = full_before.split('\n').collect();
+    let lines_after: Vec<&str> = after_cursor.split('\n').collect();
+
+    let mut display_lines: Vec<Line> = Vec::new();
+
+    if lines_before.len() == 1 && lines_after.len() == 1 {
+        // Single line — simple case
+        let mut line_spans = vec![
+            Span::styled(full_before.clone(), Style::default().fg(Color::White)),
+            Span::styled("█", Style::default().fg(Color::Cyan)),
+            Span::styled(after_cursor.to_string(), Style::default().fg(Color::White)),
+        ];
+        if state.prompt_sending {
+            line_spans.push(Span::styled(" (sending...)", Style::default().fg(Color::DarkGray)));
+        }
+        display_lines.push(Line::from(line_spans));
+    } else {
+        // Multi-line: cursor sits at boundary between before_cursor and after_cursor
+        // Lines before cursor (all complete lines)
+        for (i, line) in lines_before.iter().enumerate() {
+            if i < lines_before.len() - 1 {
+                display_lines.push(Line::from(Span::styled(
+                    line.to_string(),
+                    Style::default().fg(Color::White),
+                )));
+            }
+        }
+        // The line containing the cursor: last line of before + cursor + first line of after
+        let cursor_line_before = lines_before.last().unwrap_or(&"");
+        let cursor_line_after = lines_after.first().unwrap_or(&"");
+        let cursor_spans = vec![
+            Span::styled(cursor_line_before.to_string(), Style::default().fg(Color::White)),
+            Span::styled("█", Style::default().fg(Color::Cyan)),
+            Span::styled(cursor_line_after.to_string(), Style::default().fg(Color::White)),
+        ];
+        display_lines.push(Line::from(cursor_spans));
+        // Lines after cursor (remaining complete lines)
+        for i in 1..lines_after.len() {
+            display_lines.push(Line::from(Span::styled(
+                lines_after[i].to_string(),
+                Style::default().fg(Color::White),
+            )));
+        }
+    }
+
+    // Compute scroll offset to keep cursor row visible
+    let inner_width = if inner.width > 0 { inner.width as usize } else { 1 };
+    // Find cursor visual row considering wrapping
+    let mut cursor_visual_row: usize = 0;
+    let text_before_cursor = format!(" {}", before_cursor);
+    for (i, logical_line) in text_before_cursor.split('\n').enumerate() {
+        let char_count = logical_line.chars().count();
+        let wrapped_lines = if char_count == 0 { 1 } else { (char_count + inner_width - 1) / inner_width };
+        if i < text_before_cursor.split('\n').count() - 1 {
+            cursor_visual_row += wrapped_lines;
+        } else {
+            // Last line before cursor — cursor is at end of this line
+            cursor_visual_row += if char_count == 0 { 0 } else { (char_count - 1) / inner_width };
+        }
+    }
+
+    let visible_height = inner.height as usize;
+    let scroll_offset = if cursor_visual_row >= visible_height {
+        (cursor_visual_row - visible_height + 1) as u16
+    } else {
+        0
+    };
+
+    let paragraph = Paragraph::new(display_lines)
+        .wrap(Wrap { trim: false })
+        .scroll((scroll_offset, 0));
     f.render_widget(paragraph, inner);
 }
 
