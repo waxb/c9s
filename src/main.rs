@@ -1076,6 +1076,9 @@ fn process_action(
                 }
             }
         }
+        Action::CycleNextTervezo | Action::CyclePrevTervezo => {
+            // Implemented in task 5: cycle through sessions from tervezo detail view
+        }
         Action::None => {}
     }
     Ok(())

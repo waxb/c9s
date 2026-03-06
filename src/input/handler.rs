@@ -28,6 +28,8 @@ pub enum Action {
     TerminalQSwitcher,
     CycleNextSession,
     CyclePrevSession,
+    CycleNextTervezo,
+    CyclePrevTervezo,
     CommandInput(char),
     CommandBackspace,
     CommandSubmit,
@@ -245,6 +247,13 @@ fn handle_confirm_quit_key(key: &KeyEvent) -> Action {
 
 fn handle_tervezo_detail_key(key: &KeyEvent) -> Action {
     let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
+    if ctrl {
+        match key.code {
+            KeyCode::Char('n') => return Action::CycleNextTervezo,
+            KeyCode::Char('p') => return Action::CyclePrevTervezo,
+            _ => {}
+        }
+    }
     match key.code {
         KeyCode::Esc | KeyCode::Char('q') => Action::Back,
         KeyCode::Tab | KeyCode::Char('l') => Action::TervezoTabNext,
@@ -553,5 +562,25 @@ mod tests {
     fn test_normal_mode_c_triggers_fix_ci() {
         let action = handle_normal_key(&key(KeyCode::Char('c')));
         assert_eq!(action, Action::FixCi);
+    }
+
+    #[test]
+    fn test_tervezo_detail_ctrl_n_cycles_next() {
+        let action =
+            handle_tervezo_detail_key(&key_with_mod(KeyCode::Char('n'), KeyModifiers::CONTROL));
+        assert_eq!(action, Action::CycleNextTervezo);
+    }
+
+    #[test]
+    fn test_tervezo_detail_ctrl_p_cycles_prev() {
+        let action =
+            handle_tervezo_detail_key(&key_with_mod(KeyCode::Char('p'), KeyModifiers::CONTROL));
+        assert_eq!(action, Action::CyclePrevTervezo);
+    }
+
+    #[test]
+    fn test_tervezo_detail_bare_p_still_opens_prompt() {
+        let action = handle_tervezo_detail_key(&key(KeyCode::Char('p')));
+        assert_eq!(action, Action::TervezoOpenPrompt);
     }
 }
