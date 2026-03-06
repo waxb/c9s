@@ -129,6 +129,7 @@ fn render_command_bar(f: &mut Frame, app: &App, area: Rect) {
 fn render_table(f: &mut Frame, app: &App, area: Rect) {
     let header_cells = [
         "",
+        "CI",
         "Project",
         "Branch",
         "Model",
@@ -233,8 +234,20 @@ fn render_table(f: &mut Frame, app: &App, area: Rect) {
                 None => "-".to_string(),
             };
 
+            let ci_status = app.ci_statuses.get(&entry_id);
+            let (ci_symbol, ci_style) = match ci_status {
+                Some(crate::app::CiStatus::Passing) => ("v", Style::default().fg(Color::Green)),
+                Some(crate::app::CiStatus::Failing) => (
+                    "x",
+                    Style::default().fg(Color::Red).add_modifier(Modifier::BOLD),
+                ),
+                Some(crate::app::CiStatus::Running) => ("~", Style::default().fg(Color::Yellow)),
+                _ => ("-", Style::default().fg(Color::DarkGray)),
+            };
+
             let cells = vec![
                 Cell::from(marker).style(marker_style),
+                Cell::from(ci_symbol).style(ci_style),
                 Cell::from(entry.display_name().to_string()).style(name_style),
                 Cell::from(entry.branch().unwrap_or("-").to_string()),
                 Cell::from(model_short),
@@ -251,6 +264,7 @@ fn render_table(f: &mut Frame, app: &App, area: Rect) {
 
     let widths = [
         Constraint::Length(3),
+        Constraint::Length(2),
         Constraint::Min(20),
         Constraint::Length(15),
         Constraint::Length(10),
@@ -291,8 +305,11 @@ fn render_footer(f: &mut Frame, app: &App, area: Rect) {
         format_tokens(total_tokens)
     );
 
-    let keys =
-        "  a:attach  d:detail  Space:switch  1-9:jump  n:new  /:filter  s:sort  C-t:shell  ?:help";
+    let keys = if app.has_tervezo() {
+        "  a:attach  d:detail  Space:switch  n:new  c:fix-ci  /:filter  s:sort  C-t:shell  ?:help"
+    } else {
+        "  a:attach  d:detail  Space:switch  1-9:jump  n:new  /:filter  s:sort  C-t:shell  ?:help"
+    };
 
     let footer = Line::from(vec![
         Span::styled(stats, Theme::cost()),

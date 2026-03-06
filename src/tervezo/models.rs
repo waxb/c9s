@@ -642,7 +642,7 @@ pub struct TestAdded {
     #[serde(default)]
     pub count: Option<u32>,
     #[serde(default)]
-    pub critical_path: Option<bool>,
+    pub critical_path: Option<String>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -777,6 +777,19 @@ pub struct PromptRequest {
     pub message: String,
 }
 
+// --- Create implementation request body ---
+
+#[allow(dead_code)]
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CreateImplementationRequest {
+    pub prompt: String,
+    pub mode: String,
+    pub repo_url: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub base_branch: Option<String>,
+}
+
 // --- Duration formatting ---
 
 pub fn format_duration_secs(secs: f64) -> String {
@@ -800,5 +813,233 @@ pub fn format_duration_secs(secs: f64) -> String {
         } else {
             format!("{}h {}m", h, m)
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_create_implementation_request_serialization_camel_case() {
+        let req = CreateImplementationRequest {
+            prompt: "Fix login bug".to_string(),
+            mode: "bug_fix".to_string(),
+            repo_url: "https://github.com/user/repo".to_string(),
+            base_branch: Some("develop".to_string()),
+        };
+        let json: serde_json::Value = serde_json::to_value(&req).unwrap();
+        assert_eq!(json["prompt"], "Fix login bug");
+        assert_eq!(json["mode"], "bug_fix");
+        assert_eq!(json["repoUrl"], "https://github.com/user/repo");
+        assert_eq!(json["baseBranch"], "develop");
+        // Ensure snake_case keys are NOT present
+        assert!(json.get("repo_url").is_none());
+        assert!(json.get("base_branch").is_none());
+    }
+
+    #[test]
+    fn test_create_implementation_request_omits_null_base_branch() {
+        let req = CreateImplementationRequest {
+            prompt: "Add feature".to_string(),
+            mode: "feature".to_string(),
+            repo_url: "https://github.com/user/repo".to_string(),
+            base_branch: None,
+        };
+        let json: serde_json::Value = serde_json::to_value(&req).unwrap();
+        assert!(json.get("baseBranch").is_none());
+    }
+
+    #[test]
+    fn test_added_deserializes_critical_path_string() {
+        let json = r#"{"file": "test.rs", "count": 3, "criticalPath": "true"}"#;
+        let ta: TestAdded = serde_json::from_str(json).unwrap();
+        assert_eq!(ta.critical_path, Some("true".to_string()));
+        assert_eq!(ta.file, Some("test.rs".to_string()));
+        assert_eq!(ta.count, Some(3));
+    }
+
+    #[test]
+    fn test_added_deserializes_without_critical_path() {
+        let json = r#"{"file": "test.rs", "count": 1}"#;
+        let ta: TestAdded = serde_json::from_str(json).unwrap();
+        assert_eq!(ta.critical_path, None);
+    }
+
+    #[test]
+    fn test_report_deserializes_with_string_critical_path() {
+        let json = r#"{
+            "summary": {"totalTests": 5, "passRate": "80%"},
+            "testsAdded": [
+                {"file": "auth.rs", "count": 2, "criticalPath": "true"},
+                {"file": "utils.rs", "count": 1, "criticalPath": "false"}
+            ],
+            "uncoveredPaths": []
+        }"#;
+        let report: TestReport = serde_json::from_str(json).unwrap();
+        assert_eq!(report.tests_added.len(), 2);
+        assert_eq!(report.tests_added[0].critical_path.as_deref(), Some("true"));
+        assert_eq!(
+            report.tests_added[1].critical_path.as_deref(),
+            Some("false")
+        );
+    }
+
+    #[test]
+    fn test_is_running_true_for_running_status() {
+        assert!(ImplementationStatus::Running.is_running());
+    }
+
+    #[test]
+    fn test_is_running_false_for_non_running_statuses() {
+        let non_running = [
+            ImplementationStatus::Pending,
+            ImplementationStatus::Queued,
+            ImplementationStatus::Completed,
+            ImplementationStatus::Merged,
+            ImplementationStatus::Failed,
+            ImplementationStatus::Stopped,
+            ImplementationStatus::Cancelled,
+        ];
+        for status in &non_running {
+            assert!(!status.is_running(), "{:?} should not be running", status);
+        }
+    }
+
+    #[test]
+    fn test_is_terminal_for_terminal_statuses() {
+        let terminal = [
+            ImplementationStatus::Completed,
+            ImplementationStatus::Merged,
+            ImplementationStatus::Failed,
+            ImplementationStatus::Stopped,
+            ImplementationStatus::Cancelled,
+        ];
+        for status in &terminal {
+            assert!(status.is_terminal(), "{:?} should be terminal", status);
+        }
+    }
+
+    #[test]
+    fn test_is_terminal_false_for_active_statuses() {
+        let active = [
+            ImplementationStatus::Pending,
+            ImplementationStatus::Queued,
+            ImplementationStatus::Running,
+        ];
+        for status in &active {
+            assert!(!status.is_terminal(), "{:?} should not be terminal", status);
+        }
+    }
+
+    #[test]
+    fn test_status_deserialization() {
+        let json = r#""running""#;
+        let status: ImplementationStatus = serde_json::from_str(json).unwrap();
+        assert!(status.is_running());
+
+        let json = r#""completed""#;
+        let status: ImplementationStatus = serde_json::from_str(json).unwrap();
+        assert!(status.is_terminal());
+        assert!(!status.is_running());
+    }
+
+    #[test]
+    fn test_status_label() {
+        assert_eq!(ImplementationStatus::Running.label(), "Running");
+        assert_eq!(ImplementationStatus::Completed.label(), "Done");
+        assert_eq!(ImplementationStatus::Failed.label(), "Failed");
+    }
+
+    #[test]
+    fn test_implementation_display_name_fallback() {
+        let impl_ = Implementation {
+            id: "test-id".to_string(),
+            title: None,
+            status: ImplementationStatus::Running,
+            branch: None,
+            repo_url: None,
+            created_at: None,
+            updated_at: None,
+            estimated_cost_usd: None,
+            total_tokens: None,
+            message_count: None,
+            pr_url: None,
+            pr_number: None,
+            pr_status: None,
+            mode: None,
+        };
+        assert_eq!(impl_.display_name(), "(untitled)");
+    }
+
+    #[test]
+    fn test_implementation_display_name_with_title() {
+        let impl_ = Implementation {
+            id: "test-id".to_string(),
+            title: Some("Fix bug".to_string()),
+            status: ImplementationStatus::Running,
+            branch: None,
+            repo_url: None,
+            created_at: None,
+            updated_at: None,
+            estimated_cost_usd: None,
+            total_tokens: None,
+            message_count: None,
+            pr_url: None,
+            pr_number: None,
+            pr_status: None,
+            mode: None,
+        };
+        assert_eq!(impl_.display_name(), "Fix bug");
+    }
+
+    #[test]
+    fn test_file_change_display_path_fallback() {
+        let fc = FileChange {
+            path: None,
+            diff: None,
+            status: None,
+            additions: None,
+            deletions: None,
+            changes: None,
+        };
+        assert_eq!(fc.display_path(), "(unknown)");
+    }
+
+    #[test]
+    fn test_pr_details_status() {
+        let pr = PrDetails {
+            url: None,
+            number: None,
+            status: Some("open".to_string()),
+            title: None,
+            mergeable: None,
+            merged: false,
+            draft: false,
+        };
+        assert!(pr.is_open());
+        assert!(!pr.is_closed());
+
+        let pr_closed = PrDetails {
+            url: None,
+            number: None,
+            status: Some("closed".to_string()),
+            title: None,
+            mergeable: None,
+            merged: false,
+            draft: false,
+        };
+        assert!(!pr_closed.is_open());
+        assert!(pr_closed.is_closed());
+    }
+
+    #[test]
+    fn test_format_duration_secs() {
+        assert_eq!(format_duration_secs(0.5), "< 1s");
+        assert_eq!(format_duration_secs(45.0), "45s");
+        assert_eq!(format_duration_secs(120.0), "2m");
+        assert_eq!(format_duration_secs(125.0), "2m 5s");
+        assert_eq!(format_duration_secs(3600.0), "1h");
+        assert_eq!(format_duration_secs(3720.0), "1h 2m");
     }
 }

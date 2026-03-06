@@ -9,7 +9,9 @@ mod ui;
 mod usage;
 
 use anyhow::Result;
-use app::{App, SessionEntry, TervezoAction, TervezoDetailMsg, TervezoTab, ViewMode};
+use app::{
+    App, SessionEntry, TervezoAction, TervezoCreateMsg, TervezoDetailMsg, TervezoTab, ViewMode,
+};
 use crossterm::event;
 use crossterm::event::{DisableMouseCapture, EnableMouseCapture};
 use crossterm::terminal::{
@@ -23,7 +25,7 @@ use session::SessionManager;
 use std::io::{stdout, IsTerminal};
 use std::path::PathBuf;
 use std::time::{Duration, Instant};
-use tervezo::TervezoClient;
+use tervezo::{CreateImplementationRequest, TervezoClient};
 
 fn main() -> Result<()> {
     let args: Vec<String> = std::env::args().collect();
@@ -95,7 +97,9 @@ fn run_loop(
     app: &mut App,
 ) -> Result<()> {
     let refresh_interval = Duration::from_secs(5);
+    let detail_refresh_interval = Duration::from_secs(10);
     let mut last_refresh = Instant::now();
+    let mut last_detail_refresh = Instant::now();
     let mut needs_draw = true;
     let mut mouse_captured = true;
 
@@ -157,6 +161,30 @@ fn run_loop(
             needs_draw = true;
         }
 
+        // Drain create dialog messages
+        if let Some(msg) = app.drain_tervezo_create_messages() {
+            match msg {
+                TervezoCreateMsg::Success(_impl) => {
+                    app.set_view_mode(ViewMode::List);
+                    // Force refresh so the new session appears
+                    if let Some(fetcher) = app.tervezo_fetcher_ref() {
+                        fetcher.mark_dirty();
+                    }
+                    let _ = app.refresh();
+                }
+                TervezoCreateMsg::Error(e) => {
+                    if let Some(ref mut state) = app.tervezo_create {
+                        state.submitting = false;
+                        state.error = Some(e);
+                    }
+                }
+            }
+            needs_draw = true;
+        }
+
+        app.drain_ci_statuses();
+        app.check_ci_statuses();
+
         if *app.view_mode() == ViewMode::Log && log::take_dirty() {
             needs_draw = true;
         }
@@ -216,6 +244,20 @@ fn run_loop(
                         if let Some(ref state) = app.tervezo_detail {
                             ui::render_tervezo_detail_with_prompt(f, state, area);
                         }
+                    }
+                    ViewMode::TervezoQSwitcher => {
+                        if let Some(ref state) = app.tervezo_detail {
+                            ui::render_tervezo_detail(f, state, area);
+                        }
+                        ui::render_qswitcher(f, app, area);
+                    }
+                    ViewMode::TervezoCreateDialog => {
+                        ui::render_session_list(f, app, area);
+                        ui::render_tervezo_create_dialog(f, &app.tervezo_create, area);
+                    }
+                    ViewMode::NewSessionMenu => {
+                        ui::render_session_list(f, app, area);
+                        ui::render_new_session_menu(f, &app.new_session_menu, area);
                     }
                     ViewMode::QSwitcher => {
                         ui::render_session_list(f, app, area);
@@ -343,6 +385,25 @@ fn run_loop(
             needs_draw = true;
         }
 
+        // Periodic re-fetch of detail panel data for running implementations
+        let in_detail_view = matches!(
+            app.view_mode(),
+            ViewMode::TervezoDetail
+                | ViewMode::TervezoActionMenu
+                | ViewMode::TervezoConfirm
+                | ViewMode::TervezoPromptInput
+        );
+        let is_running = app
+            .tervezo_detail
+            .as_ref()
+            .map(|s| s.implementation.status.is_running())
+            .unwrap_or(false);
+        if in_detail_view && is_running && last_detail_refresh.elapsed() >= detail_refresh_interval
+        {
+            trigger_tervezo_panel_refresh(app);
+            last_detail_refresh = Instant::now();
+        }
+
         if app.should_quit() {
             tlog!(
                 info,
@@ -380,6 +441,7 @@ fn process_action(
                 | ViewMode::TervezoActionMenu
                 | ViewMode::TervezoConfirm
                 | ViewMode::TervezoPromptInput
+                | ViewMode::TervezoQSwitcher
         );
         if in_tzv {
             if let Some(ref mut state) = app.tervezo_detail {
@@ -421,18 +483,21 @@ fn process_action(
             attach_by_index(app, idx, terminal)?;
             if matches!(
                 app.view_mode(),
-                ViewMode::QSwitcher | ViewMode::TerminalQSwitcher
+                ViewMode::QSwitcher | ViewMode::TerminalQSwitcher | ViewMode::TervezoQSwitcher
             ) {
-                app.set_view_mode(ViewMode::Terminal);
+                // attach_by_index already sets TervezoDetail for remote sessions;
+                // only force Terminal for local session attachments
+                if !matches!(app.view_mode(), ViewMode::TervezoDetail) {
+                    app.set_view_mode(ViewMode::Terminal);
+                }
             }
         }
-        Action::ToggleQSwitcher => {
-            if *app.view_mode() == ViewMode::QSwitcher {
-                app.set_view_mode(ViewMode::List);
-            } else {
-                app.set_view_mode(ViewMode::QSwitcher);
-            }
-        }
+        Action::ToggleQSwitcher => match app.view_mode() {
+            ViewMode::QSwitcher => app.set_view_mode(ViewMode::List),
+            ViewMode::TervezoQSwitcher => app.set_view_mode(ViewMode::TervezoDetail),
+            ViewMode::TervezoDetail => app.set_view_mode(ViewMode::TervezoQSwitcher),
+            _ => app.set_view_mode(ViewMode::QSwitcher),
+        },
         Action::TerminalQSwitcher => {
             app.set_view_mode(ViewMode::TerminalQSwitcher);
         }
@@ -476,6 +541,7 @@ fn process_action(
                 tlog!(info, "DIAG: Back action from TervezoDetail → List");
                 app.set_view_mode(ViewMode::List);
             }
+            ViewMode::TervezoQSwitcher => app.set_view_mode(ViewMode::TervezoDetail),
             ViewMode::Log | ViewMode::Help | ViewMode::QSwitcher => {
                 app.set_view_mode(ViewMode::List)
             }
@@ -519,7 +585,11 @@ fn process_action(
             let _ = app.refresh();
         }
         Action::LaunchNew => {
-            app.set_view_mode(ViewMode::Command);
+            if app.has_tervezo() {
+                app.set_view_mode(ViewMode::NewSessionMenu);
+            } else {
+                app.set_view_mode(ViewMode::Command);
+            }
         }
         Action::CommandInput(c) => app.command_push(c),
         Action::CommandBackspace => app.command_pop(),
@@ -814,6 +884,67 @@ fn process_action(
             }
             app.set_view_mode(ViewMode::TervezoDetail);
         }
+        Action::TervezoCreateClose => {
+            app.set_view_mode(ViewMode::List);
+        }
+        Action::TervezoCreateFieldNext => {
+            if let Some(ref mut state) = app.tervezo_create {
+                state.active_field = state.active_field.next();
+            }
+        }
+        Action::TervezoCreateFieldPrev => {
+            if let Some(ref mut state) = app.tervezo_create {
+                state.active_field = state.active_field.prev();
+            }
+        }
+        Action::TervezoCreateToggleMode => {
+            if let Some(ref mut state) = app.tervezo_create {
+                if state.active_field == app::TervezoCreateField::Mode {
+                    state.mode = state.mode.toggle();
+                } else if state.active_field == app::TervezoCreateField::BaseBranch {
+                    // Enter on BaseBranch field submits
+                    submit_tervezo_create(app);
+                }
+                // Enter on text fields (Prompt, RepoUrl) is ignored (use Ctrl+Enter)
+            }
+        }
+        Action::TervezoCreateChar(c) => {
+            if let Some(ref mut state) = app.tervezo_create {
+                if state.submitting {
+                    // Ignore input while submitting
+                } else {
+                    match state.active_field {
+                        app::TervezoCreateField::Prompt => state.prompt.push(c),
+                        app::TervezoCreateField::RepoUrl => state.repo_url.push(c),
+                        app::TervezoCreateField::BaseBranch => state.base_branch.push(c),
+                        app::TervezoCreateField::Mode => {} // Mode uses toggle, not text
+                    }
+                    state.error = None;
+                }
+            }
+        }
+        Action::TervezoCreateBackspace => {
+            if let Some(ref mut state) = app.tervezo_create {
+                if !state.submitting {
+                    match state.active_field {
+                        app::TervezoCreateField::Prompt => {
+                            state.prompt.pop();
+                        }
+                        app::TervezoCreateField::RepoUrl => {
+                            state.repo_url.pop();
+                        }
+                        app::TervezoCreateField::BaseBranch => {
+                            state.base_branch.pop();
+                        }
+                        app::TervezoCreateField::Mode => {}
+                    }
+                    state.error = None;
+                }
+            }
+        }
+        Action::TervezoCreateSubmit => {
+            submit_tervezo_create(app);
+        }
         Action::ToggleLog => {
             if *app.view_mode() == ViewMode::Log {
                 app.set_view_mode(ViewMode::List);
@@ -840,9 +971,164 @@ fn process_action(
                 let _ = st.write_input(&bytes);
             }
         }
+        Action::NewSessionMenuClose => {
+            app.set_view_mode(ViewMode::List);
+        }
+        Action::NewSessionMenuUp => {
+            if let Some(ref mut state) = app.new_session_menu {
+                if state.cursor > 0 {
+                    state.cursor -= 1;
+                }
+            }
+        }
+        Action::NewSessionMenuDown => {
+            if let Some(ref mut state) = app.new_session_menu {
+                if state.cursor + 1 < state.items.len() {
+                    state.cursor += 1;
+                }
+            }
+        }
+        Action::NewSessionMenuSelect => {
+            if let Some(ref state) = app.new_session_menu {
+                match state.items[state.cursor] {
+                    app::NewSessionOption::Local => {
+                        app.set_view_mode(ViewMode::Command);
+                    }
+                    app::NewSessionOption::Tervezo => {
+                        app.set_view_mode(ViewMode::TervezoCreateDialog);
+                    }
+                }
+            }
+        }
+        Action::FixCi => {
+            if let Some(entry) = app.selected_session().cloned() {
+                if let Some(imp) = entry.as_remote() {
+                    let impl_id = imp.id.clone();
+                    let ci_status = app.ci_statuses.get(&impl_id).cloned();
+                    if matches!(ci_status, Some(app::CiStatus::Failing)) {
+                        let branch = imp.branch.clone().unwrap_or_else(|| "unknown".to_string());
+                        let prompt = format!(
+                            "The CI pipeline is failing on branch `{}`. Please investigate the GitHub Actions CI failure logs at the repository, identify the root cause of the failing checks, and implement the necessary code fixes to make all CI checks pass. Focus on the actual errors in the logs rather than guessing.",
+                            branch
+                        );
+                        if let Some(config) = app.tervezo_config() {
+                            let config = config.clone();
+                            std::thread::spawn(move || {
+                                let client = TervezoClient::new(&config);
+                                match client.send_prompt(&impl_id, &prompt) {
+                                    Ok(resp) => {
+                                        if resp.sent {
+                                            tlog!(
+                                                info,
+                                                "CI fix prompt sent for {} (branch: {})",
+                                                impl_id,
+                                                branch
+                                            );
+                                        } else {
+                                            tlog!(
+                                                warn,
+                                                "CI fix prompt was not accepted for {}",
+                                                impl_id
+                                            );
+                                        }
+                                    }
+                                    Err(e) => {
+                                        tlog!(error, "Failed to send CI fix prompt: {}", e);
+                                    }
+                                }
+                            });
+                        }
+                    }
+                }
+            }
+        }
         Action::None => {}
     }
     Ok(())
+}
+
+fn trigger_tervezo_panel_refresh(app: &mut App) {
+    let config = match app.tervezo_config() {
+        Some(c) => c.clone(),
+        None => return,
+    };
+    let tx = match app.tervezo_detail_tx.clone() {
+        Some(tx) => tx,
+        None => return,
+    };
+    let (impl_id, loading) = match app.tervezo_detail.as_ref() {
+        Some(state) => (state.implementation_id.clone(), state.loading.clone()),
+        None => return,
+    };
+
+    // Fetch all four panels + status, skipping any already in-flight
+    let tabs = [
+        TervezoTab::Plan,
+        TervezoTab::Analysis,
+        TervezoTab::Changes,
+        TervezoTab::TestOutput,
+    ];
+    for &tab in &tabs {
+        if loading.contains(&tab) {
+            continue;
+        }
+        if let Some(ref mut state) = app.tervezo_detail {
+            state.loading.insert(tab);
+        }
+        let tx = tx.clone();
+        let config = config.clone();
+        let impl_id = impl_id.clone();
+        std::thread::spawn(move || {
+            let client = TervezoClient::new(&config);
+            match tab {
+                TervezoTab::Plan => match client.get_plan(&impl_id) {
+                    Ok(plan) => {
+                        let _ = tx.send(TervezoDetailMsg::Plan(plan));
+                    }
+                    Err(e) => {
+                        let _ = tx.send(TervezoDetailMsg::Error(tab, e));
+                    }
+                },
+                TervezoTab::Analysis => match client.get_analysis(&impl_id) {
+                    Ok(analysis) => {
+                        let _ = tx.send(TervezoDetailMsg::Analysis(analysis));
+                    }
+                    Err(e) => {
+                        let _ = tx.send(TervezoDetailMsg::Error(tab, e));
+                    }
+                },
+                TervezoTab::Changes => match client.get_changes(&impl_id) {
+                    Ok(changes) => {
+                        let _ = tx.send(TervezoDetailMsg::Changes(changes));
+                    }
+                    Err(e) => {
+                        let _ = tx.send(TervezoDetailMsg::Error(tab, e));
+                    }
+                },
+                TervezoTab::TestOutput => match client.get_test_output(&impl_id) {
+                    Ok(reports) => {
+                        let _ = tx.send(TervezoDetailMsg::TestOutput(reports));
+                    }
+                    Err(e) => {
+                        let _ = tx.send(TervezoDetailMsg::Error(tab, e));
+                    }
+                },
+            }
+        });
+    }
+
+    // Also refresh status
+    {
+        let tx = tx.clone();
+        let config = config.clone();
+        let impl_id = impl_id.clone();
+        std::thread::spawn(move || {
+            let client = TervezoClient::new(&config);
+            if let Ok(status) = client.get_status(&impl_id) {
+                let _ = tx.send(TervezoDetailMsg::Status(status));
+            }
+        });
+    }
 }
 
 fn trigger_tervezo_initial_fetch(app: &mut App) {
@@ -861,17 +1147,29 @@ fn trigger_tervezo_initial_fetch(app: &mut App) {
 
     if let Some(ref mut state) = app.tervezo_detail {
         state.loading.insert(TervezoTab::Plan);
+        state.loading.insert(TervezoTab::Analysis);
+        state.loading.insert(TervezoTab::Changes);
+        state.loading.insert(TervezoTab::TestOutput);
     }
 
-    // Fetch timeline + plan + status on background threads
+    // Fetch timeline + plan + status + analysis + changes + test output on background threads
     let tx_timeline = tx.clone();
     let tx_plan = tx.clone();
     let tx_status = tx.clone();
+    let tx_analysis = tx.clone();
+    let tx_changes = tx.clone();
+    let tx_test = tx.clone();
     let config_timeline = config.clone();
     let config_status = config.clone();
+    let config_analysis = config.clone();
+    let config_changes = config.clone();
+    let config_test = config.clone();
     let id_timeline = impl_id.clone();
     let id_plan = impl_id.clone();
     let id_status = impl_id.clone();
+    let id_analysis = impl_id.clone();
+    let id_changes = impl_id.clone();
+    let id_test = impl_id.clone();
 
     std::thread::spawn(move || {
         let client = TervezoClient::new(&config_timeline);
@@ -902,6 +1200,45 @@ fn trigger_tervezo_initial_fetch(app: &mut App) {
         let client = TervezoClient::new(&config_status);
         if let Ok(status) = client.get_status(&id_status) {
             let _ = tx_status.send(TervezoDetailMsg::Status(status));
+        }
+    });
+
+    // Fetch analysis
+    std::thread::spawn(move || {
+        let client = TervezoClient::new(&config_analysis);
+        match client.get_analysis(&id_analysis) {
+            Ok(analysis) => {
+                let _ = tx_analysis.send(TervezoDetailMsg::Analysis(analysis));
+            }
+            Err(e) => {
+                let _ = tx_analysis.send(TervezoDetailMsg::Error(TervezoTab::Analysis, e));
+            }
+        }
+    });
+
+    // Fetch changes
+    std::thread::spawn(move || {
+        let client = TervezoClient::new(&config_changes);
+        match client.get_changes(&id_changes) {
+            Ok(changes) => {
+                let _ = tx_changes.send(TervezoDetailMsg::Changes(changes));
+            }
+            Err(e) => {
+                let _ = tx_changes.send(TervezoDetailMsg::Error(TervezoTab::Changes, e));
+            }
+        }
+    });
+
+    // Fetch test output
+    std::thread::spawn(move || {
+        let client = TervezoClient::new(&config_test);
+        match client.get_test_output(&id_test) {
+            Ok(reports) => {
+                let _ = tx_test.send(TervezoDetailMsg::TestOutput(reports));
+            }
+            Err(e) => {
+                let _ = tx_test.send(TervezoDetailMsg::Error(TervezoTab::TestOutput, e));
+            }
         }
     });
 
@@ -969,20 +1306,26 @@ fn trigger_tervezo_tab_fetch(app: &mut App) {
         Some(tx) => tx,
         None => return,
     };
-    let (impl_id, tab, already_loaded) = match app.tervezo_detail.as_ref() {
+    let (impl_id, tab, skip_fetch) = match app.tervezo_detail.as_ref() {
         Some(state) => {
-            let loaded = match state.active_tab {
+            let already_loaded = match state.active_tab {
                 TervezoTab::Plan => state.plan_content.is_some(),
                 TervezoTab::Changes => state.changes.is_some(),
                 TervezoTab::TestOutput => state.test_output.is_some(),
                 TervezoTab::Analysis => state.analysis_content.is_some(),
             };
-            (state.implementation_id.clone(), state.active_tab, loaded)
+            // Always re-fetch for running implementations; lazy-load for completed ones
+            let skip = if state.implementation.status.is_running() {
+                false
+            } else {
+                already_loaded
+            };
+            (state.implementation_id.clone(), state.active_tab, skip)
         }
         None => return,
     };
 
-    if already_loaded {
+    if skip_fetch {
         return;
     }
 
@@ -1086,6 +1429,74 @@ fn execute_tervezo_action(app: &mut App, action: TervezoAction) {
             }
             Err(e) => {
                 let _ = tx.send(TervezoDetailMsg::ActionError(e));
+            }
+        }
+    });
+}
+
+fn submit_tervezo_create(app: &mut App) {
+    let (prompt, mode, repo_url, base_branch) = match app.tervezo_create.as_ref() {
+        Some(state) => {
+            if state.submitting {
+                return;
+            }
+            (
+                state.prompt.clone(),
+                state.mode.api_value().to_string(),
+                state.repo_url.clone(),
+                state.base_branch.clone(),
+            )
+        }
+        None => return,
+    };
+
+    // Validate
+    if prompt.trim().is_empty() {
+        if let Some(ref mut state) = app.tervezo_create {
+            state.error = Some("Prompt cannot be empty".to_string());
+        }
+        return;
+    }
+    if repo_url.trim().is_empty() {
+        if let Some(ref mut state) = app.tervezo_create {
+            state.error = Some("Repository URL cannot be empty".to_string());
+        }
+        return;
+    }
+
+    if let Some(ref mut state) = app.tervezo_create {
+        state.submitting = true;
+        state.error = None;
+    }
+
+    let config = match app.tervezo_config() {
+        Some(c) => c.clone(),
+        None => return,
+    };
+    let tx = match app.tervezo_create_tx() {
+        Some(tx) => tx,
+        None => return,
+    };
+
+    let request = CreateImplementationRequest {
+        prompt,
+        mode,
+        repo_url,
+        base_branch: if base_branch.trim().is_empty() {
+            None
+        } else {
+            Some(base_branch)
+        },
+    };
+
+    std::thread::spawn(move || {
+        let client = TervezoClient::new(&config);
+        match client.create_implementation(&request) {
+            Ok(implementation) => {
+                let _ = tx.send(TervezoCreateMsg::Success(implementation));
+            }
+            Err(e) => {
+                let _ = tx.send(TervezoCreateMsg::Error(e));
             }
         }
     });
