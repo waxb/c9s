@@ -777,6 +777,19 @@ pub struct PromptRequest {
     pub message: String,
 }
 
+// --- Create implementation request body ---
+
+#[allow(dead_code)]
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CreateImplementationRequest {
+    pub prompt: String,
+    pub mode: String,
+    pub repo_url: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub base_branch: Option<String>,
+}
+
 // --- Duration formatting ---
 
 pub fn format_duration_secs(secs: f64) -> String {
