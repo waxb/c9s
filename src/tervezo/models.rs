@@ -836,6 +836,9 @@ mod tests {
         let report: TestReport = serde_json::from_str(json).unwrap();
         assert_eq!(report.tests_added.len(), 2);
         assert_eq!(report.tests_added[0].critical_path.as_deref(), Some("true"));
-        assert_eq!(report.tests_added[1].critical_path.as_deref(), Some("false"));
+        assert_eq!(
+            report.tests_added[1].critical_path.as_deref(),
+            Some("false")
+        );
     }
 }
