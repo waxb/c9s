@@ -1178,7 +1178,7 @@ fn render_footer(f: &mut Frame, state: &TervezoDetailState, area: Rect) {
     };
 
     let keys = format!(
-        " Esc:back  Tab/h/l:tabs  j/k:timeline  ^d/^u:page  g/G:top/btm  {}  {}  r:refresh  {}  a:actions  {}  {}",
+        " Esc:back  Tab/h/l:tabs  j/k:timeline  ^d/^u:page  g/G:top/btm  {}  {}  r:refresh  {}  a:actions  {}  {}  ^n/p:cycle",
         tab_hint, md_hint, ssh_hint, steps_hint, prompt_hint
     );
 

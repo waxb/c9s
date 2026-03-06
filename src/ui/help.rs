@@ -39,6 +39,7 @@ const BINDINGS: &[(&str, &str)] = &[
     ("J / K", "Scroll timeline"),
     ("s", "SSH into running impl"),
     ("r", "Refresh detail data"),
+    ("Ctrl+n / Ctrl+p", "Cycle next / prev session"),
     ("Esc / q", "Back to list"),
 ];
 
