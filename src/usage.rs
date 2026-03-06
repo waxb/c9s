@@ -109,9 +109,7 @@ fn fetch_usage() -> UsageData {
 }
 
 fn read_credentials() -> Option<(String, String)> {
-    let home = dirs::home_dir()?;
-    let path = home.join(".claude").join(".credentials.json");
-    let content = std::fs::read_to_string(path).ok()?;
+    let content = read_credentials_json()?;
     let creds: Credentials = serde_json::from_str(&content).ok()?;
     let oauth = creds.claude_ai_oauth?;
     let token = oauth.access_token?;
@@ -128,6 +126,33 @@ fn read_credentials() -> Option<(String, String)> {
 
     let sub_type = oauth.subscription_type.unwrap_or_default();
     Some((token, sub_type))
+}
+
+fn read_credentials_json() -> Option<String> {
+    let home = dirs::home_dir()?;
+    let path = home.join(".claude").join(".credentials.json");
+    if let Ok(content) = std::fs::read_to_string(path) {
+        return Some(content);
+    }
+
+    #[cfg(target_os = "macos")]
+    {
+        let output = std::process::Command::new("security")
+            .args([
+                "find-generic-password",
+                "-s",
+                "Claude Code-credentials",
+                "-w",
+            ])
+            .output()
+            .ok()?;
+        if output.status.success() {
+            let json = String::from_utf8(output.stdout).ok()?;
+            return Some(json.trim().to_string());
+        }
+    }
+
+    None
 }
 
 fn plan_from_subscription(sub_type: &str) -> Option<String> {
