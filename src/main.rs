@@ -437,14 +437,12 @@ fn process_action(
                 }
             }
         }
-        Action::ToggleQSwitcher => {
-            match app.view_mode() {
-                ViewMode::QSwitcher => app.set_view_mode(ViewMode::List),
-                ViewMode::TervezoQSwitcher => app.set_view_mode(ViewMode::TervezoDetail),
-                ViewMode::TervezoDetail => app.set_view_mode(ViewMode::TervezoQSwitcher),
-                _ => app.set_view_mode(ViewMode::QSwitcher),
-            }
-        }
+        Action::ToggleQSwitcher => match app.view_mode() {
+            ViewMode::QSwitcher => app.set_view_mode(ViewMode::List),
+            ViewMode::TervezoQSwitcher => app.set_view_mode(ViewMode::TervezoDetail),
+            ViewMode::TervezoDetail => app.set_view_mode(ViewMode::TervezoQSwitcher),
+            _ => app.set_view_mode(ViewMode::QSwitcher),
+        },
         Action::TerminalQSwitcher => {
             app.set_view_mode(ViewMode::TerminalQSwitcher);
         }

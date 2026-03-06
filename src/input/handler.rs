@@ -424,13 +424,37 @@ mod tests {
     #[test]
     fn test_tervezo_detail_existing_keys_unchanged() {
         assert_eq!(handle_tervezo_detail_key(&key(KeyCode::Esc)), Action::Back);
-        assert_eq!(handle_tervezo_detail_key(&key(KeyCode::Tab)), Action::TervezoTabNext);
-        assert_eq!(handle_tervezo_detail_key(&key(KeyCode::Char('j'))), Action::TervezoScrollDown);
-        assert_eq!(handle_tervezo_detail_key(&key(KeyCode::Char('k'))), Action::TervezoScrollUp);
-        assert_eq!(handle_tervezo_detail_key(&key(KeyCode::Char('h'))), Action::TervezoTabPrev);
-        assert_eq!(handle_tervezo_detail_key(&key(KeyCode::Char('q'))), Action::Back);
-        assert_eq!(handle_tervezo_detail_key(&key(KeyCode::Char('s'))), Action::TervezoSsh);
-        assert_eq!(handle_tervezo_detail_key(&key(KeyCode::Char('r'))), Action::TervezoRefreshDetail);
-        assert_eq!(handle_tervezo_detail_key(&key(KeyCode::Char('a'))), Action::TervezoOpenActionMenu);
+        assert_eq!(
+            handle_tervezo_detail_key(&key(KeyCode::Tab)),
+            Action::TervezoTabNext
+        );
+        assert_eq!(
+            handle_tervezo_detail_key(&key(KeyCode::Char('j'))),
+            Action::TervezoScrollDown
+        );
+        assert_eq!(
+            handle_tervezo_detail_key(&key(KeyCode::Char('k'))),
+            Action::TervezoScrollUp
+        );
+        assert_eq!(
+            handle_tervezo_detail_key(&key(KeyCode::Char('h'))),
+            Action::TervezoTabPrev
+        );
+        assert_eq!(
+            handle_tervezo_detail_key(&key(KeyCode::Char('q'))),
+            Action::Back
+        );
+        assert_eq!(
+            handle_tervezo_detail_key(&key(KeyCode::Char('s'))),
+            Action::TervezoSsh
+        );
+        assert_eq!(
+            handle_tervezo_detail_key(&key(KeyCode::Char('r'))),
+            Action::TervezoRefreshDetail
+        );
+        assert_eq!(
+            handle_tervezo_detail_key(&key(KeyCode::Char('a'))),
+            Action::TervezoOpenActionMenu
+        );
     }
 }
