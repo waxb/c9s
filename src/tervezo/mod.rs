@@ -11,6 +11,6 @@ pub use fetcher::TervezoFetcher;
 pub use models::CreateImplementationRequest;
 pub use models::{
     FileChange, Implementation, ImplementationStatus, PrDetails, SshCredentials, StatusResponse,
-    TimelineMessage,
+    TimelineMessage, Workspace,
 };
 pub use sse::{SseMessage, SseStream};

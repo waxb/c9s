@@ -8,7 +8,7 @@ use crate::terminal::{EmbeddedTerminal, TerminalManager};
 use crate::tervezo::models::TestReport;
 use crate::tervezo::{
     FileChange, Implementation, ImplementationStatus, PrDetails, SseMessage, SseStream,
-    SshCredentials, StatusResponse, TervezoConfig, TervezoFetcher, TimelineMessage,
+    SshCredentials, StatusResponse, TervezoConfig, TervezoFetcher, TimelineMessage, Workspace,
 };
 use crate::usage::{UsageData, UsageFetcher};
 use anyhow::Result;
@@ -333,6 +333,7 @@ impl TervezoAction {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TervezoCreateField {
+    Workspace,
     Prompt,
     Mode,
     RepoUrl,
@@ -342,16 +343,18 @@ pub enum TervezoCreateField {
 impl TervezoCreateField {
     pub fn next(self) -> Self {
         match self {
+            Self::Workspace => Self::Prompt,
             Self::Prompt => Self::Mode,
             Self::Mode => Self::RepoUrl,
             Self::RepoUrl => Self::BaseBranch,
-            Self::BaseBranch => Self::Prompt,
+            Self::BaseBranch => Self::Workspace,
         }
     }
 
     pub fn prev(self) -> Self {
         match self {
-            Self::Prompt => Self::BaseBranch,
+            Self::Workspace => Self::BaseBranch,
+            Self::Prompt => Self::Workspace,
             Self::Mode => Self::Prompt,
             Self::RepoUrl => Self::Mode,
             Self::BaseBranch => Self::RepoUrl,
@@ -396,20 +399,33 @@ pub struct TervezoCreateState {
     pub base_branch: String,
     pub submitting: bool,
     pub error: Option<String>,
+    pub workspaces: Vec<Workspace>,
+    pub selected_workspace: usize,
+    pub workspaces_loading: bool,
+    pub workspaces_error: Option<String>,
 }
 
 impl TervezoCreateState {
     pub fn new() -> Self {
         Self {
-            active_field: TervezoCreateField::Prompt,
+            active_field: TervezoCreateField::Workspace,
             prompt: String::new(),
             mode: TervezoCreateMode::Feature,
             repo_url: String::new(),
             base_branch: "main".to_string(),
             submitting: false,
             error: None,
+            workspaces: Vec::new(),
+            selected_workspace: 0,
+            workspaces_loading: true,
+            workspaces_error: None,
         }
     }
+}
+
+pub enum WorkspaceMsg {
+    Loaded(Vec<Workspace>),
+    Error(String),
 }
 
 #[allow(clippy::large_enum_variant)]
@@ -690,6 +706,7 @@ pub struct App {
     pub tervezo_create: Option<TervezoCreateState>,
     tervezo_create_tx: Option<mpsc::Sender<TervezoCreateMsg>>,
     tervezo_create_rx: Option<mpsc::Receiver<TervezoCreateMsg>>,
+    workspace_rx: Option<mpsc::Receiver<WorkspaceMsg>>,
     pub new_session_menu: Option<NewSessionMenuState>,
     log_scroll: usize,
     side_panel_open: bool,
@@ -740,6 +757,7 @@ impl App {
             tervezo_create: None,
             tervezo_create_tx: None,
             tervezo_create_rx: None,
+            workspace_rx: None,
             new_session_menu: None,
             log_scroll: 0,
             side_panel_open: false,
@@ -939,6 +957,31 @@ impl App {
         self.tervezo_create_tx.clone()
     }
 
+    pub fn drain_workspace_messages(&mut self) -> Option<WorkspaceMsg> {
+        let rx = self.workspace_rx.as_ref()?;
+        rx.try_recv().ok()
+    }
+
+    fn spawn_workspace_fetch(&mut self) {
+        let config = match self.tervezo_config.as_ref() {
+            Some(c) => c.clone(),
+            None => return,
+        };
+        let (tx, rx) = mpsc::channel();
+        self.workspace_rx = Some(rx);
+        std::thread::spawn(move || {
+            let client = crate::tervezo::TervezoClient::new(&config);
+            match client.list_workspaces() {
+                Ok(workspaces) => {
+                    let _ = tx.send(WorkspaceMsg::Loaded(workspaces));
+                }
+                Err(e) => {
+                    let _ = tx.send(WorkspaceMsg::Error(e));
+                }
+            }
+        });
+    }
+
     pub fn start_sse_stream(&mut self, implementation_id: &str) {
         self.stop_sse_stream();
 
@@ -1105,7 +1148,6 @@ impl App {
         }
         if mode == ViewMode::TervezoCreateDialog {
             let mut state = TervezoCreateState::new();
-            // Pre-fill repo URL from git remote if available
             if let Ok(output) = std::process::Command::new("git")
                 .args(["remote", "get-url", "origin"])
                 .output()
@@ -1113,7 +1155,7 @@ impl App {
                 if output.status.success() {
                     let url = String::from_utf8_lossy(&output.stdout).trim().to_string();
                     if !url.is_empty() {
-                        state.repo_url = url;
+                        state.repo_url = extract_repo_name(&url);
                     }
                 }
             }
@@ -1121,10 +1163,12 @@ impl App {
             let (tx, rx) = mpsc::channel();
             self.tervezo_create_tx = Some(tx);
             self.tervezo_create_rx = Some(rx);
+            self.spawn_workspace_fetch();
         } else if self.tervezo_create.is_some() && mode != ViewMode::TervezoCreateDialog {
             self.tervezo_create = None;
             self.tervezo_create_tx = None;
             self.tervezo_create_rx = None;
+            self.workspace_rx = None;
         }
         self.view_mode = mode;
     }
@@ -1588,6 +1632,13 @@ fn parse_github_owner_repo(url: &str) -> Option<String> {
     None
 }
 
+fn extract_repo_name(url: &str) -> String {
+    if let Some(owner_repo) = parse_github_owner_repo(url) {
+        return owner_repo;
+    }
+    url.to_string()
+}
+
 fn check_ci_for_local(cwd: &std::path::Path, branch: &str) -> CiStatus {
     let output = std::process::Command::new("gh")
         .args([
@@ -1753,28 +1804,32 @@ mod tests {
 
     #[test]
     fn test_create_field_next_cycles_through_all_fields() {
-        let field = TervezoCreateField::Prompt;
-        let field = field.next(); // Mode
-        assert_eq!(field, TervezoCreateField::Mode);
-        let field = field.next(); // RepoUrl
-        assert_eq!(field, TervezoCreateField::RepoUrl);
-        let field = field.next(); // BaseBranch
-        assert_eq!(field, TervezoCreateField::BaseBranch);
-        let field = field.next(); // wraps to Prompt
+        let field = TervezoCreateField::Workspace;
+        let field = field.next();
         assert_eq!(field, TervezoCreateField::Prompt);
+        let field = field.next();
+        assert_eq!(field, TervezoCreateField::Mode);
+        let field = field.next();
+        assert_eq!(field, TervezoCreateField::RepoUrl);
+        let field = field.next();
+        assert_eq!(field, TervezoCreateField::BaseBranch);
+        let field = field.next();
+        assert_eq!(field, TervezoCreateField::Workspace);
     }
 
     #[test]
     fn test_create_field_prev_cycles_through_all_fields() {
-        let field = TervezoCreateField::Prompt;
-        let field = field.prev(); // wraps to BaseBranch
+        let field = TervezoCreateField::Workspace;
+        let field = field.prev();
         assert_eq!(field, TervezoCreateField::BaseBranch);
-        let field = field.prev(); // RepoUrl
+        let field = field.prev();
         assert_eq!(field, TervezoCreateField::RepoUrl);
-        let field = field.prev(); // Mode
+        let field = field.prev();
         assert_eq!(field, TervezoCreateField::Mode);
-        let field = field.prev(); // Prompt
+        let field = field.prev();
         assert_eq!(field, TervezoCreateField::Prompt);
+        let field = field.prev();
+        assert_eq!(field, TervezoCreateField::Workspace);
     }
 
     #[test]
@@ -1795,12 +1850,16 @@ mod tests {
     #[test]
     fn test_create_state_defaults() {
         let state = TervezoCreateState::new();
-        assert_eq!(state.active_field, TervezoCreateField::Prompt);
+        assert_eq!(state.active_field, TervezoCreateField::Workspace);
         assert_eq!(state.mode, TervezoCreateMode::Feature);
         assert!(state.prompt.is_empty());
         assert_eq!(state.base_branch, "main");
         assert!(!state.submitting);
         assert!(state.error.is_none());
+        assert!(state.workspaces.is_empty());
+        assert_eq!(state.selected_workspace, 0);
+        assert!(state.workspaces_loading);
+        assert!(state.workspaces_error.is_none());
     }
 
     #[test]
