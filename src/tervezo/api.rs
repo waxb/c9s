@@ -2,10 +2,10 @@ use crate::tlog;
 
 use super::config::TervezoConfig;
 use super::models::{
-    AnalysisResponse, ChangesResponse, CreatePrResponse, FileChange, Implementation, ListResponse,
-    PlanResponse, PrDetails, PromptRequest, PromptResponse, RestartResponse, SshCredentials,
-    StatusResponse, Step, StepsResponse, SuccessResponse, TestOutputResponse, TestReport,
-    TimelineMessage,
+    AnalysisResponse, ChangesResponse, CreateImplementationRequest, CreatePrResponse, FileChange,
+    Implementation, ListResponse, PlanResponse, PrDetails, PromptRequest, PromptResponse,
+    RestartResponse, SshCredentials, StatusResponse, Step, StepsResponse, SuccessResponse,
+    TestOutputResponse, TestReport, TimelineMessage,
 };
 
 fn simple_percent_encode(input: &str) -> String {
@@ -251,6 +251,18 @@ impl TervezoClient {
         .map_err(|e| format!("serialize prompt failed: {}", e))?;
         let resp = self.post(&url, &body)?;
         parse_json(&resp, "send_prompt")
+    }
+
+    #[allow(dead_code)]
+    pub fn create_implementation(
+        &self,
+        request: &CreateImplementationRequest,
+    ) -> Result<Implementation, String> {
+        let url = format!("{}/implementations", self.base_url);
+        let body = serde_json::to_string(request)
+            .map_err(|e| format!("serialize create request failed: {}", e))?;
+        let resp = self.post(&url, &body)?;
+        parse_json(&resp, "create_implementation")
     }
 
     fn get(&self, url: &str) -> Result<String, String> {

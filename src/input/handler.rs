@@ -62,6 +62,18 @@ pub enum Action {
     TervezoPromptBackspace,
     TervezoPromptSubmit,
     TervezoPromptCancel,
+    NewSessionMenuUp,
+    NewSessionMenuDown,
+    NewSessionMenuSelect,
+    NewSessionMenuClose,
+    FixCi,
+    TervezoCreateClose,
+    TervezoCreateFieldNext,
+    TervezoCreateFieldPrev,
+    TervezoCreateToggleMode,
+    TervezoCreateChar(char),
+    TervezoCreateBackspace,
+    TervezoCreateSubmit,
     ToggleLog,
     ClearLog,
     ToggleSideTerminal,
@@ -133,6 +145,8 @@ fn handle_key(key: &KeyEvent, mode: &ViewMode, side_focused: bool) -> Action {
         ViewMode::TervezoActionMenu => handle_tervezo_action_menu_key(key),
         ViewMode::TervezoConfirm => handle_tervezo_confirm_key(key),
         ViewMode::TervezoPromptInput => handle_tervezo_prompt_key(key),
+        ViewMode::TervezoCreateDialog => handle_tervezo_create_key(key),
+        ViewMode::NewSessionMenu => handle_new_session_menu_key(key),
         ViewMode::Log => handle_log_key(key),
         _ => handle_normal_key(key),
     }
@@ -154,6 +168,7 @@ fn handle_normal_key(key: &KeyEvent) -> Action {
         KeyCode::Char('s') => Action::CycleSort,
         KeyCode::Char('r') => Action::Refresh,
         KeyCode::Char('n') => Action::LaunchNew,
+        KeyCode::Char('c') => Action::FixCi,
         KeyCode::Char('L') => Action::ToggleLog,
         KeyCode::Char(' ') => Action::ToggleQSwitcher,
         KeyCode::Char(c @ '1'..='9') => Action::AttachByIndex((c as usize) - ('1' as usize)),
@@ -288,6 +303,30 @@ fn handle_tervezo_prompt_key(key: &KeyEvent) -> Action {
     }
 }
 
+fn handle_tervezo_create_key(key: &KeyEvent) -> Action {
+    let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
+    match key.code {
+        KeyCode::Esc => Action::TervezoCreateClose,
+        KeyCode::Tab => Action::TervezoCreateFieldNext,
+        KeyCode::BackTab => Action::TervezoCreateFieldPrev,
+        KeyCode::Enter if ctrl => Action::TervezoCreateSubmit,
+        KeyCode::Enter => Action::TervezoCreateToggleMode, // handled contextually in process_action
+        KeyCode::Backspace => Action::TervezoCreateBackspace,
+        KeyCode::Char(c) => Action::TervezoCreateChar(c),
+        _ => Action::None,
+    }
+}
+
+fn handle_new_session_menu_key(key: &KeyEvent) -> Action {
+    match key.code {
+        KeyCode::Char('j') | KeyCode::Down => Action::NewSessionMenuDown,
+        KeyCode::Char('k') | KeyCode::Up => Action::NewSessionMenuUp,
+        KeyCode::Enter => Action::NewSessionMenuSelect,
+        KeyCode::Esc | KeyCode::Char('q') => Action::NewSessionMenuClose,
+        _ => Action::None,
+    }
+}
+
 fn handle_log_key(key: &KeyEvent) -> Action {
     match key.code {
         KeyCode::Esc | KeyCode::Char('q') | KeyCode::Char('L') => Action::ToggleLog,
@@ -387,6 +426,15 @@ mod tests {
         }
     }
 
+    fn key_with_mod(code: KeyCode, modifiers: KeyModifiers) -> KeyEvent {
+        KeyEvent {
+            code,
+            modifiers,
+            kind: KeyEventKind::Press,
+            state: KeyEventState::NONE,
+        }
+    }
+
     #[test]
     fn test_tervezo_detail_space_opens_qswitcher() {
         let action = handle_tervezo_detail_key(&key(KeyCode::Char(' ')));
@@ -456,5 +504,54 @@ mod tests {
             handle_tervezo_detail_key(&key(KeyCode::Char('a'))),
             Action::TervezoOpenActionMenu
         );
+    }
+
+    #[test]
+    fn test_create_dialog_esc_closes() {
+        let action = handle_tervezo_create_key(&key(KeyCode::Esc));
+        assert_eq!(action, Action::TervezoCreateClose);
+    }
+
+    #[test]
+    fn test_create_dialog_tab_navigates_fields() {
+        assert_eq!(
+            handle_tervezo_create_key(&key(KeyCode::Tab)),
+            Action::TervezoCreateFieldNext
+        );
+        assert_eq!(
+            handle_tervezo_create_key(&key(KeyCode::BackTab)),
+            Action::TervezoCreateFieldPrev
+        );
+    }
+
+    #[test]
+    fn test_create_dialog_ctrl_enter_submits() {
+        let action =
+            handle_tervezo_create_key(&key_with_mod(KeyCode::Enter, KeyModifiers::CONTROL));
+        assert_eq!(action, Action::TervezoCreateSubmit);
+    }
+
+    #[test]
+    fn test_create_dialog_enter_toggles_mode() {
+        let action = handle_tervezo_create_key(&key(KeyCode::Enter));
+        assert_eq!(action, Action::TervezoCreateToggleMode);
+    }
+
+    #[test]
+    fn test_create_dialog_char_input() {
+        let action = handle_tervezo_create_key(&key(KeyCode::Char('a')));
+        assert_eq!(action, Action::TervezoCreateChar('a'));
+    }
+
+    #[test]
+    fn test_create_dialog_backspace() {
+        let action = handle_tervezo_create_key(&key(KeyCode::Backspace));
+        assert_eq!(action, Action::TervezoCreateBackspace);
+    }
+
+    #[test]
+    fn test_normal_mode_c_triggers_fix_ci() {
+        let action = handle_normal_key(&key(KeyCode::Char('c')));
+        assert_eq!(action, Action::FixCi);
     }
 }
