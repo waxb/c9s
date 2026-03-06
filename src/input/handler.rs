@@ -62,6 +62,14 @@ pub enum Action {
     TervezoPromptBackspace,
     TervezoPromptSubmit,
     TervezoPromptCancel,
+    TervezoCreateOpen,
+    TervezoCreateClose,
+    TervezoCreateFieldNext,
+    TervezoCreateFieldPrev,
+    TervezoCreateToggleMode,
+    TervezoCreateChar(char),
+    TervezoCreateBackspace,
+    TervezoCreateSubmit,
     ToggleLog,
     ClearLog,
     ToggleSideTerminal,
@@ -130,6 +138,7 @@ fn handle_key(key: &KeyEvent, mode: &ViewMode, side_focused: bool) -> Action {
         ViewMode::TervezoActionMenu => handle_tervezo_action_menu_key(key),
         ViewMode::TervezoConfirm => handle_tervezo_confirm_key(key),
         ViewMode::TervezoPromptInput => handle_tervezo_prompt_key(key),
+        ViewMode::TervezoCreateDialog => handle_tervezo_create_key(key),
         ViewMode::Log => handle_log_key(key),
         _ => handle_normal_key(key),
     }
@@ -151,6 +160,7 @@ fn handle_normal_key(key: &KeyEvent) -> Action {
         KeyCode::Char('s') => Action::CycleSort,
         KeyCode::Char('r') => Action::Refresh,
         KeyCode::Char('n') => Action::LaunchNew,
+        KeyCode::Char('c') => Action::TervezoCreateOpen,
         KeyCode::Char('L') => Action::ToggleLog,
         KeyCode::Char(' ') => Action::ToggleQSwitcher,
         KeyCode::Char(c @ '1'..='9') => Action::AttachByIndex((c as usize) - ('1' as usize)),
@@ -279,6 +289,20 @@ fn handle_tervezo_prompt_key(key: &KeyEvent) -> Action {
         KeyCode::Esc => Action::TervezoPromptCancel,
         KeyCode::Backspace => Action::TervezoPromptBackspace,
         KeyCode::Char(c) => Action::TervezoPromptChar(c),
+        _ => Action::None,
+    }
+}
+
+fn handle_tervezo_create_key(key: &KeyEvent) -> Action {
+    let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
+    match key.code {
+        KeyCode::Esc => Action::TervezoCreateClose,
+        KeyCode::Tab => Action::TervezoCreateFieldNext,
+        KeyCode::BackTab => Action::TervezoCreateFieldPrev,
+        KeyCode::Enter if ctrl => Action::TervezoCreateSubmit,
+        KeyCode::Enter => Action::TervezoCreateToggleMode, // handled contextually in process_action
+        KeyCode::Backspace => Action::TervezoCreateBackspace,
+        KeyCode::Char(c) => Action::TervezoCreateChar(c),
         _ => Action::None,
     }
 }

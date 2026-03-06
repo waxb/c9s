@@ -1060,6 +1060,10 @@ impl App {
         self.tervezo_config.is_some()
     }
 
+    pub fn tervezo_fetcher_ref(&self) -> Option<&TervezoFetcher> {
+        self.tervezo_fetcher.as_ref()
+    }
+
     pub fn remote_count(&self) -> usize {
         self.entries.iter().filter(|e| e.is_remote()).count()
     }
