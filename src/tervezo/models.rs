@@ -884,4 +884,162 @@ mod tests {
             Some("false")
         );
     }
+
+    #[test]
+    fn test_is_running_true_for_running_status() {
+        assert!(ImplementationStatus::Running.is_running());
+    }
+
+    #[test]
+    fn test_is_running_false_for_non_running_statuses() {
+        let non_running = [
+            ImplementationStatus::Pending,
+            ImplementationStatus::Queued,
+            ImplementationStatus::Completed,
+            ImplementationStatus::Merged,
+            ImplementationStatus::Failed,
+            ImplementationStatus::Stopped,
+            ImplementationStatus::Cancelled,
+        ];
+        for status in &non_running {
+            assert!(!status.is_running(), "{:?} should not be running", status);
+        }
+    }
+
+    #[test]
+    fn test_is_terminal_for_terminal_statuses() {
+        let terminal = [
+            ImplementationStatus::Completed,
+            ImplementationStatus::Merged,
+            ImplementationStatus::Failed,
+            ImplementationStatus::Stopped,
+            ImplementationStatus::Cancelled,
+        ];
+        for status in &terminal {
+            assert!(status.is_terminal(), "{:?} should be terminal", status);
+        }
+    }
+
+    #[test]
+    fn test_is_terminal_false_for_active_statuses() {
+        let active = [
+            ImplementationStatus::Pending,
+            ImplementationStatus::Queued,
+            ImplementationStatus::Running,
+        ];
+        for status in &active {
+            assert!(!status.is_terminal(), "{:?} should not be terminal", status);
+        }
+    }
+
+    #[test]
+    fn test_status_deserialization() {
+        let json = r#""running""#;
+        let status: ImplementationStatus = serde_json::from_str(json).unwrap();
+        assert!(status.is_running());
+
+        let json = r#""completed""#;
+        let status: ImplementationStatus = serde_json::from_str(json).unwrap();
+        assert!(status.is_terminal());
+        assert!(!status.is_running());
+    }
+
+    #[test]
+    fn test_status_label() {
+        assert_eq!(ImplementationStatus::Running.label(), "Running");
+        assert_eq!(ImplementationStatus::Completed.label(), "Done");
+        assert_eq!(ImplementationStatus::Failed.label(), "Failed");
+    }
+
+    #[test]
+    fn test_implementation_display_name_fallback() {
+        let impl_ = Implementation {
+            id: "test-id".to_string(),
+            title: None,
+            status: ImplementationStatus::Running,
+            branch: None,
+            repo_url: None,
+            created_at: None,
+            updated_at: None,
+            estimated_cost_usd: None,
+            total_tokens: None,
+            message_count: None,
+            pr_url: None,
+            pr_number: None,
+            pr_status: None,
+            mode: None,
+        };
+        assert_eq!(impl_.display_name(), "(untitled)");
+    }
+
+    #[test]
+    fn test_implementation_display_name_with_title() {
+        let impl_ = Implementation {
+            id: "test-id".to_string(),
+            title: Some("Fix bug".to_string()),
+            status: ImplementationStatus::Running,
+            branch: None,
+            repo_url: None,
+            created_at: None,
+            updated_at: None,
+            estimated_cost_usd: None,
+            total_tokens: None,
+            message_count: None,
+            pr_url: None,
+            pr_number: None,
+            pr_status: None,
+            mode: None,
+        };
+        assert_eq!(impl_.display_name(), "Fix bug");
+    }
+
+    #[test]
+    fn test_file_change_display_path_fallback() {
+        let fc = FileChange {
+            path: None,
+            diff: None,
+            status: None,
+            additions: None,
+            deletions: None,
+            changes: None,
+        };
+        assert_eq!(fc.display_path(), "(unknown)");
+    }
+
+    #[test]
+    fn test_pr_details_status() {
+        let pr = PrDetails {
+            url: None,
+            number: None,
+            status: Some("open".to_string()),
+            title: None,
+            mergeable: None,
+            merged: false,
+            draft: false,
+        };
+        assert!(pr.is_open());
+        assert!(!pr.is_closed());
+
+        let pr_closed = PrDetails {
+            url: None,
+            number: None,
+            status: Some("closed".to_string()),
+            title: None,
+            mergeable: None,
+            merged: false,
+            draft: false,
+        };
+        assert!(!pr_closed.is_open());
+        assert!(pr_closed.is_closed());
+    }
+
+    #[test]
+    fn test_format_duration_secs() {
+        assert_eq!(format_duration_secs(0.5), "< 1s");
+        assert_eq!(format_duration_secs(45.0), "45s");
+        assert_eq!(format_duration_secs(120.0), "2m");
+        assert_eq!(format_duration_secs(125.0), "2m 5s");
+        assert_eq!(format_duration_secs(3600.0), "1h");
+        assert_eq!(format_duration_secs(3720.0), "1h 2m");
+    }
 }

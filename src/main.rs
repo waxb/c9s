@@ -97,7 +97,9 @@ fn run_loop(
     app: &mut App,
 ) -> Result<()> {
     let refresh_interval = Duration::from_secs(5);
+    let detail_refresh_interval = Duration::from_secs(10);
     let mut last_refresh = Instant::now();
+    let mut last_detail_refresh = Instant::now();
     let mut needs_draw = true;
     let mut mouse_captured = true;
 
@@ -381,6 +383,25 @@ fn run_loop(
             app.refresh()?;
             last_refresh = Instant::now();
             needs_draw = true;
+        }
+
+        // Periodic re-fetch of detail panel data for running implementations
+        let in_detail_view = matches!(
+            app.view_mode(),
+            ViewMode::TervezoDetail
+                | ViewMode::TervezoActionMenu
+                | ViewMode::TervezoConfirm
+                | ViewMode::TervezoPromptInput
+        );
+        let is_running = app
+            .tervezo_detail
+            .as_ref()
+            .map(|s| s.implementation.status.is_running())
+            .unwrap_or(false);
+        if in_detail_view && is_running && last_detail_refresh.elapsed() >= detail_refresh_interval
+        {
+            trigger_tervezo_panel_refresh(app);
+            last_detail_refresh = Instant::now();
         }
 
         if app.should_quit() {
@@ -1015,6 +1036,90 @@ fn process_action(
     Ok(())
 }
 
+fn trigger_tervezo_panel_refresh(app: &mut App) {
+    let config = match app.tervezo_config() {
+        Some(c) => c.clone(),
+        None => return,
+    };
+    let tx = match app.tervezo_detail_tx.clone() {
+        Some(tx) => tx,
+        None => return,
+    };
+    let (impl_id, loading) = match app.tervezo_detail.as_ref() {
+        Some(state) => (state.implementation_id.clone(), state.loading.clone()),
+        None => return,
+    };
+
+    // Fetch all four panels + status, skipping any already in-flight
+    let tabs = [
+        TervezoTab::Plan,
+        TervezoTab::Analysis,
+        TervezoTab::Changes,
+        TervezoTab::TestOutput,
+    ];
+    for &tab in &tabs {
+        if loading.contains(&tab) {
+            continue;
+        }
+        if let Some(ref mut state) = app.tervezo_detail {
+            state.loading.insert(tab);
+        }
+        let tx = tx.clone();
+        let config = config.clone();
+        let impl_id = impl_id.clone();
+        std::thread::spawn(move || {
+            let client = TervezoClient::new(&config);
+            match tab {
+                TervezoTab::Plan => match client.get_plan(&impl_id) {
+                    Ok(plan) => {
+                        let _ = tx.send(TervezoDetailMsg::Plan(plan));
+                    }
+                    Err(e) => {
+                        let _ = tx.send(TervezoDetailMsg::Error(tab, e));
+                    }
+                },
+                TervezoTab::Analysis => match client.get_analysis(&impl_id) {
+                    Ok(analysis) => {
+                        let _ = tx.send(TervezoDetailMsg::Analysis(analysis));
+                    }
+                    Err(e) => {
+                        let _ = tx.send(TervezoDetailMsg::Error(tab, e));
+                    }
+                },
+                TervezoTab::Changes => match client.get_changes(&impl_id) {
+                    Ok(changes) => {
+                        let _ = tx.send(TervezoDetailMsg::Changes(changes));
+                    }
+                    Err(e) => {
+                        let _ = tx.send(TervezoDetailMsg::Error(tab, e));
+                    }
+                },
+                TervezoTab::TestOutput => match client.get_test_output(&impl_id) {
+                    Ok(reports) => {
+                        let _ = tx.send(TervezoDetailMsg::TestOutput(reports));
+                    }
+                    Err(e) => {
+                        let _ = tx.send(TervezoDetailMsg::Error(tab, e));
+                    }
+                },
+            }
+        });
+    }
+
+    // Also refresh status
+    {
+        let tx = tx.clone();
+        let config = config.clone();
+        let impl_id = impl_id.clone();
+        std::thread::spawn(move || {
+            let client = TervezoClient::new(&config);
+            if let Ok(status) = client.get_status(&impl_id) {
+                let _ = tx.send(TervezoDetailMsg::Status(status));
+            }
+        });
+    }
+}
+
 fn trigger_tervezo_initial_fetch(app: &mut App) {
     let config = match app.tervezo_config() {
         Some(c) => c.clone(),
@@ -1031,17 +1136,29 @@ fn trigger_tervezo_initial_fetch(app: &mut App) {
 
     if let Some(ref mut state) = app.tervezo_detail {
         state.loading.insert(TervezoTab::Plan);
+        state.loading.insert(TervezoTab::Analysis);
+        state.loading.insert(TervezoTab::Changes);
+        state.loading.insert(TervezoTab::TestOutput);
     }
 
-    // Fetch timeline + plan + status on background threads
+    // Fetch timeline + plan + status + analysis + changes + test output on background threads
     let tx_timeline = tx.clone();
     let tx_plan = tx.clone();
     let tx_status = tx.clone();
+    let tx_analysis = tx.clone();
+    let tx_changes = tx.clone();
+    let tx_test = tx.clone();
     let config_timeline = config.clone();
     let config_status = config.clone();
+    let config_analysis = config.clone();
+    let config_changes = config.clone();
+    let config_test = config.clone();
     let id_timeline = impl_id.clone();
     let id_plan = impl_id.clone();
     let id_status = impl_id.clone();
+    let id_analysis = impl_id.clone();
+    let id_changes = impl_id.clone();
+    let id_test = impl_id.clone();
 
     std::thread::spawn(move || {
         let client = TervezoClient::new(&config_timeline);
@@ -1072,6 +1189,45 @@ fn trigger_tervezo_initial_fetch(app: &mut App) {
         let client = TervezoClient::new(&config_status);
         if let Ok(status) = client.get_status(&id_status) {
             let _ = tx_status.send(TervezoDetailMsg::Status(status));
+        }
+    });
+
+    // Fetch analysis
+    std::thread::spawn(move || {
+        let client = TervezoClient::new(&config_analysis);
+        match client.get_analysis(&id_analysis) {
+            Ok(analysis) => {
+                let _ = tx_analysis.send(TervezoDetailMsg::Analysis(analysis));
+            }
+            Err(e) => {
+                let _ = tx_analysis.send(TervezoDetailMsg::Error(TervezoTab::Analysis, e));
+            }
+        }
+    });
+
+    // Fetch changes
+    std::thread::spawn(move || {
+        let client = TervezoClient::new(&config_changes);
+        match client.get_changes(&id_changes) {
+            Ok(changes) => {
+                let _ = tx_changes.send(TervezoDetailMsg::Changes(changes));
+            }
+            Err(e) => {
+                let _ = tx_changes.send(TervezoDetailMsg::Error(TervezoTab::Changes, e));
+            }
+        }
+    });
+
+    // Fetch test output
+    std::thread::spawn(move || {
+        let client = TervezoClient::new(&config_test);
+        match client.get_test_output(&id_test) {
+            Ok(reports) => {
+                let _ = tx_test.send(TervezoDetailMsg::TestOutput(reports));
+            }
+            Err(e) => {
+                let _ = tx_test.send(TervezoDetailMsg::Error(TervezoTab::TestOutput, e));
+            }
         }
     });
 
@@ -1139,20 +1295,26 @@ fn trigger_tervezo_tab_fetch(app: &mut App) {
         Some(tx) => tx,
         None => return,
     };
-    let (impl_id, tab, already_loaded) = match app.tervezo_detail.as_ref() {
+    let (impl_id, tab, skip_fetch) = match app.tervezo_detail.as_ref() {
         Some(state) => {
-            let loaded = match state.active_tab {
+            let already_loaded = match state.active_tab {
                 TervezoTab::Plan => state.plan_content.is_some(),
                 TervezoTab::Changes => state.changes.is_some(),
                 TervezoTab::TestOutput => state.test_output.is_some(),
                 TervezoTab::Analysis => state.analysis_content.is_some(),
             };
-            (state.implementation_id.clone(), state.active_tab, loaded)
+            // Always re-fetch for running implementations; lazy-load for completed ones
+            let skip = if state.implementation.status.is_running() {
+                false
+            } else {
+                already_loaded
+            };
+            (state.implementation_id.clone(), state.active_tab, skip)
         }
         None => return,
     };
 
-    if already_loaded {
+    if skip_fetch {
         return;
     }
 
