@@ -720,6 +720,38 @@ pub struct StatusStep {
     pub duration: Option<f64>,
     #[serde(default)]
     pub error: Option<String>,
+    #[serde(default)]
+    pub started_at: Option<DateTime<Utc>>,
+    #[serde(default)]
+    pub completed_at: Option<DateTime<Utc>>,
+}
+
+impl StatusStep {
+    pub fn elapsed_secs(&self) -> Option<f64> {
+        match (self.started_at, self.completed_at) {
+            (Some(start), Some(end)) => {
+                Some((end - start).num_milliseconds() as f64 / 1000.0)
+            }
+            (Some(start), None) if self.status == "running" => {
+                Some((Utc::now() - start).num_milliseconds() as f64 / 1000.0)
+            }
+            _ => self.duration.map(|d| d / 1000.0),
+        }
+    }
+}
+
+impl StatusResponse {
+    pub fn elapsed_secs(&self) -> Option<f64> {
+        match (self.started_at, self.completed_at) {
+            (Some(start), Some(end)) => {
+                Some((end - start).num_milliseconds() as f64 / 1000.0)
+            }
+            (Some(start), None) if self.status == "running" => {
+                Some((Utc::now() - start).num_milliseconds() as f64 / 1000.0)
+            }
+            _ => self.duration.map(|d| d / 1000.0),
+        }
+    }
 }
 
 // --- PR details ---
@@ -1275,5 +1307,83 @@ mod tests {
             approach: None,
             uncovered_paths: None,
         }
+    }
+
+    #[test]
+    fn test_status_step_elapsed_secs_from_timestamps() {
+        use chrono::Duration;
+        let start = Utc::now() - Duration::seconds(90);
+        let end = start + Duration::seconds(90);
+        let step = StatusStep {
+            name: "build".to_string(),
+            status: "completed".to_string(),
+            duration: Some(90000.0),
+            error: None,
+            started_at: Some(start),
+            completed_at: Some(end),
+        };
+        let elapsed = step.elapsed_secs().unwrap();
+        assert!((elapsed - 90.0).abs() < 0.1);
+    }
+
+    #[test]
+    fn test_status_step_elapsed_secs_running() {
+        use chrono::Duration;
+        let start = Utc::now() - Duration::seconds(5);
+        let step = StatusStep {
+            name: "test".to_string(),
+            status: "running".to_string(),
+            duration: None,
+            error: None,
+            started_at: Some(start),
+            completed_at: None,
+        };
+        let elapsed = step.elapsed_secs().unwrap();
+        assert!(elapsed >= 4.0 && elapsed <= 10.0);
+    }
+
+    #[test]
+    fn test_status_step_elapsed_secs_fallback_ms_conversion() {
+        let step = StatusStep {
+            name: "deploy".to_string(),
+            status: "completed".to_string(),
+            duration: Some(30000.0),
+            error: None,
+            started_at: None,
+            completed_at: None,
+        };
+        let elapsed = step.elapsed_secs().unwrap();
+        assert!((elapsed - 30.0).abs() < 0.01);
+    }
+
+    #[test]
+    fn test_status_step_elapsed_secs_none() {
+        let step = StatusStep {
+            name: "pending".to_string(),
+            status: "pending".to_string(),
+            duration: None,
+            error: None,
+            started_at: None,
+            completed_at: None,
+        };
+        assert!(step.elapsed_secs().is_none());
+    }
+
+    #[test]
+    fn test_status_response_elapsed_secs() {
+        use chrono::Duration;
+        let start = Utc::now() - Duration::seconds(120);
+        let end = start + Duration::seconds(120);
+        let resp = StatusResponse {
+            status: "completed".to_string(),
+            waiting_for_input: false,
+            current_step_name: None,
+            started_at: Some(start),
+            completed_at: Some(end),
+            duration: Some(120000.0),
+            steps: vec![],
+        };
+        let elapsed = resp.elapsed_secs().unwrap();
+        assert!((elapsed - 120.0).abs() < 0.1);
     }
 }

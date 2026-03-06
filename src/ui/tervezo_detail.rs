@@ -226,7 +226,7 @@ fn render_step_bar_line(steps: &[crate::tervezo::models::StatusStep]) -> Line<'s
         };
 
         let duration_str = step
-            .duration
+            .elapsed_secs()
             .map(|d| format!(" ({})", format_duration_secs(d)))
             .unwrap_or_default();
 
@@ -255,7 +255,7 @@ fn render_step_overlay(f: &mut Frame, state: &TervezoDetailState, area: Rect) {
     let mut lines: Vec<Line> = Vec::new();
 
     // Overall duration
-    if let Some(d) = status.duration {
+    if let Some(d) = status.elapsed_secs() {
         lines.push(Line::from(Span::styled(
             format!("  Total: {}", format_duration_secs(d)),
             Style::default().fg(Color::White),
@@ -273,7 +273,7 @@ fn render_step_overlay(f: &mut Frame, state: &TervezoDetailState, area: Rect) {
         };
 
         let duration_str = step
-            .duration
+            .elapsed_secs()
             .map(|d| format!("  {}", format_duration_secs(d)))
             .unwrap_or_default();
 
