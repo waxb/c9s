@@ -180,6 +180,9 @@ fn run_loop(
             needs_draw = true;
         }
 
+        app.drain_ci_statuses();
+        app.check_ci_statuses();
+
         if *app.view_mode() == ViewMode::Log && log::take_dirty() {
             needs_draw = true;
         }
@@ -950,6 +953,48 @@ fn process_action(
                     }
                     app::NewSessionOption::Tervezo => {
                         app.set_view_mode(ViewMode::TervezoCreateDialog);
+                    }
+                }
+            }
+        }
+        Action::FixCi => {
+            if let Some(entry) = app.selected_session().cloned() {
+                if let Some(imp) = entry.as_remote() {
+                    let impl_id = imp.id.clone();
+                    let ci_status = app.ci_statuses.get(&impl_id).cloned();
+                    if matches!(ci_status, Some(app::CiStatus::Failing)) {
+                        let branch = imp.branch.clone().unwrap_or_else(|| "unknown".to_string());
+                        let prompt = format!(
+                            "The CI pipeline is failing on branch `{}`. Please investigate the GitHub Actions CI failure logs at the repository, identify the root cause of the failing checks, and implement the necessary code fixes to make all CI checks pass. Focus on the actual errors in the logs rather than guessing.",
+                            branch
+                        );
+                        if let Some(config) = app.tervezo_config() {
+                            let config = config.clone();
+                            std::thread::spawn(move || {
+                                let client = TervezoClient::new(&config);
+                                match client.send_prompt(&impl_id, &prompt) {
+                                    Ok(resp) => {
+                                        if resp.sent {
+                                            tlog!(
+                                                info,
+                                                "CI fix prompt sent for {} (branch: {})",
+                                                impl_id,
+                                                branch
+                                            );
+                                        } else {
+                                            tlog!(
+                                                warn,
+                                                "CI fix prompt was not accepted for {}",
+                                                impl_id
+                                            );
+                                        }
+                                    }
+                                    Err(e) => {
+                                        tlog!(error, "Failed to send CI fix prompt: {}", e);
+                                    }
+                                }
+                            });
+                        }
                     }
                 }
             }
