@@ -422,6 +422,7 @@ pub enum TervezoDetailMsg {
     Timeline(Vec<TimelineMessage>),
     #[allow(dead_code)]
     TimelineAppend(TimelineMessage),
+    TimelineError(String),
     Plan(String),
     Analysis(String),
     Changes(Vec<FileChange>),
@@ -441,6 +442,7 @@ pub struct TervezoDetailState {
     pub implementation: Implementation,
     pub active_tab: TervezoTab,
     pub timeline: Vec<TimelineMessage>,
+    pub timeline_error: Option<String>,
     pub timeline_scroll: usize,
     pub plan_content: Option<String>,
     pub analysis_content: Option<String>,
@@ -484,6 +486,7 @@ impl TervezoDetailState {
             implementation,
             active_tab: TervezoTab::Plan,
             timeline: Vec::new(),
+            timeline_error: None,
             timeline_scroll: 0,
             plan_content: None,
             analysis_content: None,
@@ -801,6 +804,11 @@ impl App {
                 match msg {
                     TervezoDetailMsg::Timeline(msgs) => {
                         state.timeline = msgs;
+                        state.timeline_error = None;
+                        changed = true;
+                    }
+                    TervezoDetailMsg::TimelineError(err) => {
+                        state.timeline_error = Some(err);
                         changed = true;
                     }
                     TervezoDetailMsg::TimelineAppend(msg) => {

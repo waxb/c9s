@@ -328,11 +328,26 @@ fn render_timeline_panel(f: &mut Frame, state: &TervezoDetailState, area: Rect) 
     f.render_widget(block, area);
 
     if state.timeline.is_empty() {
-        let loading = Paragraph::new(Line::from(Span::styled(
-            "  Loading timeline...",
-            Theme::tzv_loading(),
-        )));
-        f.render_widget(loading, inner);
+        if let Some(ref err) = state.timeline_error {
+            let lines = vec![
+                Line::from(Span::styled(
+                    format!("  Error loading timeline: {}", err),
+                    Style::default().fg(Color::Red),
+                )),
+                Line::from(Span::styled(
+                    "  Press 'r' to retry",
+                    Style::default().fg(Color::DarkGray),
+                )),
+            ];
+            let paragraph = Paragraph::new(lines);
+            f.render_widget(paragraph, inner);
+        } else {
+            let loading = Paragraph::new(Line::from(Span::styled(
+                "  Loading timeline...",
+                Theme::tzv_loading(),
+            )));
+            f.render_widget(loading, inner);
+        }
         return;
     }
 
@@ -452,7 +467,18 @@ fn render_timeline_panel(f: &mut Frame, state: &TervezoDetailState, area: Rect) 
         // Inline diff/content for file_change messages
         if msg.has_inline_code() {
             if let Some(ref diff) = msg.diff {
-                for diff_line in diff.lines() {
+                let total_diff_lines = diff.lines().count();
+                for (i, diff_line) in diff.lines().enumerate() {
+                    if i >= 30 {
+                        lines.push(Line::from(Span::styled(
+                            format!(
+                                "      ... ({} more lines)",
+                                total_diff_lines.saturating_sub(30)
+                            ),
+                            Style::default().fg(Color::DarkGray),
+                        )));
+                        break;
+                    }
                     let style = if diff_line.starts_with("+++") || diff_line.starts_with("---") {
                         Style::default()
                             .fg(Color::White)
@@ -473,12 +499,13 @@ fn render_timeline_panel(f: &mut Frame, state: &TervezoDetailState, area: Rect) 
                 }
             } else if let Some(ref content) = msg.content {
                 // New file: render content as additions (limit to 30 lines)
+                let total_content_lines = content.lines().count();
                 for (i, content_line) in content.lines().enumerate() {
                     if i >= 30 {
                         lines.push(Line::from(Span::styled(
                             format!(
                                 "      ... ({} more lines)",
-                                content.lines().count().saturating_sub(30)
+                                total_content_lines.saturating_sub(30)
                             ),
                             Style::default().fg(Color::DarkGray),
                         )));
