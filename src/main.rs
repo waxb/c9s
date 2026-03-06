@@ -763,6 +763,17 @@ fn process_action(
                 if action == TervezoAction::SendPrompt {
                     // Open prompt input instead
                     app.set_view_mode(ViewMode::TervezoPromptInput);
+                } else if action == TervezoAction::ViewPrInBrowser {
+                    // Open PR URL in default browser (local operation, no API call)
+                    if let Some(url) = app.tervezo_detail.as_ref().and_then(|s| {
+                        s.pr_details
+                            .as_ref()
+                            .and_then(|pr| pr.url.clone())
+                            .or_else(|| s.implementation.pr_url.clone())
+                    }) {
+                        let _ = open::that(&url);
+                    }
+                    app.set_view_mode(ViewMode::TervezoDetail);
                 } else if action.is_destructive() {
                     if let Some(ref mut state) = app.tervezo_detail {
                         state.confirm_action = Some(action);
@@ -1405,6 +1416,10 @@ fn execute_tervezo_action(app: &mut App, action: TervezoAction) {
             TervezoAction::SendPrompt => {
                 // Should not reach here — handled via prompt input mode
                 Ok("(use prompt input)".to_string())
+            }
+            TervezoAction::ViewPrInBrowser => {
+                // Handled synchronously in action menu select
+                Ok("(handled locally)".to_string())
             }
         };
 
