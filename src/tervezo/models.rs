@@ -790,6 +790,32 @@ pub struct CreateImplementationRequest {
     pub base_branch: Option<String>,
 }
 
+// --- Duration formatting ---
+
+pub fn format_duration_secs(secs: f64) -> String {
+    if secs < 1.0 {
+        "< 1s".to_string()
+    } else if secs < 60.0 {
+        format!("{}s", secs as u64)
+    } else if secs < 3600.0 {
+        let m = (secs / 60.0) as u64;
+        let s = (secs % 60.0) as u64;
+        if s == 0 {
+            format!("{}m", m)
+        } else {
+            format!("{}m {}s", m, s)
+        }
+    } else {
+        let h = (secs / 3600.0) as u64;
+        let m = ((secs % 3600.0) / 60.0) as u64;
+        if m == 0 {
+            format!("{}h", h)
+        } else {
+            format!("{}h {}m", h, m)
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -823,37 +849,6 @@ mod tests {
         let json: serde_json::Value = serde_json::to_value(&req).unwrap();
         assert!(json.get("baseBranch").is_none());
     }
-}
-
-// --- Duration formatting ---
-
-pub fn format_duration_secs(secs: f64) -> String {
-    if secs < 1.0 {
-        "< 1s".to_string()
-    } else if secs < 60.0 {
-        format!("{}s", secs as u64)
-    } else if secs < 3600.0 {
-        let m = (secs / 60.0) as u64;
-        let s = (secs % 60.0) as u64;
-        if s == 0 {
-            format!("{}m", m)
-        } else {
-            format!("{}m {}s", m, s)
-        }
-    } else {
-        let h = (secs / 3600.0) as u64;
-        let m = ((secs % 3600.0) / 60.0) as u64;
-        if m == 0 {
-            format!("{}h", h)
-        } else {
-            format!("{}h {}m", h, m)
-        }
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
 
     #[test]
     fn test_added_deserializes_critical_path_string() {
