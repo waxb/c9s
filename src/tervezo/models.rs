@@ -642,7 +642,7 @@ pub struct TestAdded {
     #[serde(default)]
     pub count: Option<u32>,
     #[serde(default)]
-    pub critical_path: Option<bool>,
+    pub critical_path: Option<String>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -800,5 +800,42 @@ pub fn format_duration_secs(secs: f64) -> String {
         } else {
             format!("{}h {}m", h, m)
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_added_deserializes_critical_path_string() {
+        let json = r#"{"file": "test.rs", "count": 3, "criticalPath": "true"}"#;
+        let ta: TestAdded = serde_json::from_str(json).unwrap();
+        assert_eq!(ta.critical_path, Some("true".to_string()));
+        assert_eq!(ta.file, Some("test.rs".to_string()));
+        assert_eq!(ta.count, Some(3));
+    }
+
+    #[test]
+    fn test_added_deserializes_without_critical_path() {
+        let json = r#"{"file": "test.rs", "count": 1}"#;
+        let ta: TestAdded = serde_json::from_str(json).unwrap();
+        assert_eq!(ta.critical_path, None);
+    }
+
+    #[test]
+    fn test_report_deserializes_with_string_critical_path() {
+        let json = r#"{
+            "summary": {"totalTests": 5, "passRate": "80%"},
+            "testsAdded": [
+                {"file": "auth.rs", "count": 2, "criticalPath": "true"},
+                {"file": "utils.rs", "count": 1, "criticalPath": "false"}
+            ],
+            "uncoveredPaths": []
+        }"#;
+        let report: TestReport = serde_json::from_str(json).unwrap();
+        assert_eq!(report.tests_added.len(), 2);
+        assert_eq!(report.tests_added[0].critical_path.as_deref(), Some("true"));
+        assert_eq!(report.tests_added[1].critical_path.as_deref(), Some("false"));
     }
 }

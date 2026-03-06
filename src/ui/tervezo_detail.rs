@@ -876,12 +876,12 @@ fn build_test_report_lines(reports: &[TestReport]) -> Vec<Line<'static>> {
             for test in &report.tests_added {
                 let file = test.file.as_deref().unwrap_or("(unknown)");
                 let count_str = test.count.map(|c| format!(" (+{})", c)).unwrap_or_default();
-                let critical_str = if test.critical_path == Some(true) {
+                let critical_str = if test.critical_path.as_deref() == Some("true") {
                     " critical"
                 } else {
                     ""
                 };
-                let critical_style = if test.critical_path == Some(true) {
+                let critical_style = if test.critical_path.as_deref() == Some("true") {
                     Style::default().fg(Color::Yellow)
                 } else {
                     Style::default().fg(Color::DarkGray)
