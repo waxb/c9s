@@ -29,7 +29,38 @@ pub enum ViewMode {
     TervezoConfirm,
     TervezoPromptInput,
     TervezoCreateDialog,
+    NewSessionMenu,
     Log,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum NewSessionOption {
+    Local,
+    Tervezo,
+}
+
+impl NewSessionOption {
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Local => "Local session",
+            Self::Tervezo => "Tervezo session",
+        }
+    }
+}
+
+pub struct NewSessionMenuState {
+    pub items: Vec<NewSessionOption>,
+    pub cursor: usize,
+}
+
+impl NewSessionMenuState {
+    pub fn new(has_tervezo: bool) -> Self {
+        let mut items = vec![NewSessionOption::Local];
+        if has_tervezo {
+            items.push(NewSessionOption::Tervezo);
+        }
+        Self { items, cursor: 0 }
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -630,6 +661,7 @@ pub struct App {
     pub tervezo_create: Option<TervezoCreateState>,
     tervezo_create_tx: Option<mpsc::Sender<TervezoCreateMsg>>,
     tervezo_create_rx: Option<mpsc::Receiver<TervezoCreateMsg>>,
+    pub new_session_menu: Option<NewSessionMenuState>,
     log_scroll: usize,
     side_panel_open: bool,
     side_panel_focused: bool,
@@ -674,6 +706,7 @@ impl App {
             tervezo_create: None,
             tervezo_create_tx: None,
             tervezo_create_rx: None,
+            new_session_menu: None,
             log_scroll: 0,
             side_panel_open: false,
             side_panel_focused: false,
@@ -1013,6 +1046,11 @@ impl App {
             self.tervezo_detail_tx = None;
             self.tervezo_detail_rx = None;
             self.stop_sse_stream();
+        }
+        if mode == ViewMode::NewSessionMenu {
+            self.new_session_menu = Some(NewSessionMenuState::new(self.has_tervezo()));
+        } else if self.new_session_menu.is_some() {
+            self.new_session_menu = None;
         }
         if mode == ViewMode::TervezoCreateDialog {
             let mut state = TervezoCreateState::new();

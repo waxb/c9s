@@ -244,6 +244,10 @@ fn run_loop(
                         ui::render_session_list(f, app, area);
                         ui::render_tervezo_create_dialog(f, &app.tervezo_create, area);
                     }
+                    ViewMode::NewSessionMenu => {
+                        ui::render_session_list(f, app, area);
+                        ui::render_new_session_menu(f, &app.new_session_menu, area);
+                    }
                     ViewMode::QSwitcher => {
                         ui::render_session_list(f, app, area);
                         ui::render_qswitcher(f, app, area);
@@ -546,7 +550,11 @@ fn process_action(
             let _ = app.refresh();
         }
         Action::LaunchNew => {
-            app.set_view_mode(ViewMode::Command);
+            if app.has_tervezo() {
+                app.set_view_mode(ViewMode::NewSessionMenu);
+            } else {
+                app.set_view_mode(ViewMode::Command);
+            }
         }
         Action::CommandInput(c) => app.command_push(c),
         Action::CommandBackspace => app.command_pop(),
@@ -830,11 +838,6 @@ fn process_action(
             }
             app.set_view_mode(ViewMode::TervezoDetail);
         }
-        Action::TervezoCreateOpen => {
-            if app.has_tervezo() {
-                app.set_view_mode(ViewMode::TervezoCreateDialog);
-            }
-        }
         Action::TervezoCreateClose => {
             app.set_view_mode(ViewMode::List);
         }
@@ -920,6 +923,35 @@ fn process_action(
         Action::SideTerminalInput(bytes) => {
             if let Some(st) = app.side_terminal_mut() {
                 let _ = st.write_input(&bytes);
+            }
+        }
+        Action::NewSessionMenuClose => {
+            app.set_view_mode(ViewMode::List);
+        }
+        Action::NewSessionMenuUp => {
+            if let Some(ref mut state) = app.new_session_menu {
+                if state.cursor > 0 {
+                    state.cursor -= 1;
+                }
+            }
+        }
+        Action::NewSessionMenuDown => {
+            if let Some(ref mut state) = app.new_session_menu {
+                if state.cursor + 1 < state.items.len() {
+                    state.cursor += 1;
+                }
+            }
+        }
+        Action::NewSessionMenuSelect => {
+            if let Some(ref state) = app.new_session_menu {
+                match state.items[state.cursor] {
+                    app::NewSessionOption::Local => {
+                        app.set_view_mode(ViewMode::Command);
+                    }
+                    app::NewSessionOption::Tervezo => {
+                        app.set_view_mode(ViewMode::TervezoCreateDialog);
+                    }
+                }
             }
         }
         Action::None => {}
