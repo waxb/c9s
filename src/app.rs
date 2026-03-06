@@ -311,7 +311,6 @@ impl TervezoCreateField {
             Self::BaseBranch => Self::RepoUrl,
         }
     }
-
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

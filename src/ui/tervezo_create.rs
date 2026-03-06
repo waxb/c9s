@@ -16,11 +16,7 @@ fn centered_rect(width: u16, height: u16, area: Rect) -> Rect {
     horizontal[0]
 }
 
-pub fn render_tervezo_create_dialog(
-    f: &mut Frame,
-    state: &Option<TervezoCreateState>,
-    area: Rect,
-) {
+pub fn render_tervezo_create_dialog(f: &mut Frame, state: &Option<TervezoCreateState>, area: Rect) {
     let state = match state {
         Some(s) => s,
         None => return,
@@ -45,7 +41,11 @@ pub fn render_tervezo_create_dialog(
     } else {
         Style::default().fg(Color::DarkGray)
     };
-    let prompt_display = format_field_value(&state.prompt, inner_width, active == TervezoCreateField::Prompt);
+    let prompt_display = format_field_value(
+        &state.prompt,
+        inner_width,
+        active == TervezoCreateField::Prompt,
+    );
     lines.push(Line::from(vec![
         Span::styled(" ", prompt_border),
         Span::styled(prompt_display, Style::default().fg(Color::White)),
@@ -75,7 +75,11 @@ pub fn render_tervezo_create_dialog(
     // Repository field
     let repo_style = field_label_style(active == TervezoCreateField::RepoUrl);
     lines.push(Line::from(Span::styled(" Repository:", repo_style)));
-    let repo_display = format_field_value(&state.repo_url, inner_width, active == TervezoCreateField::RepoUrl);
+    let repo_display = format_field_value(
+        &state.repo_url,
+        inner_width,
+        active == TervezoCreateField::RepoUrl,
+    );
     lines.push(Line::from(vec![
         Span::styled(" ", Style::default()),
         Span::styled(repo_display, Style::default().fg(Color::White)),
@@ -85,7 +89,11 @@ pub fn render_tervezo_create_dialog(
     // Base branch field
     let branch_style = field_label_style(active == TervezoCreateField::BaseBranch);
     lines.push(Line::from(Span::styled(" Base branch:", branch_style)));
-    let branch_display = format_field_value(&state.base_branch, inner_width, active == TervezoCreateField::BaseBranch);
+    let branch_display = format_field_value(
+        &state.base_branch,
+        inner_width,
+        active == TervezoCreateField::BaseBranch,
+    );
     lines.push(Line::from(vec![
         Span::styled(" ", Style::default()),
         Span::styled(branch_display, Style::default().fg(Color::White)),
@@ -112,11 +120,26 @@ pub fn render_tervezo_create_dialog(
     // Footer hints
     lines.push(Line::from(""));
     lines.push(Line::from(vec![
-        Span::styled(" Tab", Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)),
+        Span::styled(
+            " Tab",
+            Style::default()
+                .fg(Color::Cyan)
+                .add_modifier(Modifier::BOLD),
+        ),
         Span::styled(": next  ", Style::default().fg(Color::DarkGray)),
-        Span::styled("Ctrl+Enter", Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)),
+        Span::styled(
+            "Ctrl+Enter",
+            Style::default()
+                .fg(Color::Cyan)
+                .add_modifier(Modifier::BOLD),
+        ),
         Span::styled(": submit  ", Style::default().fg(Color::DarkGray)),
-        Span::styled("Esc", Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)),
+        Span::styled(
+            "Esc",
+            Style::default()
+                .fg(Color::Cyan)
+                .add_modifier(Modifier::BOLD),
+        ),
         Span::styled(": cancel", Style::default().fg(Color::DarkGray)),
     ]));
 
