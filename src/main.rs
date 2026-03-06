@@ -217,6 +217,10 @@ fn run_loop(
                             ui::render_tervezo_detail_with_prompt(f, state, area);
                         }
                     }
+                    ViewMode::TervezoCreateDialog => {
+                        ui::render_session_list(f, app, area);
+                        // Dialog overlay rendered by ui::render_tervezo_create_dialog (added later)
+                    }
                     ViewMode::QSwitcher => {
                         ui::render_session_list(f, app, area);
                         ui::render_qswitcher(f, app, area);

@@ -28,6 +28,7 @@ pub enum ViewMode {
     TervezoActionMenu,
     TervezoConfirm,
     TervezoPromptInput,
+    TervezoCreateDialog,
     Log,
 }
 
@@ -282,6 +283,105 @@ impl TervezoAction {
     pub fn is_destructive(self) -> bool {
         matches!(self, Self::MergePr | Self::ClosePr | Self::Restart)
     }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TervezoCreateField {
+    Prompt,
+    Mode,
+    RepoUrl,
+    BaseBranch,
+}
+
+impl TervezoCreateField {
+    pub fn next(self) -> Self {
+        match self {
+            Self::Prompt => Self::Mode,
+            Self::Mode => Self::RepoUrl,
+            Self::RepoUrl => Self::BaseBranch,
+            Self::BaseBranch => Self::Prompt,
+        }
+    }
+
+    pub fn prev(self) -> Self {
+        match self {
+            Self::Prompt => Self::BaseBranch,
+            Self::Mode => Self::Prompt,
+            Self::RepoUrl => Self::Mode,
+            Self::BaseBranch => Self::RepoUrl,
+        }
+    }
+
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Prompt => "Prompt",
+            Self::Mode => "Mode",
+            Self::RepoUrl => "Repository",
+            Self::BaseBranch => "Base branch",
+        }
+    }
+
+    pub fn is_text_field(self) -> bool {
+        matches!(self, Self::Prompt | Self::RepoUrl | Self::BaseBranch)
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TervezoCreateMode {
+    Feature,
+    BugFix,
+}
+
+impl TervezoCreateMode {
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Feature => "Feature",
+            Self::BugFix => "Bug Fix",
+        }
+    }
+
+    pub fn toggle(self) -> Self {
+        match self {
+            Self::Feature => Self::BugFix,
+            Self::BugFix => Self::Feature,
+        }
+    }
+
+    pub fn api_value(self) -> &'static str {
+        match self {
+            Self::Feature => "feature",
+            Self::BugFix => "bug_fix",
+        }
+    }
+}
+
+pub struct TervezoCreateState {
+    pub active_field: TervezoCreateField,
+    pub prompt: String,
+    pub mode: TervezoCreateMode,
+    pub repo_url: String,
+    pub base_branch: String,
+    pub submitting: bool,
+    pub error: Option<String>,
+}
+
+impl TervezoCreateState {
+    pub fn new() -> Self {
+        Self {
+            active_field: TervezoCreateField::Prompt,
+            prompt: String::new(),
+            mode: TervezoCreateMode::Feature,
+            repo_url: String::new(),
+            base_branch: "main".to_string(),
+            submitting: false,
+            error: None,
+        }
+    }
+}
+
+pub enum TervezoCreateMsg {
+    Success(Implementation),
+    Error(String),
 }
 
 #[allow(clippy::large_enum_variant)]
@@ -539,6 +639,9 @@ pub struct App {
     ssh_cache: HashMap<String, SshCredentials>,
     sse_stream: Option<SseStream>,
     sse_rx: Option<mpsc::Receiver<SseMessage>>,
+    pub tervezo_create: Option<TervezoCreateState>,
+    tervezo_create_tx: Option<mpsc::Sender<TervezoCreateMsg>>,
+    tervezo_create_rx: Option<mpsc::Receiver<TervezoCreateMsg>>,
     log_scroll: usize,
     side_panel_open: bool,
     side_panel_focused: bool,
@@ -580,6 +683,9 @@ impl App {
             ssh_cache: HashMap::new(),
             sse_stream: None,
             sse_rx: None,
+            tervezo_create: None,
+            tervezo_create_tx: None,
+            tervezo_create_rx: None,
             log_scroll: 0,
             side_panel_open: false,
             side_panel_focused: false,
@@ -758,6 +864,15 @@ impl App {
         changed
     }
 
+    pub fn drain_tervezo_create_messages(&mut self) -> Option<TervezoCreateMsg> {
+        let rx = self.tervezo_create_rx.as_ref()?;
+        rx.try_recv().ok()
+    }
+
+    pub fn tervezo_create_tx(&self) -> Option<mpsc::Sender<TervezoCreateMsg>> {
+        self.tervezo_create_tx.clone()
+    }
+
     pub fn start_sse_stream(&mut self, implementation_id: &str) {
         self.stop_sse_stream();
 
@@ -886,6 +1001,7 @@ impl App {
                 | ViewMode::TervezoActionMenu
                 | ViewMode::TervezoConfirm
                 | ViewMode::TervezoPromptInput
+                | ViewMode::TervezoCreateDialog
         ) {
             self.detail_config = None;
             self.detail_items.clear();
@@ -909,6 +1025,29 @@ impl App {
             self.tervezo_detail_tx = None;
             self.tervezo_detail_rx = None;
             self.stop_sse_stream();
+        }
+        if mode == ViewMode::TervezoCreateDialog {
+            let mut state = TervezoCreateState::new();
+            // Pre-fill repo URL from git remote if available
+            if let Ok(output) = std::process::Command::new("git")
+                .args(["remote", "get-url", "origin"])
+                .output()
+            {
+                if output.status.success() {
+                    let url = String::from_utf8_lossy(&output.stdout).trim().to_string();
+                    if !url.is_empty() {
+                        state.repo_url = url;
+                    }
+                }
+            }
+            self.tervezo_create = Some(state);
+            let (tx, rx) = mpsc::channel();
+            self.tervezo_create_tx = Some(tx);
+            self.tervezo_create_rx = Some(rx);
+        } else if self.tervezo_create.is_some() && mode != ViewMode::TervezoCreateDialog {
+            self.tervezo_create = None;
+            self.tervezo_create_tx = None;
+            self.tervezo_create_rx = None;
         }
         self.view_mode = mode;
     }
