@@ -31,6 +31,7 @@ fn parse_json<T: serde::de::DeserializeOwned>(body: &str, label: &str) -> Result
 }
 
 const REQUEST_TIMEOUT_SECS: u64 = 10;
+const TIMELINE_TIMEOUT_SECS: u64 = 60;
 
 pub struct TervezoClient {
     agent: ureq::Agent,
@@ -84,7 +85,8 @@ impl TervezoClient {
             url.push_str(&format!("?after={}", cursor));
         }
 
-        let resp = self.get(&url)?;
+        // Use a longer timeout for timeline — payloads can be very large
+        let resp = self.get_with_timeout(&url, TIMELINE_TIMEOUT_SECS)?;
 
         // Parse the envelope, then deserialize each message individually
         // so one bad message doesn't kill the entire timeline.
@@ -263,6 +265,47 @@ impl TervezoClient {
             .map_err(|e| format!("serialize create request failed: {}", e))?;
         let resp = self.post(&url, &body)?;
         parse_json(&resp, "create_implementation")
+    }
+
+    fn get_with_timeout(&self, url: &str, timeout_secs: u64) -> Result<String, String> {
+        let agent = ureq::Agent::config_builder()
+            .timeout_global(Some(std::time::Duration::from_secs(timeout_secs)))
+            .http_status_as_error(false)
+            .build()
+            .new_agent();
+
+        tlog!(info, "GET {} (timeout={}s)", url, timeout_secs);
+        let resp = agent
+            .get(url)
+            .header("Authorization", &format!("Bearer {}", self.api_key))
+            .header("User-Agent", "c9s/0.1")
+            .header("Accept", "application/json")
+            .call()
+            .map_err(|e| {
+                tlog!(error, "request error: {}", e);
+                format!("request failed: {}", e)
+            })?;
+
+        let status = resp.status();
+        tlog!(info, "response: HTTP {}", status);
+
+        if status != 200 {
+            let body = resp
+                .into_body()
+                .read_to_string()
+                .unwrap_or_else(|_| "(unreadable body)".to_string());
+            tlog!(error, "HTTP {}: {}", status, body);
+            return Err(format!("HTTP {}: {}", status, body));
+        }
+
+        let body = resp
+            .into_body()
+            .read_to_string()
+            .map_err(|e| format!("read body failed: {}", e))?;
+
+        tlog!(info, "response body: {} bytes", body.len());
+
+        Ok(body)
     }
 
     fn get(&self, url: &str) -> Result<String, String> {

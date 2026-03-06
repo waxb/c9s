@@ -224,7 +224,13 @@ pub struct TimelineMessage {
 impl TimelineMessage {
     /// Best-effort display text: check all known text fields in priority order.
     /// Returns owned string because tool_call messages need composing.
+    /// Truncated to 200 chars — the timeline shows one line per message.
     pub fn display_text(&self) -> String {
+        let raw = self.display_text_raw();
+        truncate_display(&raw, 200)
+    }
+
+    fn display_text_raw(&self) -> String {
         // status_change: use reason
         if let Some(ref reason) = self.reason {
             return reason.clone();
@@ -503,6 +509,21 @@ impl TimelineMessage {
     pub fn is_assistant_text(&self) -> bool {
         self.msg_type.as_deref() == Some("assistant_text")
     }
+}
+
+fn truncate_display(s: &str, max: usize) -> String {
+    // Take only the first line to avoid multi-line display text
+    let first_line = s.lines().next().unwrap_or("");
+    if first_line.len() <= max {
+        return first_line.to_string();
+    }
+    let end = first_line
+        .char_indices()
+        .map(|(i, _)| i)
+        .take_while(|&i| i <= max.saturating_sub(3))
+        .last()
+        .unwrap_or(0);
+    format!("{}...", &first_line[..end])
 }
 
 /// File changes are loosely typed in the spec (`anyOf: [{}, null]`).

@@ -1150,6 +1150,7 @@ fn trigger_tervezo_initial_fetch(app: &mut App) {
         state.loading.insert(TervezoTab::Analysis);
         state.loading.insert(TervezoTab::Changes);
         state.loading.insert(TervezoTab::TestOutput);
+        state.timeline_error = None;
     }
 
     // Fetch timeline + plan + status + analysis + changes + test output on background threads
@@ -1178,7 +1179,7 @@ fn trigger_tervezo_initial_fetch(app: &mut App) {
                 let _ = tx_timeline.send(TervezoDetailMsg::Timeline(msgs));
             }
             Err(e) => {
-                let _ = tx_timeline.send(TervezoDetailMsg::Error(TervezoTab::Plan, e));
+                let _ = tx_timeline.send(TervezoDetailMsg::TimelineError(e));
             }
         }
     });
