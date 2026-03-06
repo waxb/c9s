@@ -66,6 +66,7 @@ pub enum Action {
     NewSessionMenuDown,
     NewSessionMenuSelect,
     NewSessionMenuClose,
+    FixCi,
     TervezoCreateClose,
     TervezoCreateFieldNext,
     TervezoCreateFieldPrev,
@@ -164,7 +165,7 @@ fn handle_normal_key(key: &KeyEvent) -> Action {
         KeyCode::Char('s') => Action::CycleSort,
         KeyCode::Char('r') => Action::Refresh,
         KeyCode::Char('n') => Action::LaunchNew,
-
+        KeyCode::Char('c') => Action::FixCi,
         KeyCode::Char('L') => Action::ToggleLog,
         KeyCode::Char(' ') => Action::ToggleQSwitcher,
         KeyCode::Char(c @ '1'..='9') => Action::AttachByIndex((c as usize) - ('1' as usize)),
@@ -470,5 +471,11 @@ mod tests {
     fn test_create_dialog_backspace() {
         let action = handle_tervezo_create_key(&key(KeyCode::Backspace));
         assert_eq!(action, Action::TervezoCreateBackspace);
+    }
+
+    #[test]
+    fn test_normal_mode_c_triggers_fix_ci() {
+        let action = handle_normal_key(&key(KeyCode::Char('c')));
+        assert_eq!(action, Action::FixCi);
     }
 }
