@@ -527,11 +527,19 @@ fn process_action(
             let input = app.command_take();
             let path = input.trim().to_string();
             if !path.is_empty() {
-                let area = terminal.size()?;
-                let rows = area.height.saturating_sub(1);
-                let cols = area.width;
-                let cwd = PathBuf::from(&path);
+                let expanded = if let Some(rest) = path.strip_prefix('~') {
+                    dirs::home_dir()
+                        .map(|h| h.to_string_lossy().to_string() + rest)
+                        .unwrap_or(path)
+                } else {
+                    path
+                };
+                let cwd =
+                    std::fs::canonicalize(&expanded).unwrap_or_else(|_| PathBuf::from(&expanded));
                 if cwd.is_dir() {
+                    let area = terminal.size()?;
+                    let rows = area.height.saturating_sub(1);
+                    let cols = area.width;
                     let _ = app.terminal_manager_mut().attach_new(&cwd, rows, cols);
                     app.set_view_mode(ViewMode::Terminal);
                 } else {
@@ -540,6 +548,9 @@ fn process_action(
             } else {
                 app.set_view_mode(ViewMode::List);
             }
+        }
+        Action::CommandTab => {
+            app.command_tab_complete();
         }
         Action::CommandCancel => {
             app.command_take();

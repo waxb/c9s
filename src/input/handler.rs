@@ -32,6 +32,7 @@ pub enum Action {
     CommandBackspace,
     CommandSubmit,
     CommandCancel,
+    CommandTab,
     ScrollUp(usize),
     ScrollDown(usize),
     ConfirmQuit,
@@ -299,6 +300,7 @@ fn handle_command_key(key: &KeyEvent) -> Action {
         KeyCode::Esc => Action::CommandCancel,
         KeyCode::Enter => Action::CommandSubmit,
         KeyCode::Backspace => Action::CommandBackspace,
+        KeyCode::Tab | KeyCode::BackTab => Action::CommandTab,
         KeyCode::Char(c) => Action::CommandInput(c),
         _ => Action::None,
     }

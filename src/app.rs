@@ -540,9 +540,8 @@ pub struct App {
     sse_stream: Option<SseStream>,
     sse_rx: Option<mpsc::Receiver<SseMessage>>,
     log_scroll: usize,
-    side_terminal: Option<EmbeddedTerminal>,
-    side_terminal_open: bool,
-    side_terminal_focused: bool,
+    side_panel_open: bool,
+    side_panel_focused: bool,
 }
 
 impl App {
@@ -582,9 +581,8 @@ impl App {
             sse_stream: None,
             sse_rx: None,
             log_scroll: 0,
-            side_terminal: None,
-            side_terminal_open: false,
-            side_terminal_focused: false,
+            side_panel_open: false,
+            side_panel_focused: false,
         };
 
         app.refresh()?;
@@ -1132,6 +1130,69 @@ impl App {
         std::mem::take(&mut self.command_input)
     }
 
+    pub fn command_tab_complete(&mut self) {
+        let input = self.command_input.clone();
+        let expanded = if let Some(rest) = input.strip_prefix('~') {
+            if let Some(home) = dirs::home_dir() {
+                home.to_string_lossy().to_string() + rest
+            } else {
+                input
+            }
+        } else {
+            input
+        };
+
+        let path = std::path::Path::new(&expanded);
+        let (dir, prefix) = if path.is_dir() && expanded.ends_with('/') {
+            (path.to_path_buf(), String::new())
+        } else {
+            let dir = path.parent().unwrap_or(std::path::Path::new("."));
+            let prefix = path
+                .file_name()
+                .map(|f| f.to_string_lossy().to_string())
+                .unwrap_or_default();
+            (dir.to_path_buf(), prefix)
+        };
+
+        let entries = match std::fs::read_dir(&dir) {
+            Ok(e) => e,
+            Err(_) => return,
+        };
+
+        let mut matches: Vec<String> = entries
+            .flatten()
+            .filter(|e| {
+                e.file_type().map(|ft| ft.is_dir()).unwrap_or(false)
+                    && e.file_name().to_string_lossy().starts_with(&prefix)
+            })
+            .map(|e| {
+                let full = dir.join(e.file_name());
+                let mut s = full.to_string_lossy().to_string();
+                s.push('/');
+                if self.command_input.starts_with('~') {
+                    if let Some(home) = dirs::home_dir() {
+                        let home_str = home.to_string_lossy().to_string();
+                        if s.starts_with(&home_str) {
+                            s = format!("~{}", &s[home_str.len()..]);
+                        }
+                    }
+                }
+                s
+            })
+            .collect();
+
+        matches.sort();
+
+        if matches.len() == 1 {
+            self.command_input = matches.remove(0);
+        } else if matches.len() > 1 {
+            let common = longest_common_prefix(&matches);
+            if common.len() > self.command_input.len() {
+                self.command_input = common;
+            }
+        }
+    }
+
     pub fn all_sessions(&self) -> &[Session] {
         &self.local_sessions
     }
@@ -1171,52 +1232,61 @@ impl App {
     }
 
     pub fn side_terminal(&self) -> Option<&EmbeddedTerminal> {
-        self.side_terminal.as_ref()
+        self.terminal_manager.active_side_terminal()
     }
 
     pub fn side_terminal_mut(&mut self) -> Option<&mut EmbeddedTerminal> {
-        self.side_terminal.as_mut()
+        self.terminal_manager.active_side_terminal_mut()
     }
 
     pub fn is_side_panel_open(&self) -> bool {
-        self.side_terminal_open
+        self.side_panel_open && self.terminal_manager.has_active_side_terminal()
     }
 
     pub fn is_side_panel_focused(&self) -> bool {
-        self.side_terminal_focused
+        self.side_panel_focused
     }
 
     pub fn open_side_panel(&mut self, rows: u16, cols: u16) {
-        if self.side_terminal.is_none() {
-            let cwd = self
-                .attached_session_id()
-                .and_then(|sid| {
-                    self.local_sessions
-                        .iter()
-                        .find(|s| s.id == sid)
-                        .map(|s| s.cwd.clone())
-                })
-                .unwrap_or_else(|| {
-                    std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("/"))
-                });
-            match EmbeddedTerminal::spawn_shell(&cwd, rows, cols) {
-                Ok(term) => {
-                    self.side_terminal = Some(term);
-                }
-                Err(_) => {
-                    return;
-                }
-            }
+        let cwd = self
+            .attached_session_id()
+            .and_then(|sid| {
+                self.local_sessions
+                    .iter()
+                    .find(|s| s.id == sid)
+                    .map(|s| s.cwd.clone())
+            })
+            .unwrap_or_else(|| {
+                std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("/"))
+            });
+        if !self.terminal_manager.open_side_terminal(&cwd, rows, cols) {
+            return;
         }
-        self.side_terminal_open = true;
-        self.side_terminal_focused = true;
+        self.side_panel_open = true;
+        self.side_panel_focused = true;
     }
 
     pub fn close_side_panel(&mut self) {
-        if self.side_terminal.as_ref().is_some_and(|t| t.is_exited()) {
-            self.side_terminal = None;
-        }
-        self.side_terminal_open = false;
-        self.side_terminal_focused = false;
+        self.terminal_manager.close_side_terminal();
+        self.side_panel_open = false;
+        self.side_panel_focused = false;
     }
+}
+
+fn longest_common_prefix(strings: &[String]) -> String {
+    if strings.is_empty() {
+        return String::new();
+    }
+    let first = &strings[0];
+    let mut len = first.len();
+    for s in &strings[1..] {
+        len = len.min(s.len());
+        for (i, (a, b)) in first.chars().zip(s.chars()).enumerate() {
+            if a != b {
+                len = len.min(i);
+                break;
+            }
+        }
+    }
+    first[..len].to_string()
 }
