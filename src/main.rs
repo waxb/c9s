@@ -392,9 +392,7 @@ fn run_loop(
             .as_ref()
             .map(|s| s.implementation.status.is_running())
             .unwrap_or(false);
-        if in_detail_view
-            && is_running
-            && last_detail_refresh.elapsed() >= detail_refresh_interval
+        if in_detail_view && is_running && last_detail_refresh.elapsed() >= detail_refresh_interval
         {
             trigger_tervezo_panel_refresh(app);
             last_detail_refresh = Instant::now();
