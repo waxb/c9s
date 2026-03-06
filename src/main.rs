@@ -1008,11 +1008,19 @@ fn process_action(
                     if matches!(ci_status, Some(app::CiStatus::Failing)) {
                         let branch = imp.branch.clone().unwrap_or_else(|| "unknown".to_string());
                         let prompt = format!(
-                            "The CI pipeline is failing on branch `{}`. Please investigate the GitHub Actions CI failure logs at the repository, identify the root cause of the failing checks, and implement the necessary code fixes to make all CI checks pass. Focus on the actual errors in the logs rather than guessing.",
+                            "The CI pipeline is failing on branch `{}`. \
+                            Investigate the GitHub Actions CI failure logs, identify the root cause, \
+                            and implement proper fixes. If there are merge conflicts with the base branch, \
+                            resolve them. Do not disable checks, skip tests, or apply superficial workarounds \
+                            just to make CI green -- address the underlying issue. \
+                            After pushing your fix, monitor whether CI passes. If it still fails, \
+                            read the new logs and iterate until all checks pass.",
                             branch
                         );
                         if let Some(config) = app.tervezo_config() {
                             let config = config.clone();
+                            let status_id = impl_id.clone();
+                            app.ci_statuses.insert(status_id, app::CiStatus::Fixing);
                             std::thread::spawn(move || {
                                 let client = TervezoClient::new(&config);
                                 match client.send_prompt(&impl_id, &prompt) {

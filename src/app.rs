@@ -42,6 +42,7 @@ pub enum CiStatus {
     None,
     Passing,
     Failing,
+    Fixing,
     Running,
 }
 
@@ -1493,7 +1494,13 @@ impl App {
 
     pub fn drain_ci_statuses(&mut self) {
         while let Ok((id, status)) = self.ci_rx.try_recv() {
-            self.ci_statuses.insert(id, status);
+            if matches!(self.ci_statuses.get(&id), Some(CiStatus::Fixing)) {
+                if matches!(status, CiStatus::Passing | CiStatus::Running) {
+                    self.ci_statuses.insert(id, status);
+                }
+            } else {
+                self.ci_statuses.insert(id, status);
+            }
         }
     }
 
@@ -1511,6 +1518,9 @@ impl App {
 
         for entry in &entries {
             let id = entry.id().to_string();
+            if matches!(self.ci_statuses.get(&id), Some(CiStatus::Fixing)) {
+                continue;
+            }
             let branch = match entry.branch() {
                 Some(b) => b.to_string(),
                 None => {

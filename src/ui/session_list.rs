@@ -241,6 +241,7 @@ fn render_table(f: &mut Frame, app: &App, area: Rect) {
                     "x",
                     Style::default().fg(Color::Red).add_modifier(Modifier::BOLD),
                 ),
+                Some(crate::app::CiStatus::Fixing) => ("o", Style::default().fg(Color::Blue)),
                 Some(crate::app::CiStatus::Running) => ("~", Style::default().fg(Color::Yellow)),
                 _ => ("-", Style::default().fg(Color::DarkGray)),
             };
