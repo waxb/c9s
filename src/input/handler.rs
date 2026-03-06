@@ -470,19 +470,15 @@ mod tests {
 
     #[test]
     fn test_tervezo_qswitcher_routing() {
-        // Space in QSwitcher should produce Back (to dismiss)
         let action = handle_key(&key(KeyCode::Char(' ')), &ViewMode::TervezoQSwitcher, false);
         assert_eq!(action, Action::Back);
 
-        // Number keys should produce AttachByIndex
         let action = handle_key(&key(KeyCode::Char('3')), &ViewMode::TervezoQSwitcher, false);
         assert_eq!(action, Action::AttachByIndex(2));
 
-        // Esc should produce Back
         let action = handle_key(&key(KeyCode::Esc), &ViewMode::TervezoQSwitcher, false);
         assert_eq!(action, Action::Back);
 
-        // Enter should produce AttachSession
         let action = handle_key(&key(KeyCode::Enter), &ViewMode::TervezoQSwitcher, false);
         assert_eq!(action, Action::AttachSession);
     }
@@ -571,5 +567,63 @@ mod tests {
     fn test_normal_mode_c_triggers_fix_ci() {
         let action = handle_normal_key(&key(KeyCode::Char('c')));
         assert_eq!(action, Action::FixCi);
+    }
+
+    #[test]
+    fn test_prompt_key_mapping_shift_enter_inserts_newline() {
+        let result = handle_tervezo_prompt_key(&key_with_mod(KeyCode::Enter, KeyModifiers::SHIFT));
+        assert_eq!(result, Action::TervezoPromptNewline);
+    }
+
+    #[test]
+    fn test_prompt_key_mapping_alt_enter_inserts_newline() {
+        let result = handle_tervezo_prompt_key(&key_with_mod(KeyCode::Enter, KeyModifiers::ALT));
+        assert_eq!(result, Action::TervezoPromptNewline);
+    }
+
+    #[test]
+    fn test_prompt_key_mapping_plain_enter_submits() {
+        let result = handle_tervezo_prompt_key(&key(KeyCode::Enter));
+        assert_eq!(result, Action::TervezoPromptSubmit);
+    }
+
+    #[test]
+    fn test_prompt_key_mapping_navigation_keys() {
+        assert_eq!(
+            handle_tervezo_prompt_key(&key(KeyCode::Left)),
+            Action::TervezoPromptCursorLeft,
+        );
+        assert_eq!(
+            handle_tervezo_prompt_key(&key(KeyCode::Right)),
+            Action::TervezoPromptCursorRight,
+        );
+        assert_eq!(
+            handle_tervezo_prompt_key(&key(KeyCode::Up)),
+            Action::TervezoPromptCursorUp,
+        );
+        assert_eq!(
+            handle_tervezo_prompt_key(&key(KeyCode::Down)),
+            Action::TervezoPromptCursorDown,
+        );
+        assert_eq!(
+            handle_tervezo_prompt_key(&key(KeyCode::Home)),
+            Action::TervezoPromptHome,
+        );
+        assert_eq!(
+            handle_tervezo_prompt_key(&key(KeyCode::End)),
+            Action::TervezoPromptEnd,
+        );
+        assert_eq!(
+            handle_tervezo_prompt_key(&key(KeyCode::Delete)),
+            Action::TervezoPromptDelete,
+        );
+        assert_eq!(
+            handle_tervezo_prompt_key(&key(KeyCode::Backspace)),
+            Action::TervezoPromptBackspace,
+        );
+        assert_eq!(
+            handle_tervezo_prompt_key(&key(KeyCode::Esc)),
+            Action::TervezoPromptCancel,
+        );
     }
 }

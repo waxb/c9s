@@ -1648,11 +1648,319 @@ fn parse_gh_run_output(output: std::io::Result<std::process::Output>) -> CiStatu
 }
 
 #[cfg(test)]
+mod prompt_tests {
+    use super::*;
+
+    fn make_state() -> TervezoDetailState {
+        TervezoDetailState::new(Implementation {
+            id: "test".to_string(),
+            title: None,
+            status: ImplementationStatus::Running,
+            branch: None,
+            repo_url: None,
+            created_at: None,
+            updated_at: None,
+            estimated_cost_usd: None,
+            total_tokens: None,
+            message_count: None,
+            pr_url: None,
+            pr_number: None,
+            pr_status: None,
+            mode: None,
+        })
+    }
+
+    fn prompt_char(state: &mut TervezoDetailState, c: char) {
+        state.prompt_input.insert(state.prompt_cursor, c);
+        state.prompt_cursor += c.len_utf8();
+    }
+
+    fn prompt_newline(state: &mut TervezoDetailState) {
+        state.prompt_input.insert(state.prompt_cursor, '\n');
+        state.prompt_cursor += 1;
+    }
+
+    fn prompt_backspace(state: &mut TervezoDetailState) {
+        if state.prompt_cursor > 0 {
+            let prev = state.prompt_input[..state.prompt_cursor]
+                .char_indices()
+                .next_back()
+                .map(|(i, _)| i)
+                .unwrap_or(0);
+            state.prompt_input.remove(prev);
+            state.prompt_cursor = prev;
+        }
+    }
+
+    fn prompt_delete(state: &mut TervezoDetailState) {
+        if state.prompt_cursor < state.prompt_input.len() {
+            state.prompt_input.remove(state.prompt_cursor);
+        }
+    }
+
+    fn prompt_cursor_left(state: &mut TervezoDetailState) {
+        if state.prompt_cursor > 0 {
+            state.prompt_cursor = state.prompt_input[..state.prompt_cursor]
+                .char_indices()
+                .next_back()
+                .map(|(i, _)| i)
+                .unwrap_or(0);
+        }
+    }
+
+    fn prompt_cursor_right(state: &mut TervezoDetailState) {
+        if state.prompt_cursor < state.prompt_input.len() {
+            let rest = &state.prompt_input[state.prompt_cursor..];
+            let next_char_len = rest.chars().next().map(|c| c.len_utf8()).unwrap_or(0);
+            state.prompt_cursor += next_char_len;
+        }
+    }
+
+    fn prompt_cursor_up(state: &mut TervezoDetailState) {
+        let before = &state.prompt_input[..state.prompt_cursor];
+        let current_line_start = before.rfind('\n').map(|i| i + 1).unwrap_or(0);
+        let col = before[current_line_start..].chars().count();
+        if current_line_start > 0 {
+            let prev_line_end = current_line_start - 1;
+            let prev_before = &state.prompt_input[..prev_line_end];
+            let prev_line_start = prev_before.rfind('\n').map(|i| i + 1).unwrap_or(0);
+            let prev_line = &state.prompt_input[prev_line_start..prev_line_end];
+            let prev_line_len = prev_line.chars().count();
+            let target_col = col.min(prev_line_len);
+            let byte_offset: usize = prev_line
+                .char_indices()
+                .take(target_col)
+                .last()
+                .map(|(i, c)| i + c.len_utf8())
+                .unwrap_or(0);
+            state.prompt_cursor = prev_line_start + byte_offset;
+        }
+    }
+
+    fn prompt_cursor_down(state: &mut TervezoDetailState) {
+        let before = &state.prompt_input[..state.prompt_cursor];
+        let current_line_start = before.rfind('\n').map(|i| i + 1).unwrap_or(0);
+        let col = before[current_line_start..].chars().count();
+        let after = &state.prompt_input[state.prompt_cursor..];
+        if let Some(newline_pos) = after.find('\n') {
+            let next_line_start = state.prompt_cursor + newline_pos + 1;
+            let rest_after_next = &state.prompt_input[next_line_start..];
+            let next_line_end = rest_after_next
+                .find('\n')
+                .map(|i| next_line_start + i)
+                .unwrap_or(state.prompt_input.len());
+            let next_line = &state.prompt_input[next_line_start..next_line_end];
+            let next_line_len = next_line.chars().count();
+            let target_col = col.min(next_line_len);
+            let byte_offset: usize = next_line
+                .char_indices()
+                .take(target_col)
+                .last()
+                .map(|(i, c)| i + c.len_utf8())
+                .unwrap_or(0);
+            state.prompt_cursor = next_line_start + byte_offset;
+        }
+    }
+
+    fn prompt_home(state: &mut TervezoDetailState) {
+        let before = &state.prompt_input[..state.prompt_cursor];
+        state.prompt_cursor = before.rfind('\n').map(|i| i + 1).unwrap_or(0);
+    }
+
+    fn prompt_end(state: &mut TervezoDetailState) {
+        let after = &state.prompt_input[state.prompt_cursor..];
+        let line_end = after
+            .find('\n')
+            .map(|i| state.prompt_cursor + i)
+            .unwrap_or(state.prompt_input.len());
+        state.prompt_cursor = line_end;
+    }
+
+    fn prompt_cancel(state: &mut TervezoDetailState) {
+        state.prompt_input.clear();
+        state.prompt_cursor = 0;
+    }
+
+    #[test]
+    fn test_char_insert_at_cursor_mid_string() {
+        let mut s = make_state();
+        prompt_char(&mut s, 'a');
+        prompt_char(&mut s, 'c');
+        prompt_cursor_left(&mut s);
+        prompt_char(&mut s, 'b');
+        assert_eq!(s.prompt_input, "abc");
+        assert_eq!(s.prompt_cursor, 2);
+    }
+
+    #[test]
+    fn test_multibyte_utf8_insert_and_navigation() {
+        let mut s = make_state();
+        prompt_char(&mut s, '\u{1F525}');
+        prompt_char(&mut s, 'x');
+        assert_eq!(s.prompt_input, "\u{1F525}x");
+        assert_eq!(s.prompt_cursor, 5);
+
+        prompt_cursor_left(&mut s);
+        assert_eq!(s.prompt_cursor, 4);
+        prompt_cursor_left(&mut s);
+        assert_eq!(s.prompt_cursor, 0);
+
+        prompt_cursor_right(&mut s);
+        assert_eq!(s.prompt_cursor, 4);
+
+        prompt_cursor_left(&mut s);
+        prompt_cursor_right(&mut s);
+        prompt_backspace(&mut s);
+        assert_eq!(s.prompt_input, "x");
+        assert_eq!(s.prompt_cursor, 0);
+    }
+
+    #[test]
+    fn test_newline_insertion_and_multiline_cursor_navigation() {
+        let mut s = make_state();
+        for c in "abc".chars() { prompt_char(&mut s, c); }
+        prompt_newline(&mut s);
+        for c in "def".chars() { prompt_char(&mut s, c); }
+        prompt_newline(&mut s);
+        for c in "ghi".chars() { prompt_char(&mut s, c); }
+        assert_eq!(s.prompt_input, "abc\ndef\nghi");
+        assert_eq!(s.prompt_cursor, 11);
+
+        prompt_cursor_up(&mut s);
+        assert_eq!(s.prompt_cursor, 7);
+
+        prompt_cursor_up(&mut s);
+        assert_eq!(s.prompt_cursor, 3);
+
+        prompt_cursor_up(&mut s);
+        assert_eq!(s.prompt_cursor, 3);
+
+        prompt_cursor_down(&mut s);
+        assert_eq!(s.prompt_cursor, 7);
+
+        prompt_cursor_down(&mut s);
+        assert_eq!(s.prompt_cursor, 11);
+
+        prompt_cursor_down(&mut s);
+        assert_eq!(s.prompt_cursor, 11);
+    }
+
+    #[test]
+    fn test_cursor_up_clamps_column_to_shorter_line() {
+        let mut s = make_state();
+        for c in "abcdef".chars() { prompt_char(&mut s, c); }
+        prompt_newline(&mut s);
+        for c in "xy".chars() { prompt_char(&mut s, c); }
+        assert_eq!(s.prompt_cursor, 9);
+
+        prompt_cursor_up(&mut s);
+        assert_eq!(s.prompt_cursor, 2);
+
+        prompt_cursor_down(&mut s);
+        assert_eq!(s.prompt_cursor, 9);
+
+        prompt_cursor_up(&mut s);
+        prompt_end(&mut s);
+        assert_eq!(s.prompt_cursor, 6);
+        prompt_cursor_down(&mut s);
+        assert_eq!(s.prompt_cursor, 9);
+    }
+
+    #[test]
+    fn test_home_end_on_multiline() {
+        let mut s = make_state();
+        for c in "hello".chars() { prompt_char(&mut s, c); }
+        prompt_newline(&mut s);
+        for c in "world".chars() { prompt_char(&mut s, c); }
+
+        prompt_home(&mut s);
+        assert_eq!(s.prompt_cursor, 6);
+
+        prompt_end(&mut s);
+        assert_eq!(s.prompt_cursor, 11);
+
+        prompt_cursor_up(&mut s);
+        prompt_home(&mut s);
+        assert_eq!(s.prompt_cursor, 0);
+
+        prompt_end(&mut s);
+        assert_eq!(s.prompt_cursor, 5);
+    }
+
+    #[test]
+    fn test_backspace_and_delete_across_newline() {
+        let mut s = make_state();
+        for c in "ab".chars() { prompt_char(&mut s, c); }
+        prompt_newline(&mut s);
+        for c in "cd".chars() { prompt_char(&mut s, c); }
+
+        prompt_home(&mut s);
+        assert_eq!(s.prompt_cursor, 3);
+        prompt_backspace(&mut s);
+        assert_eq!(s.prompt_input, "abcd");
+        assert_eq!(s.prompt_cursor, 2);
+
+        prompt_newline(&mut s);
+        assert_eq!(s.prompt_input, "ab\ncd");
+        prompt_cursor_left(&mut s);
+        assert_eq!(s.prompt_cursor, 2);
+        prompt_delete(&mut s);
+        assert_eq!(s.prompt_input, "abcd");
+        assert_eq!(s.prompt_cursor, 2);
+    }
+
+    #[test]
+    fn test_backspace_at_start_is_noop() {
+        let mut s = make_state();
+        prompt_char(&mut s, 'a');
+        prompt_home(&mut s);
+        assert_eq!(s.prompt_cursor, 0);
+        prompt_backspace(&mut s);
+        assert_eq!(s.prompt_input, "a");
+        assert_eq!(s.prompt_cursor, 0);
+    }
+
+    #[test]
+    fn test_delete_at_end_is_noop() {
+        let mut s = make_state();
+        prompt_char(&mut s, 'a');
+        assert_eq!(s.prompt_cursor, 1);
+        prompt_delete(&mut s);
+        assert_eq!(s.prompt_input, "a");
+        assert_eq!(s.prompt_cursor, 1);
+    }
+
+    #[test]
+    fn test_cancel_clears_input_and_cursor() {
+        let mut s = make_state();
+        for c in "hello\nworld".chars() {
+            if c == '\n' { prompt_newline(&mut s); } else { prompt_char(&mut s, c); }
+        }
+        assert!(!s.prompt_input.is_empty());
+        assert!(s.prompt_cursor > 0);
+
+        prompt_cancel(&mut s);
+        assert_eq!(s.prompt_input, "");
+        assert_eq!(s.prompt_cursor, 0);
+    }
+
+    #[test]
+    fn test_cursor_boundaries_left_right() {
+        let mut s = make_state();
+        prompt_cursor_left(&mut s);
+        assert_eq!(s.prompt_cursor, 0);
+
+        prompt_char(&mut s, 'x');
+        prompt_cursor_right(&mut s);
+        assert_eq!(s.prompt_cursor, 1);
+    }
+}
+
+#[cfg(test)]
 mod tests {
     use super::*;
     use crate::tervezo::models::{Implementation, ImplementationStatus, PrDetails};
 
-    /// Build a minimal Implementation for tests.
     fn make_impl(status: ImplementationStatus, pr_url: Option<&str>) -> Implementation {
         Implementation {
             id: "test-id".into(),
@@ -1692,7 +2000,6 @@ mod tests {
         let actions = state.compute_available_actions();
         assert!(
             actions.contains(&TervezoAction::ViewPrInBrowser),
-            "ViewPrInBrowser should be available when pr_details has a URL"
         );
     }
 
@@ -1703,11 +2010,9 @@ mod tests {
             Some("https://github.com/pr/2"),
         );
         let state = TervezoDetailState::new(imp);
-        // No pr_details, but implementation.pr_url is set → has_pr = true, url available
         let actions = state.compute_available_actions();
         assert!(
             actions.contains(&TervezoAction::ViewPrInBrowser),
-            "ViewPrInBrowser should be available when implementation.pr_url is set"
         );
     }
 
@@ -1718,7 +2023,6 @@ mod tests {
         let actions = state.compute_available_actions();
         assert!(
             !actions.contains(&TervezoAction::ViewPrInBrowser),
-            "ViewPrInBrowser should NOT appear when no PR exists"
         );
     }
 
@@ -1726,12 +2030,10 @@ mod tests {
     fn test_view_pr_in_browser_not_available_when_pr_has_no_url() {
         let imp = make_impl(ImplementationStatus::Completed, None);
         let mut state = TervezoDetailState::new(imp);
-        // PR details exist but url is None
         state.pr_details = Some(make_pr("open", None, false));
         let actions = state.compute_available_actions();
         assert!(
             !actions.contains(&TervezoAction::ViewPrInBrowser),
-            "ViewPrInBrowser should NOT appear when PR has no URL"
         );
     }
 
@@ -1739,33 +2041,32 @@ mod tests {
     fn test_view_pr_in_browser_is_not_destructive() {
         assert!(
             !TervezoAction::ViewPrInBrowser.is_destructive(),
-            "ViewPrInBrowser must not be destructive (no confirmation dialog)"
         );
     }
 
     #[test]
     fn test_create_field_next_cycles_through_all_fields() {
         let field = TervezoCreateField::Prompt;
-        let field = field.next(); // Mode
+        let field = field.next();
         assert_eq!(field, TervezoCreateField::Mode);
-        let field = field.next(); // RepoUrl
+        let field = field.next();
         assert_eq!(field, TervezoCreateField::RepoUrl);
-        let field = field.next(); // BaseBranch
+        let field = field.next();
         assert_eq!(field, TervezoCreateField::BaseBranch);
-        let field = field.next(); // wraps to Prompt
+        let field = field.next();
         assert_eq!(field, TervezoCreateField::Prompt);
     }
 
     #[test]
     fn test_create_field_prev_cycles_through_all_fields() {
         let field = TervezoCreateField::Prompt;
-        let field = field.prev(); // wraps to BaseBranch
+        let field = field.prev();
         assert_eq!(field, TervezoCreateField::BaseBranch);
-        let field = field.prev(); // RepoUrl
+        let field = field.prev();
         assert_eq!(field, TervezoCreateField::RepoUrl);
-        let field = field.prev(); // Mode
+        let field = field.prev();
         assert_eq!(field, TervezoCreateField::Mode);
-        let field = field.prev(); // Prompt
+        let field = field.prev();
         assert_eq!(field, TervezoCreateField::Prompt);
     }
 
