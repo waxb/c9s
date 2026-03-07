@@ -627,4 +627,15 @@ mod tests {
         );
         assert_eq!(action, Action::CancelKill);
     }
+
+    #[test]
+    fn test_ctrl_k_in_terminal_mode_scrolls_instead_of_kill() {
+        // Ctrl+k in terminal mode must scroll up, NOT trigger KillSession
+        let action = handle_key(
+            &key_with_mod(KeyCode::Char('k'), KeyModifiers::CONTROL),
+            &ViewMode::Terminal,
+            false,
+        );
+        assert_eq!(action, Action::ScrollUp(10));
+    }
 }
