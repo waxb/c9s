@@ -583,4 +583,18 @@ mod tests {
         let action = handle_tervezo_detail_key(&key(KeyCode::Char('p')));
         assert_eq!(action, Action::TervezoOpenPrompt);
     }
+
+    #[test]
+    fn test_tervezo_detail_ctrl_d_still_scrolls_half_page_down() {
+        let action =
+            handle_tervezo_detail_key(&key_with_mod(KeyCode::Char('d'), KeyModifiers::CONTROL));
+        assert_eq!(action, Action::TervezoScrollHalfPageDown);
+    }
+
+    #[test]
+    fn test_tervezo_detail_ctrl_u_still_scrolls_half_page_up() {
+        let action =
+            handle_tervezo_detail_key(&key_with_mod(KeyCode::Char('u'), KeyModifiers::CONTROL));
+        assert_eq!(action, Action::TervezoScrollHalfPageUp);
+    }
 }
