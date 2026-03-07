@@ -13,13 +13,13 @@ use crate::ui::usage_panel::render_usage_panel;
 pub fn render_session_list(f: &mut Frame, app: &App, area: Rect) {
     let show_command_bar = app.is_filtering() || app.attached_session_id().is_some();
 
-    let usage_height = if app.usage().api_available { 12 } else { 6 };
+    let usage_height = if app.usage().api_available { 11 } else { 5 };
 
     let chunks = if show_command_bar {
         Layout::vertical([
             Constraint::Length(3),
             Constraint::Length(1),
-            Constraint::Min(5),
+            Constraint::Fill(1),
             Constraint::Length(usage_height),
             Constraint::Length(1),
         ])
@@ -28,7 +28,7 @@ pub fn render_session_list(f: &mut Frame, app: &App, area: Rect) {
         Layout::vertical([
             Constraint::Length(3),
             Constraint::Length(0),
-            Constraint::Min(5),
+            Constraint::Fill(1),
             Constraint::Length(usage_height),
             Constraint::Length(1),
         ])
@@ -348,5 +348,49 @@ fn format_count(n: u64) -> String {
         format!("{:.1}K", n as f64 / 1_000.0)
     } else {
         n.to_string()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use ratatui::layout::{Constraint, Layout, Rect};
+
+    fn layout_chunks(height: u16, usage_height: u16) -> Vec<Rect> {
+        Layout::vertical([
+            Constraint::Length(3),
+            Constraint::Length(1),
+            Constraint::Fill(1),
+            Constraint::Length(usage_height),
+            Constraint::Length(1),
+        ])
+        .split(Rect::new(0, 0, 80, height))
+        .to_vec()
+    }
+
+    #[test]
+    fn layout_footer_has_space_24_rows() {
+        let chunks = layout_chunks(24, 11);
+        assert!(
+            chunks[4].height >= 1,
+            "Footer must have at least 1 row on 24-row terminal"
+        );
+    }
+
+    #[test]
+    fn layout_footer_has_space_small_terminal() {
+        let chunks = layout_chunks(16, 11);
+        assert!(
+            chunks[4].height >= 1,
+            "Footer must have at least 1 row on 16-row terminal"
+        );
+    }
+
+    #[test]
+    fn layout_footer_has_space_api_unavailable() {
+        let chunks = layout_chunks(24, 5);
+        assert!(
+            chunks[4].height >= 1,
+            "Footer must have at least 1 row with API unavailable"
+        );
     }
 }
