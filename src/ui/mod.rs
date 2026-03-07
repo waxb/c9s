@@ -1,4 +1,5 @@
 mod command_bar_view;
+mod confirm_kill;
 mod confirm_quit;
 mod help;
 mod log_panel;
@@ -14,6 +15,7 @@ mod theme;
 pub mod usage_panel;
 
 pub use command_bar_view::render_command_input;
+pub use confirm_kill::render_confirm_kill;
 pub use confirm_quit::render_confirm_quit;
 pub use help::render_help;
 pub use log_panel::render_log_panel;
