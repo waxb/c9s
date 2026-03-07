@@ -301,6 +301,9 @@ fn run_loop(
                         let active = app.active_attached_sessions();
                         ui::render_confirm_quit(f, &active, area);
                     }
+                    ViewMode::ConfirmKillSession => {
+                        ui::render_session_list(f, app, area);
+                    }
                     ViewMode::Log => {
                         let entries = log::entries();
                         ui::render_log_panel(f, &entries, app.log_scroll(), area);
@@ -1075,6 +1078,7 @@ fn process_action(
                 }
             }
         }
+        Action::KillSession | Action::ConfirmKill | Action::CancelKill => {}
         Action::None => {}
     }
     Ok(())

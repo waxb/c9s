@@ -37,6 +37,9 @@ pub enum Action {
     ScrollDown(usize),
     ConfirmQuit,
     CancelQuit,
+    KillSession,
+    ConfirmKill,
+    CancelKill,
     TervezoTabNext,
     TervezoTabPrev,
     TervezoScrollUp,
@@ -130,6 +133,9 @@ fn handle_key(key: &KeyEvent, mode: &ViewMode, side_focused: bool) -> Action {
             if key.modifiers.contains(KeyModifiers::CONTROL) && key.code == KeyCode::Char('c') {
                 return Action::Quit;
             }
+            if key.modifiers.contains(KeyModifiers::CONTROL) && key.code == KeyCode::Char('k') {
+                return Action::KillSession;
+            }
         }
     }
 
@@ -140,6 +146,7 @@ fn handle_key(key: &KeyEvent, mode: &ViewMode, side_focused: bool) -> Action {
         ViewMode::TerminalQSwitcher => handle_terminal_qswitcher_key(key),
         ViewMode::Command => handle_command_key(key),
         ViewMode::ConfirmQuit => handle_confirm_quit_key(key),
+        ViewMode::ConfirmKillSession => handle_confirm_kill_key(key),
         ViewMode::TervezoDetail => handle_tervezo_detail_key(key),
         ViewMode::TervezoQSwitcher => handle_qswitcher_key(key),
         ViewMode::TervezoActionMenu => handle_tervezo_action_menu_key(key),
@@ -239,6 +246,14 @@ fn handle_confirm_quit_key(key: &KeyEvent) -> Action {
         KeyCode::Esc | KeyCode::Char('q') => Action::CancelQuit,
         KeyCode::Char('y') => Action::ConfirmQuit,
         KeyCode::Char('n') => Action::CancelQuit,
+        _ => Action::None,
+    }
+}
+
+fn handle_confirm_kill_key(key: &KeyEvent) -> Action {
+    match key.code {
+        KeyCode::Char('y') | KeyCode::Enter => Action::ConfirmKill,
+        KeyCode::Char('n') | KeyCode::Esc => Action::CancelKill,
         _ => Action::None,
     }
 }
@@ -553,5 +568,63 @@ mod tests {
     fn test_normal_mode_c_triggers_fix_ci() {
         let action = handle_normal_key(&key(KeyCode::Char('c')));
         assert_eq!(action, Action::FixCi);
+    }
+
+    #[test]
+    fn test_ctrl_k_in_list_mode_triggers_kill_session() {
+        let action = handle_key(
+            &key_with_mod(KeyCode::Char('k'), KeyModifiers::CONTROL),
+            &ViewMode::List,
+            false,
+        );
+        assert_eq!(action, Action::KillSession);
+    }
+
+    #[test]
+    fn test_k_without_ctrl_still_moves_up() {
+        let action = handle_normal_key(&key(KeyCode::Char('k')));
+        assert_eq!(action, Action::MoveUp);
+    }
+
+    #[test]
+    fn test_confirm_kill_y_confirms() {
+        let action = handle_confirm_kill_key(&key(KeyCode::Char('y')));
+        assert_eq!(action, Action::ConfirmKill);
+    }
+
+    #[test]
+    fn test_confirm_kill_enter_confirms() {
+        let action = handle_confirm_kill_key(&key(KeyCode::Enter));
+        assert_eq!(action, Action::ConfirmKill);
+    }
+
+    #[test]
+    fn test_confirm_kill_n_cancels() {
+        let action = handle_confirm_kill_key(&key(KeyCode::Char('n')));
+        assert_eq!(action, Action::CancelKill);
+    }
+
+    #[test]
+    fn test_confirm_kill_esc_cancels() {
+        let action = handle_confirm_kill_key(&key(KeyCode::Esc));
+        assert_eq!(action, Action::CancelKill);
+    }
+
+    #[test]
+    fn test_confirm_kill_mode_routing() {
+        // Verify handle_key routes ConfirmKillSession to the kill confirmation handler
+        let action = handle_key(
+            &key(KeyCode::Char('y')),
+            &ViewMode::ConfirmKillSession,
+            false,
+        );
+        assert_eq!(action, Action::ConfirmKill);
+
+        let action = handle_key(
+            &key(KeyCode::Esc),
+            &ViewMode::ConfirmKillSession,
+            false,
+        );
+        assert_eq!(action, Action::CancelKill);
     }
 }

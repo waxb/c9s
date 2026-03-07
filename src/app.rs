@@ -24,6 +24,7 @@ pub enum ViewMode {
     TerminalQSwitcher,
     Command,
     ConfirmQuit,
+    ConfirmKillSession,
     TervezoDetail,
     TervezoActionMenu,
     TervezoConfirm,
