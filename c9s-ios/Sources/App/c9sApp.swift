@@ -29,19 +29,71 @@ struct C9sApp: App {
 
     var body: some Scene {
         WindowGroup {
-            ContentView()
+            RootView()
         }
         .modelContainer(modelContainer)
     }
 }
 
-struct ContentView: View {
+/// Root view that decides whether to show onboarding or the main app.
+/// Checks the Keychain for an API key on launch and observes changes.
+struct RootView: View {
+    @State private var isAuthenticated = false
+    @State private var hasChecked = false
+
+    var body: some View {
+        Group {
+            if !hasChecked {
+                ProgressView("Loading...")
+                    .task { checkAuth() }
+            } else if isAuthenticated {
+                MainTabView(onSignOut: {
+                    isAuthenticated = false
+                })
+            } else {
+                OnboardingView {
+                    isAuthenticated = true
+                }
+            }
+        }
+        .animation(.default, value: isAuthenticated)
+    }
+
+    private func checkAuth() {
+        isAuthenticated = KeychainService.shared.loadAPIKey() != nil
+        hasChecked = true
+    }
+}
+
+/// Main app tab view shown after authentication.
+/// Currently a placeholder — will be replaced by ImplementationListView in Phase 4.
+struct MainTabView: View {
+    var onSignOut: () -> Void
+
     var body: some View {
         NavigationStack {
-            Text("c9s Mobile")
-                .font(.largeTitle)
-                .fontWeight(.bold)
-                .navigationTitle("c9s")
+            VStack(spacing: 20) {
+                Image(systemName: "terminal.fill")
+                    .font(.system(size: 48))
+                    .foregroundStyle(.tint)
+
+                Text("c9s Mobile")
+                    .font(.largeTitle)
+                    .fontWeight(.bold)
+
+                Text("Implementation list coming soon...")
+                    .foregroundStyle(.secondary)
+            }
+            .navigationTitle("Implementations")
+            .toolbar {
+                ToolbarItem(placement: .topBarTrailing) {
+                    NavigationLink {
+                        SettingsView(onSignOut: onSignOut)
+                    } label: {
+                        Image(systemName: "gearshape")
+                    }
+                }
+            }
         }
     }
 }
