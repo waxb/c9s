@@ -4,6 +4,8 @@ included:
 
 excluded:
   - Sources/GeneratedAPI
+  - Sources/NotificationContent
+  - .build
 
 disabled_rules:
   - trailing_whitespace
