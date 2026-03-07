@@ -709,6 +709,7 @@ pub struct App {
     tervezo_create_rx: Option<mpsc::Receiver<TervezoCreateMsg>>,
     workspace_rx: Option<mpsc::Receiver<WorkspaceMsg>>,
     pub new_session_menu: Option<NewSessionMenuState>,
+    kill_session_target: Option<(String, String, Option<u32>)>,
     log_scroll: usize,
     side_panel_open: bool,
     side_panel_focused: bool,
@@ -760,6 +761,7 @@ impl App {
             tervezo_create_rx: None,
             workspace_rx: None,
             new_session_menu: None,
+            kill_session_target: None,
             log_scroll: 0,
             side_panel_open: false,
             side_panel_focused: false,
@@ -1377,6 +1379,48 @@ impl App {
             })
             .map(|s| s.project_name.clone())
             .collect()
+    }
+
+    pub fn kill_session_target(&self) -> Option<&(String, String, Option<u32>)> {
+        self.kill_session_target.as_ref()
+    }
+
+    pub fn prepare_kill_session(&mut self) {
+        let entry = match self.selected_session() {
+            Some(e) => e,
+            None => return,
+        };
+        if entry.is_remote() {
+            return;
+        }
+        let session = match entry.as_local() {
+            Some(s) => s,
+            None => return,
+        };
+        self.kill_session_target = Some((
+            session.id.clone(),
+            session.project_name.clone(),
+            session.pid,
+        ));
+        self.view_mode = ViewMode::ConfirmKillSession;
+    }
+
+    pub fn execute_kill_session(&mut self) {
+        if let Some((session_id, _name, pid)) = self.kill_session_target.take() {
+            if let Some(pid) = pid {
+                crate::terminal::kill_process(pid);
+            }
+            self.terminal_manager.remove_session(&session_id);
+            self.view_mode = ViewMode::List;
+            let _ = self.refresh();
+        } else {
+            self.view_mode = ViewMode::List;
+        }
+    }
+
+    pub fn cancel_kill_session(&mut self) {
+        self.kill_session_target = None;
+        self.view_mode = ViewMode::List;
     }
 
     pub fn command_input(&self) -> &str {

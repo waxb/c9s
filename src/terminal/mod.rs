@@ -9,7 +9,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard};
 use std::thread::JoinHandle;
 
-pub use manager::{TabEntry, TerminalManager};
+pub use manager::{kill_process, TabEntry, TerminalManager};
 
 pub struct EmbeddedTerminal {
     session_id: String,
