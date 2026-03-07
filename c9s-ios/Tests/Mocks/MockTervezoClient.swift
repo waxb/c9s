@@ -41,6 +41,13 @@ final class MockTervezoService: TervezoServiceProtocol, @unchecked Sendable {
     var lastSendPromptMessage: String?
     var createPRCallCount = 0
     var restartCallCount = 0
+    var listWorkspacesCallCount = 0
+    var createImplementationCallCount = 0
+    var lastCreatePrompt: String?
+    var lastCreateMode: String?
+    var lastCreateWorkspaceId: String?
+    var lastCreateRepositoryName: String?
+    var lastCreateBaseBranch: String?
 
     // MARK: - Protocol Implementation
 
@@ -136,6 +143,7 @@ final class MockTervezoService: TervezoServiceProtocol, @unchecked Sendable {
     }
 
     func listWorkspaces() async throws -> [TervezoWorkspace] {
+        listWorkspacesCallCount += 1
         return try listWorkspacesResult.get()
     }
 
@@ -146,6 +154,12 @@ final class MockTervezoService: TervezoServiceProtocol, @unchecked Sendable {
         repositoryName: String?,
         baseBranch: String?
     ) async throws -> ImplementationDetail {
+        createImplementationCallCount += 1
+        lastCreatePrompt = prompt
+        lastCreateMode = mode
+        lastCreateWorkspaceId = workspaceId
+        lastCreateRepositoryName = repositoryName
+        lastCreateBaseBranch = baseBranch
         guard let result = createImplementationResult else {
             throw TervezoServiceError.httpError(statusCode: 400, message: "Cannot create")
         }
@@ -220,5 +234,23 @@ enum TestFixtures {
         name: String = "My Workspace"
     ) -> TervezoWorkspace {
         TervezoWorkspace(id: id, name: name, slug: "my-workspace", logo: nil)
+    }
+
+    static func makeSSHCredentials(
+        host: String = "sandbox.tervezo.ai",
+        port: Int = 2222,
+        username: String = "user",
+        sshCommand: String = "ssh -p 2222 user@sandbox.tervezo.ai",
+        sandboxId: String = "sandbox-456",
+        sandboxUrl: String = "https://sandbox.tervezo.ai/terminal/sandbox-456"
+    ) -> TervezoSSHCredentials {
+        TervezoSSHCredentials(
+            host: host,
+            port: port,
+            username: username,
+            sshCommand: sshCommand,
+            sandboxId: sandboxId,
+            sandboxUrl: sandboxUrl
+        )
     }
 }

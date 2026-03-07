@@ -5,6 +5,7 @@ struct ImplementationDetailView: View {
     @State private var viewModel: ImplementationDetailVM
     @State private var showActionSheet = false
     @State private var actionResult: String?
+    @State private var showTerminal = false
 
     init(implementationId: String, service: TervezoServiceProtocol = TervezoService()) {
         _viewModel = State(initialValue: ImplementationDetailVM(implementationId: implementationId, service: service))
@@ -87,6 +88,11 @@ struct ImplementationDetailView: View {
         } message: {
             if let result = actionResult {
                 Text(result)
+            }
+        }
+        .sheet(isPresented: $showTerminal) {
+            if let implId = viewModel.implementation?.id {
+                SandboxTerminalView(implementationId: implId)
             }
         }
     }
@@ -284,8 +290,7 @@ struct ImplementationDetailView: View {
 
             if viewModel.canSSH {
                 Button {
-                    // SSH navigation handled by parent
-                    actionResult = "SSH terminal not yet implemented"
+                    showTerminal = true
                 } label: {
                     Label("SSH to Sandbox", systemImage: "terminal")
                 }

@@ -7,6 +7,25 @@ import Foundation
 @MainActor
 struct CreateImplementationVMTests {
 
+    // MARK: - Initial State
+
+    @Test("Initial state has empty fields and defaults")
+    func initialState() {
+        let mock = MockTervezoService()
+        let vm = CreateImplementationVM(service: mock)
+        #expect(vm.prompt.isEmpty)
+        #expect(vm.selectedWorkspaceId == nil)
+        #expect(vm.repositoryName.isEmpty)
+        #expect(vm.baseBranch.isEmpty)
+        #expect(vm.selectedMode == .implement)
+        #expect(vm.isValid == false)
+        #expect(vm.isSubmitting == false)
+        #expect(vm.isLoadingWorkspaces == false)
+        #expect(vm.errorMessage == nil)
+        #expect(vm.createdImplementation == nil)
+        #expect(vm.workspaces.isEmpty)
+    }
+
     // MARK: - Validation
 
     @Test("Form is invalid when prompt is empty")
@@ -83,6 +102,7 @@ struct CreateImplementationVMTests {
 
         await vm.loadWorkspaces()
 
+        #expect(mock.listWorkspacesCallCount == 1)
         #expect(vm.workspaces.count == 2)
         #expect(vm.isLoadingWorkspaces == false)
         #expect(vm.errorMessage == nil)
@@ -147,6 +167,60 @@ struct CreateImplementationVMTests {
         #expect(vm.createdImplementation?.id == "new-impl")
         #expect(vm.isSubmitting == false)
         #expect(vm.errorMessage == nil)
+        #expect(mock.createImplementationCallCount == 1)
+    }
+
+    @Test("Submit passes correct parameters to service")
+    func submitPassesCorrectParams() async {
+        let mock = MockTervezoService()
+        mock.createImplementationResult = .success(TestFixtures.makeImplementationDetail(id: "new-impl"))
+
+        let vm = CreateImplementationVM(service: mock)
+        vm.prompt = "  Fix the authentication bug  "
+        vm.selectedWorkspaceId = "ws-42"
+        vm.selectedMode = .bugfix
+        vm.repositoryName = "my-repo"
+        vm.baseBranch = "develop"
+
+        await vm.submit()
+
+        #expect(mock.lastCreatePrompt == "Fix the authentication bug")
+        #expect(mock.lastCreateWorkspaceId == "ws-42")
+        #expect(mock.lastCreateMode == "bugfix")
+        #expect(mock.lastCreateRepositoryName == "my-repo")
+        #expect(mock.lastCreateBaseBranch == "develop")
+    }
+
+    @Test("Submit sends nil for empty optional fields")
+    func submitNilForEmptyOptionals() async {
+        let mock = MockTervezoService()
+        mock.createImplementationResult = .success(TestFixtures.makeImplementationDetail(id: "new-impl"))
+
+        let vm = CreateImplementationVM(service: mock)
+        vm.prompt = "Implement a new API endpoint for users"
+        vm.selectedWorkspaceId = "ws-1"
+        vm.repositoryName = ""
+        vm.baseBranch = "   "
+
+        await vm.submit()
+
+        #expect(mock.lastCreateRepositoryName == nil)
+        #expect(mock.lastCreateBaseBranch == nil)
+    }
+
+    @Test("Submit with test mode passes correct raw value")
+    func submitTestMode() async {
+        let mock = MockTervezoService()
+        mock.createImplementationResult = .success(TestFixtures.makeImplementationDetail(id: "new-impl"))
+
+        let vm = CreateImplementationVM(service: mock)
+        vm.prompt = "Write integration tests for auth module"
+        vm.selectedWorkspaceId = "ws-1"
+        vm.selectedMode = .test
+
+        await vm.submit()
+
+        #expect(mock.lastCreateMode == "test")
     }
 
     @Test("Failed submission shows error")
@@ -179,6 +253,21 @@ struct CreateImplementationVMTests {
         await vm.submit()
 
         #expect(vm.createdImplementation == nil)
+        #expect(mock.createImplementationCallCount == 0)
+    }
+
+    @Test("Submit does nothing when no workspace selected even with valid prompt")
+    func submitNoWorkspace() async {
+        let mock = MockTervezoService()
+        mock.createImplementationResult = .success(TestFixtures.makeImplementationDetail())
+
+        let vm = CreateImplementationVM(service: mock)
+        vm.prompt = "A valid prompt that is long enough to pass validation"
+        vm.selectedWorkspaceId = nil
+
+        await vm.submit()
+
+        #expect(mock.createImplementationCallCount == 0)
     }
 
     // MARK: - Mode
