@@ -1,0 +1,56 @@
+# GitHub Actions workflow for c9s-ios
+# Copy this file to .github/workflows/ios-ci.yml to enable CI
+
+name: iOS CI
+
+on:
+  pull_request:
+    paths:
+      - 'c9s-ios/**'
+      - '.github/workflows/ios-ci.yml'
+
+jobs:
+  build-and-test:
+    runs-on: macos-15
+    defaults:
+      run:
+        working-directory: c9s-ios
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Select Xcode
+        run: sudo xcode-select -s /Applications/Xcode_16.app
+
+      - name: Cache SPM
+        uses: actions/cache@v4
+        with:
+          path: |
+            c9s-ios/.build
+            ~/Library/Caches/org.swift.swiftpm
+          key: ${{ runner.os }}-spm-${{ hashFiles('c9s-ios/Package.resolved') }}
+          restore-keys: ${{ runner.os }}-spm-
+
+      - name: Resolve dependencies
+        run: swift package resolve
+
+      - name: Build
+        run: swift build -Xswiftc -suppress-warnings
+
+      - name: Run tests
+        run: swift test
+
+  swiftlint:
+    runs-on: macos-15
+    defaults:
+      run:
+        working-directory: c9s-ios
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install SwiftLint
+        run: brew install swiftlint
+
+      - name: Run SwiftLint
+        run: swiftlint lint --strict
