@@ -63,6 +63,7 @@ c9s-ios/
 ## Features
 
 - **Implementation List** — search, filter by status, sort, pull-to-refresh, auto-polling
+- **iPad Split View** — NavigationSplitView with sidebar list and detail pane side-by-side
 - **Implementation Detail** — tabbed view (Timeline, Plan, Changes, Tests), step progress
 - **Real-Time Updates** — SSE streaming with auto-reconnect and exponential backoff
 - **Interactive Actions** — send prompts, create/merge/close PRs, restart implementations
@@ -78,14 +79,14 @@ cd c9s-ios
 swift test
 ```
 
-The project includes ~90 unit tests covering:
+The project includes ~100 unit tests covering:
 - API client (12 tests)
 - Keychain service (11 tests)
 - Cache service (10 tests)
 - Settings VM (8 tests)
 - Implementation list VM (17 tests)
 - Implementation detail VM (14 tests)
-- Create implementation VM (20 tests)
+- Create implementation VM (25 tests)
 - Terminal VM (8 tests)
 
 ## CI
