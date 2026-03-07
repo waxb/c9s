@@ -801,6 +801,7 @@ pub struct PromptRequest {
 // --- Workspace ---
 
 #[derive(Debug, Clone, Deserialize)]
+#[allow(dead_code)]
 pub struct Workspace {
     pub id: String,
     pub name: String,
