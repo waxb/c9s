@@ -1,11 +1,12 @@
 import SwiftUI
 
 /// Main implementation list view with search, filtering, and sections.
-/// Uses NavigationStack on iPhone and NavigationSplitView on iPad.
+/// Uses NavigationSplitView for iPad split view (list + detail side-by-side)
+/// which automatically collapses to stack navigation on iPhone.
 struct ImplementationListView: View {
     @State private var viewModel: ImplementationListVM
     @State private var showCreateSheet = false
-    @State private var navigationPath = NavigationPath()
+    @State private var selectedImplementationId: String?
     private var deepLinkRouter = DeepLinkRouter.shared
     var onSignOut: () -> Void
 
@@ -15,7 +16,7 @@ struct ImplementationListView: View {
     }
 
     var body: some View {
-        NavigationStack(path: $navigationPath) {
+        NavigationSplitView {
             Group {
                 if viewModel.isLoading && viewModel.implementations.isEmpty {
                     loadingView
@@ -60,14 +61,24 @@ struct ImplementationListView: View {
             .sheet(isPresented: $showCreateSheet) {
                 CreateImplementationView { createdId in
                     HapticFeedback.success()
-                    navigationPath.append(createdId)
+                    selectedImplementationId = createdId
                     Task { await viewModel.refresh() }
                 }
             }
             .onChange(of: deepLinkRouter.pendingImplementationId) { _, newId in
                 if let id = newId {
-                    navigationPath.append(id)
+                    selectedImplementationId = id
                     deepLinkRouter.consumePendingNavigation()
+                }
+            }
+        } detail: {
+            if let selectedId = selectedImplementationId {
+                ImplementationDetailView(implementationId: selectedId)
+            } else {
+                ContentUnavailableView {
+                    Label("Select an Implementation", systemImage: "terminal")
+                } description: {
+                    Text("Choose an implementation from the list to view its details.")
                 }
             }
         }
@@ -107,7 +118,7 @@ struct ImplementationListView: View {
     }
 
     private var listContent: some View {
-        List {
+        List(selection: $selectedImplementationId) {
             if let error = viewModel.errorMessage {
                 Section {
                     Label(error, systemImage: "exclamationmark.triangle.fill")
@@ -119,33 +130,29 @@ struct ImplementationListView: View {
             ForEach(viewModel.sections) { section in
                 Section(section.title) {
                     ForEach(section.items) { impl in
-                        NavigationLink(value: impl.id) {
-                            ImplementationRowView(implementation: impl)
-                        }
-                        .swipeActions(edge: .trailing) {
-                            if impl.prUrl == nil && impl.branch != nil {
-                                Button("Create PR") {
-                                    Task { try? await TervezoService().createPR(id: impl.id) }
+                        ImplementationRowView(implementation: impl)
+                            .tag(impl.id)
+                            .swipeActions(edge: .trailing) {
+                                if impl.prUrl == nil && impl.branch != nil {
+                                    Button("Create PR") {
+                                        Task { try? await TervezoService().createPR(id: impl.id) }
+                                    }
+                                    .tint(.blue)
                                 }
-                                .tint(.blue)
                             }
-                        }
-                        .swipeActions(edge: .leading) {
-                            if ["failed", "stopped", "cancelled"].contains(impl.status) {
-                                Button("Restart") {
-                                    Task { try? await TervezoService().restart(id: impl.id) }
+                            .swipeActions(edge: .leading) {
+                                if ["failed", "stopped", "cancelled"].contains(impl.status) {
+                                    Button("Restart") {
+                                        Task { try? await TervezoService().restart(id: impl.id) }
+                                    }
+                                    .tint(.orange)
                                 }
-                                .tint(.orange)
                             }
-                        }
                     }
                 }
             }
         }
         .listStyle(.insetGrouped)
-        .navigationDestination(for: String.self) { implId in
-            ImplementationDetailView(implementationId: implId)
-        }
     }
 
     private var filterMenu: some View {
