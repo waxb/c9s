@@ -89,6 +89,28 @@ struct SettingsView: View {
                 }
             }
 
+            // MARK: - Notifications
+            Section {
+                Button {
+                    Task {
+                        _ = await NotificationService.shared.requestAuthorization()
+                    }
+                } label: {
+                    HStack {
+                        Label("Enable Notifications", systemImage: "bell.badge")
+                        Spacer()
+                        if NotificationService.shared.isAuthorized {
+                            Image(systemName: "checkmark.circle.fill")
+                                .foregroundStyle(.green)
+                        }
+                    }
+                }
+            } header: {
+                Text("Notifications")
+            } footer: {
+                Text("Get notified when implementations complete, fail, or need input.")
+            }
+
             // MARK: - About Section
             Section("About") {
                 LabeledContent("App") { Text("c9s Mobile") }
