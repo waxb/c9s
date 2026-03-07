@@ -5,6 +5,7 @@ import SwiftUI
 struct ImplementationListView: View {
     @State private var viewModel: ImplementationListVM
     @State private var showCreateSheet = false
+    @State private var navigationPath = NavigationPath()
     var onSignOut: () -> Void
 
     init(service: TervezoServiceProtocol = TervezoService(), onSignOut: @escaping () -> Void) {
@@ -13,7 +14,7 @@ struct ImplementationListView: View {
     }
 
     var body: some View {
-        NavigationStack {
+        NavigationStack(path: $navigationPath) {
             Group {
                 if viewModel.isLoading && viewModel.implementations.isEmpty {
                     loadingView
@@ -54,6 +55,12 @@ struct ImplementationListView: View {
             }
             .onDisappear {
                 viewModel.stopPolling()
+            }
+            .sheet(isPresented: $showCreateSheet) {
+                CreateImplementationView { createdId in
+                    navigationPath.append(createdId)
+                    Task { await viewModel.refresh() }
+                }
             }
         }
     }
