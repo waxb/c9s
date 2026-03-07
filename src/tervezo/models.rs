@@ -804,7 +804,9 @@ pub struct PromptRequest {
 pub struct Workspace {
     pub id: String,
     pub name: String,
+    #[allow(dead_code)]
     pub slug: String,
+    #[allow(dead_code)]
     #[serde(default)]
     pub logo: Option<String>,
 }
@@ -863,14 +865,14 @@ mod tests {
     fn test_create_implementation_request_serialization_camel_case() {
         let req = CreateImplementationRequest {
             prompt: "Fix login bug".to_string(),
-            mode: "bug_fix".to_string(),
+            mode: "bugfix".to_string(),
             workspace_id: "ws-123".to_string(),
             repository_name: Some("user/repo".to_string()),
             base_branch: Some("develop".to_string()),
         };
         let json: serde_json::Value = serde_json::to_value(&req).unwrap();
         assert_eq!(json["prompt"], "Fix login bug");
-        assert_eq!(json["mode"], "bug_fix");
+        assert_eq!(json["mode"], "bugfix");
         assert_eq!(json["workspaceId"], "ws-123");
         assert_eq!(json["repositoryName"], "user/repo");
         assert_eq!(json["baseBranch"], "develop");

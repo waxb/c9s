@@ -386,7 +386,7 @@ impl TervezoCreateMode {
     pub fn api_value(self) -> &'static str {
         match self {
             Self::Feature => "feature",
-            Self::BugFix => "bug_fix",
+            Self::BugFix => "bugfix",
         }
     }
 }
@@ -1804,28 +1804,32 @@ mod tests {
 
     #[test]
     fn test_create_field_next_cycles_through_all_fields() {
-        let field = TervezoCreateField::Prompt;
-        let field = field.next(); // Mode
-        assert_eq!(field, TervezoCreateField::Mode);
-        let field = field.next(); // RepoUrl
-        assert_eq!(field, TervezoCreateField::RepoUrl);
-        let field = field.next(); // BaseBranch
-        assert_eq!(field, TervezoCreateField::BaseBranch);
-        let field = field.next(); // wraps to Prompt
+        let field = TervezoCreateField::Workspace;
+        let field = field.next();
         assert_eq!(field, TervezoCreateField::Prompt);
+        let field = field.next();
+        assert_eq!(field, TervezoCreateField::Mode);
+        let field = field.next();
+        assert_eq!(field, TervezoCreateField::RepoUrl);
+        let field = field.next();
+        assert_eq!(field, TervezoCreateField::BaseBranch);
+        let field = field.next();
+        assert_eq!(field, TervezoCreateField::Workspace);
     }
 
     #[test]
     fn test_create_field_prev_cycles_through_all_fields() {
-        let field = TervezoCreateField::Prompt;
-        let field = field.prev(); // wraps to BaseBranch
+        let field = TervezoCreateField::Workspace;
+        let field = field.prev();
         assert_eq!(field, TervezoCreateField::BaseBranch);
-        let field = field.prev(); // RepoUrl
+        let field = field.prev();
         assert_eq!(field, TervezoCreateField::RepoUrl);
-        let field = field.prev(); // Mode
+        let field = field.prev();
         assert_eq!(field, TervezoCreateField::Mode);
-        let field = field.prev(); // Prompt
+        let field = field.prev();
         assert_eq!(field, TervezoCreateField::Prompt);
+        let field = field.prev();
+        assert_eq!(field, TervezoCreateField::Workspace);
     }
 
     #[test]
@@ -1837,7 +1841,7 @@ mod tests {
         let mode = mode.toggle();
         assert_eq!(mode, TervezoCreateMode::BugFix);
         assert_eq!(mode.label(), "Bug Fix");
-        assert_eq!(mode.api_value(), "bug_fix");
+        assert_eq!(mode.api_value(), "bugfix");
 
         let mode = mode.toggle();
         assert_eq!(mode, TervezoCreateMode::Feature);
@@ -1846,7 +1850,7 @@ mod tests {
     #[test]
     fn test_create_state_defaults() {
         let state = TervezoCreateState::new();
-        assert_eq!(state.active_field, TervezoCreateField::Prompt);
+        assert_eq!(state.active_field, TervezoCreateField::Workspace);
         assert_eq!(state.mode, TervezoCreateMode::Feature);
         assert!(state.prompt.is_empty());
         assert_eq!(state.base_branch, "main");
