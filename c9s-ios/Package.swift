@@ -49,7 +49,7 @@ let package = Package(
                 .product(name: "SwiftTerm", package: "SwiftTerm"),
             ],
             path: "Sources",
-            exclude: ["GeneratedAPI"]
+            exclude: ["GeneratedAPI", "NotificationContent"]
         ),
 
         // Unit and integration tests
