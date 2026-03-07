@@ -65,35 +65,12 @@ struct RootView: View {
     }
 }
 
-/// Main app tab view shown after authentication.
-/// Currently a placeholder — will be replaced by ImplementationListView in Phase 4.
+/// Main app view shown after authentication.
+/// Wraps ImplementationListView with proper navigation and settings access.
 struct MainTabView: View {
     var onSignOut: () -> Void
 
     var body: some View {
-        NavigationStack {
-            VStack(spacing: 20) {
-                Image(systemName: "terminal.fill")
-                    .font(.system(size: 48))
-                    .foregroundStyle(.tint)
-
-                Text("c9s Mobile")
-                    .font(.largeTitle)
-                    .fontWeight(.bold)
-
-                Text("Implementation list coming soon...")
-                    .foregroundStyle(.secondary)
-            }
-            .navigationTitle("Implementations")
-            .toolbar {
-                ToolbarItem(placement: .topBarTrailing) {
-                    NavigationLink {
-                        SettingsView(onSignOut: onSignOut)
-                    } label: {
-                        Image(systemName: "gearshape")
-                    }
-                }
-            }
-        }
+        ImplementationListView(onSignOut: onSignOut)
     }
 }
