@@ -5,7 +5,7 @@ use std::path::Path;
 use super::notifier::JsonlNotifier;
 use super::EmbeddedTerminal;
 
-fn kill_process(pid: u32) {
+pub fn kill_process(pid: u32) {
     unsafe {
         libc::kill(pid as i32, libc::SIGTERM);
     }
@@ -188,6 +188,16 @@ impl TerminalManager {
             self.terminals.remove(&id);
             self.notifiers.remove(&id);
             self.order.retain(|o| o != &id);
+        }
+    }
+
+    pub fn remove_session(&mut self, session_id: &str) {
+        self.terminals.remove(session_id);
+        self.notifiers.remove(session_id);
+        self.side_terminals.remove(session_id);
+        self.order.retain(|o| o != session_id);
+        if self.active_id.as_deref() == Some(session_id) {
+            self.active_id = None;
         }
     }
 

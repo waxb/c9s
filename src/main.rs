@@ -301,6 +301,12 @@ fn run_loop(
                         let active = app.active_attached_sessions();
                         ui::render_confirm_quit(f, &active, area);
                     }
+                    ViewMode::ConfirmKillSession => {
+                        ui::render_session_list(f, app, area);
+                        if let Some((_id, name, _pid)) = app.kill_session_target() {
+                            ui::render_confirm_kill(f, name, area);
+                        }
+                    }
                     ViewMode::Log => {
                         let entries = log::entries();
                         ui::render_log_panel(f, &entries, app.log_scroll(), area);
@@ -1074,6 +1080,15 @@ fn process_action(
                     }
                 }
             }
+        }
+        Action::KillSession => {
+            app.prepare_kill_session();
+        }
+        Action::ConfirmKill => {
+            app.execute_kill_session();
+        }
+        Action::CancelKill => {
+            app.cancel_kill_session();
         }
         Action::None => {}
     }

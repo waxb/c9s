@@ -19,6 +19,7 @@ const BINDINGS: &[(&str, &str)] = &[
     ("/", "Filter sessions"),
     ("s", "Cycle sort column"),
     ("r", "Refresh session list"),
+    ("Ctrl+k", "Kill selected session"),
     ("L", "Toggle log panel"),
     ("Esc", "Back / clear filter"),
     ("q", "Quit"),
