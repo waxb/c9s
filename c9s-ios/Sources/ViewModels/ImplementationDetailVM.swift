@@ -68,19 +68,31 @@ final class ImplementationDetailVM {
         }
     }
 
+    /// SSE stream connection state.
+    var isStreaming = false
+    var streamError: String?
+
     // MARK: - Dependencies
 
     private let implementationId: String
     private let service: TervezoServiceProtocol
+    private let sseService: SSEStreamService
     private var pollingTask: Task<Void, Never>?
+    private var sseTask: Task<Void, Never>?
 
-    init(implementationId: String, service: TervezoServiceProtocol = TervezoService()) {
+    init(
+        implementationId: String,
+        service: TervezoServiceProtocol = TervezoService(),
+        sseService: SSEStreamService = SSEStreamService()
+    ) {
         self.implementationId = implementationId
         self.service = service
+        self.sseService = sseService
     }
 
     deinit {
         pollingTask?.cancel()
+        sseTask?.cancel()
     }
 
     // MARK: - Loading
@@ -169,6 +181,70 @@ final class ImplementationDetailVM {
     func stopPolling() {
         pollingTask?.cancel()
         pollingTask = nil
+    }
+
+    // MARK: - SSE Streaming
+
+    /// Start the SSE stream for real-time updates.
+    /// Falls back to polling if the stream fails.
+    func startSSEStream() {
+        sseTask?.cancel()
+        let lastCursor = timeline.last?.id
+
+        sseTask = Task { [weak self] in
+            guard let self else { return }
+            let stream = self.sseService.connect(
+                implementationId: self.implementationId,
+                lastCursor: lastCursor
+            )
+
+            for await event in stream {
+                guard !Task.isCancelled else { break }
+                await self.handleSSEEvent(event)
+            }
+        }
+    }
+
+    /// Stop the SSE stream.
+    func stopSSEStream() {
+        sseTask?.cancel()
+        sseTask = nil
+        isStreaming = false
+    }
+
+    private func handleSSEEvent(_ event: SSEEvent) async {
+        switch event {
+        case .connected:
+            isStreaming = true
+            streamError = nil
+
+        case .disconnected:
+            isStreaming = false
+
+        case .timelineMessages(let messages):
+            // Append new messages, avoiding duplicates
+            let existingIds = Set(timeline.map(\.id))
+            let newMessages = messages.filter { !existingIds.contains($0.id) }
+            timeline.append(contentsOf: newMessages)
+
+        case .planUpdate(let newPlan):
+            plan = newPlan
+
+        case .analysisUpdate(let newAnalysis):
+            analysis = newAnalysis
+
+        case .waitingForInput(_):
+            // Refresh detail to get latest step statuses
+            await loadDetail()
+
+        case .complete:
+            // Implementation finished — do a full refresh
+            await refresh()
+            stopSSEStream()
+
+        case .error(let message):
+            streamError = message
+        }
     }
 
     // MARK: - Prompt

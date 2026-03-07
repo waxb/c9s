@@ -26,9 +26,12 @@ struct ImplementationDetailView: View {
         }
         .task {
             await viewModel.loadAll()
-            viewModel.startPolling()
+            // Start SSE for real-time updates, with polling as fallback
+            viewModel.startSSEStream()
+            viewModel.startPolling(interval: 30) // Polling as backup
         }
         .onDisappear {
+            viewModel.stopSSEStream()
             viewModel.stopPolling()
         }
         .refreshable {
