@@ -961,8 +961,7 @@ fn process_action(
                         app::TervezoCreateField::BaseBranch => {
                             state.base_branch.pop();
                         }
-                        app::TervezoCreateField::Mode
-                        | app::TervezoCreateField::Workspace => {}
+                        app::TervezoCreateField::Mode | app::TervezoCreateField::Workspace => {}
                     }
                     state.error = None;
                 }
@@ -1470,26 +1469,25 @@ fn execute_tervezo_action(app: &mut App, action: TervezoAction) {
 }
 
 fn submit_tervezo_create(app: &mut App) {
-    let (prompt, mode, workspace_id, repo_name, base_branch) =
-        match app.tervezo_create.as_ref() {
-            Some(state) => {
-                if state.submitting {
-                    return;
-                }
-                let ws_id = state
-                    .workspaces
-                    .get(state.selected_workspace)
-                    .map(|w| w.id.clone());
-                (
-                    state.prompt.clone(),
-                    state.mode.api_value().to_string(),
-                    ws_id,
-                    state.repo_url.clone(),
-                    state.base_branch.clone(),
-                )
+    let (prompt, mode, workspace_id, repo_name, base_branch) = match app.tervezo_create.as_ref() {
+        Some(state) => {
+            if state.submitting {
+                return;
             }
-            None => return,
-        };
+            let ws_id = state
+                .workspaces
+                .get(state.selected_workspace)
+                .map(|w| w.id.clone());
+            (
+                state.prompt.clone(),
+                state.mode.api_value().to_string(),
+                ws_id,
+                state.repo_url.clone(),
+                state.base_branch.clone(),
+            )
+        }
+        None => return,
+    };
 
     if prompt.trim().is_empty() {
         if let Some(ref mut state) = app.tervezo_create {

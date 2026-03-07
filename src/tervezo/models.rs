@@ -729,9 +729,7 @@ pub struct StatusStep {
 impl StatusStep {
     pub fn elapsed_secs(&self) -> Option<f64> {
         match (self.started_at, self.completed_at) {
-            (Some(start), Some(end)) => {
-                Some((end - start).num_milliseconds() as f64 / 1000.0)
-            }
+            (Some(start), Some(end)) => Some((end - start).num_milliseconds() as f64 / 1000.0),
             (Some(start), None) if self.status == "running" => {
                 Some((Utc::now() - start).num_milliseconds() as f64 / 1000.0)
             }
@@ -743,9 +741,7 @@ impl StatusStep {
 impl StatusResponse {
     pub fn elapsed_secs(&self) -> Option<f64> {
         match (self.started_at, self.completed_at) {
-            (Some(start), Some(end)) => {
-                Some((end - start).num_milliseconds() as f64 / 1000.0)
-            }
+            (Some(start), Some(end)) => Some((end - start).num_milliseconds() as f64 / 1000.0),
             (Some(start), None) if self.status == "running" => {
                 Some((Utc::now() - start).num_milliseconds() as f64 / 1000.0)
             }
@@ -833,6 +829,7 @@ pub struct PromptRequest {
 // --- Workspace ---
 
 #[derive(Debug, Clone, Deserialize)]
+#[allow(dead_code)]
 pub struct Workspace {
     pub id: String,
     pub name: String,
