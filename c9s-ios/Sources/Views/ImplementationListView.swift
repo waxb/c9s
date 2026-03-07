@@ -129,9 +129,7 @@ struct ImplementationListView: View {
         }
         .listStyle(.insetGrouped)
         .navigationDestination(for: String.self) { implId in
-            // Placeholder — will be replaced by ImplementationDetailView in Phase 5
-            Text("Detail for \(implId)")
-                .navigationTitle("Detail")
+            ImplementationDetailView(implementationId: implId)
         }
     }
 
