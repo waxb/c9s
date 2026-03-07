@@ -1,0 +1,2242 @@
+{
+  "info": {
+    "title": "Tervezo Public API",
+    "version": "1.0.0",
+    "description": "Access Tervezo implementation data programmatically. Use API keys for authentication.\n\n## Authentication\n\nAll API endpoints require authentication via API key. Pass your API key in the Authorization header:\n\n```\nAuthorization: Bearer tzv_1234567890abcdefghijklmnopqrstuvwxyz\n```\n\nYou can create and manage API keys from your Tervezo account settings.\n\n## Streaming\n\nThe `/implementations/{id}/stream` endpoint provides real-time updates via Server-Sent Events (SSE).\n\nConnect with an optional `lastMessageId` query parameter for reconnection support.\n\n### SSE event types\n\n| Event | Data shape | Description |\n|---|---|---|\n| `timeline_init` | `{ messages: TimelineMessage[] }` | Initial batch of existing timeline messages |\n| `timeline_update` | `{ messages: TimelineMessage[] }` | New timeline messages since last update |\n| `plan_update` | `{ plan: string }` | Implementation plan content (markdown) |\n| `analysis_update` | `{ analysis: string }` | Codebase analysis content (markdown) |\n| `waiting_for_input` | `{ stepId: string, stepName: string }` | A workflow step is waiting for user input |\n| `waiting_for_input_resolved` | `{}` | The waiting step has been resolved |\n| `complete` | `{ success: true, error: null }` | Implementation completed successfully |\n| `error` | `{ success: false, error: string | null }` | Implementation failed or was stopped |\n\n### TimelineMessage types\n\nEach message in the timeline has a `type` discriminator field. Possible types:\n`user_prompt`, `user_message`, `iteration_marker`, `assistant_text`, `assistant_thinking`,\n`tool_call`, `tool_result`, `file_change`, `git_operation`, `pr_created`,\n`status_change`, `error`, `raw_text`, `todo`, `test_report`.\n\nSee the `GET /implementations/{id}/timeline` response schema for full type definitions.\n\n## Sending prompts\n\nThe `POST /implementations/{id}/prompt` endpoint sends a message to an implementation. Behavior depends on the implementation state:\n\n- **Waiting for input**: If the implementation is running and a step has `waiting_for_input` status, the message is delivered as a workflow event (resumes Claude immediately).\n- **Terminal state** (completed, failed, stopped, cancelled, merged): A follow-up chat is started — the message creates a new follow-up workflow that runs in the sandbox.\n- **Running (not waiting)** or **pending/queued**: Returns `409 Conflict`.\n\n## Pull request actions\n\nManage the implementation's GitHub pull request:\n\n| Endpoint | Description |\n|---|---|\n| `POST /implementations/{id}/pr` | Create a PR (requires branch pushed, no existing PR) |\n| `GET /implementations/{id}/pr` | Get live PR details from GitHub |\n| `POST /implementations/{id}/pr/merge` | Merge the PR |\n| `POST /implementations/{id}/pr/close` | Close the PR |\n| `POST /implementations/{id}/pr/reopen` | Reopen a closed PR |\n\n## Restarting implementations\n\nThe `POST /implementations/{id}/restart` endpoint restarts a failed, stopped, or cancelled implementation. If the sandbox is still alive, it resumes from the failure point. Otherwise, a new implementation is created.\n\n## Error handling\n\nAll errors return a JSON response with an error code and message."
+  },
+  "servers": [
+    {
+      "url": "/api/v1"
+    }
+  ],
+  "security": [
+    {
+      "bearerAuth": []
+    }
+  ],
+  "openapi": "3.1.1",
+  "paths": {
+    "/implementations": {
+      "get": {
+        "operationId": "list",
+        "summary": "List implementations",
+        "description": "List implementations the authenticated user has access to across all workspaces. Supports pagination and filtering by status.",
+        "tags": [
+          "Implementations"
+        ],
+        "parameters": [
+          {
+            "name": "limit",
+            "in": "query",
+            "schema": {
+              "type": "number",
+              "minimum": 1,
+              "maximum": 100,
+              "default": 20
+            },
+            "allowEmptyValue": true,
+            "allowReserved": true
+          },
+          {
+            "name": "offset",
+            "in": "query",
+            "schema": {
+              "type": "number",
+              "minimum": 0,
+              "default": 0
+            },
+            "allowEmptyValue": true,
+            "allowReserved": true
+          },
+          {
+            "name": "status",
+            "in": "query",
+            "schema": {
+              "enum": [
+                "pending",
+                "queued",
+                "running",
+                "completed",
+                "failed",
+                "stopped",
+                "merged",
+                "cancelled"
+              ]
+            },
+            "style": "deepObject",
+            "explode": true,
+            "allowEmptyValue": true,
+            "allowReserved": true
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "items": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "id": {
+                            "type": "string"
+                          },
+                          "title": {
+                            "anyOf": [
+                              {
+                                "type": "string"
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ]
+                          },
+                          "status": {
+                            "type": "string"
+                          },
+                          "mode": {
+                            "type": "string"
+                          },
+                          "repoUrl": {
+                            "anyOf": [
+                              {
+                                "type": "string"
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ]
+                          },
+                          "branch": {
+                            "anyOf": [
+                              {
+                                "type": "string"
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ]
+                          },
+                          "prUrl": {
+                            "anyOf": [
+                              {
+                                "type": "string"
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ]
+                          },
+                          "prStatus": {
+                            "anyOf": [
+                              {
+                                "type": "string"
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ]
+                          },
+                          "spec": {
+                            "anyOf": [
+                              {
+                                "type": "object",
+                                "properties": {
+                                  "id": {
+                                    "type": "string"
+                                  },
+                                  "title": {
+                                    "anyOf": [
+                                      {
+                                        "type": "string"
+                                      },
+                                      {
+                                        "type": "null"
+                                      }
+                                    ]
+                                  }
+                                },
+                                "required": [
+                                  "id",
+                                  "title"
+                                ]
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ]
+                          },
+                          "createdAt": {
+                            "type": "string",
+                            "format": "date-time",
+                            "x-native-type": "date"
+                          },
+                          "updatedAt": {
+                            "anyOf": [
+                              {
+                                "type": "string",
+                                "format": "date-time",
+                                "x-native-type": "date"
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ]
+                          }
+                        },
+                        "required": [
+                          "id",
+                          "title",
+                          "status",
+                          "mode",
+                          "repoUrl",
+                          "branch",
+                          "prUrl",
+                          "prStatus",
+                          "spec",
+                          "createdAt",
+                          "updatedAt"
+                        ]
+                      }
+                    },
+                    "total": {
+                      "type": "number"
+                    }
+                  },
+                  "required": [
+                    "items"
+                  ]
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/implementations/{id}": {
+      "get": {
+        "operationId": "getById",
+        "summary": "Get implementation details",
+        "description": "Retrieve full details of an implementation including status, plan, analysis, timeline messages, and metadata.",
+        "tags": [
+          "Implementations"
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "id": {
+                      "type": "string"
+                    },
+                    "title": {
+                      "anyOf": [
+                        {
+                          "type": "string"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    },
+                    "status": {
+                      "type": "string"
+                    },
+                    "mode": {
+                      "type": "string"
+                    },
+                    "prompt": {
+                      "anyOf": [
+                        {
+                          "type": "string"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    },
+                    "plan": {
+                      "anyOf": [
+                        {
+                          "type": "string"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    },
+                    "analysis": {
+                      "anyOf": [
+                        {
+                          "type": "string"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    },
+                    "error": {
+                      "anyOf": [
+                        {
+                          "type": "string"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    },
+                    "isRunning": {
+                      "type": "boolean"
+                    },
+                    "repoUrl": {
+                      "anyOf": [
+                        {
+                          "type": "string"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    },
+                    "branch": {
+                      "anyOf": [
+                        {
+                          "type": "string"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    },
+                    "baseBranch": {
+                      "anyOf": [
+                        {
+                          "type": "string"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    },
+                    "branchPushed": {
+                      "anyOf": [
+                        {
+                          "type": "boolean"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    },
+                    "prUrl": {
+                      "anyOf": [
+                        {
+                          "type": "string"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    },
+                    "prStatus": {
+                      "anyOf": [
+                        {
+                          "type": "string"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    },
+                    "sandboxId": {
+                      "anyOf": [
+                        {
+                          "type": "string"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    },
+                    "iterations": {
+                      "type": "number"
+                    },
+                    "currentIteration": {
+                      "type": "number"
+                    },
+                    "createdAt": {
+                      "type": "string",
+                      "format": "date-time",
+                      "x-native-type": "date"
+                    },
+                    "updatedAt": {
+                      "anyOf": [
+                        {
+                          "type": "string",
+                          "format": "date-time",
+                          "x-native-type": "date"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    },
+                    "spec": {
+                      "anyOf": [
+                        {
+                          "type": "object",
+                          "properties": {
+                            "id": {
+                              "type": "string"
+                            },
+                            "title": {
+                              "anyOf": [
+                                {
+                                  "type": "string"
+                                },
+                                {
+                                  "type": "null"
+                                }
+                              ]
+                            }
+                          },
+                          "required": [
+                            "id",
+                            "title"
+                          ]
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    },
+                    "steps": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "id": {
+                            "type": "string"
+                          },
+                          "name": {
+                            "type": "string"
+                          },
+                          "order": {
+                            "type": "number"
+                          },
+                          "status": {
+                            "type": "string"
+                          },
+                          "startedAt": {
+                            "anyOf": [
+                              {
+                                "type": "string",
+                                "format": "date-time",
+                                "x-native-type": "date"
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ]
+                          },
+                          "completedAt": {
+                            "anyOf": [
+                              {
+                                "type": "string",
+                                "format": "date-time",
+                                "x-native-type": "date"
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ]
+                          },
+                          "error": {
+                            "anyOf": [
+                              {
+                                "type": "string"
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ]
+                          }
+                        },
+                        "required": [
+                          "id",
+                          "name",
+                          "order",
+                          "status",
+                          "startedAt",
+                          "completedAt",
+                          "error"
+                        ]
+                      }
+                    },
+                    "timelineMessageCount": {
+                      "type": "number"
+                    }
+                  },
+                  "required": [
+                    "id",
+                    "title",
+                    "status",
+                    "mode",
+                    "prompt",
+                    "plan",
+                    "analysis",
+                    "error",
+                    "isRunning",
+                    "repoUrl",
+                    "branch",
+                    "baseBranch",
+                    "branchPushed",
+                    "prUrl",
+                    "prStatus",
+                    "sandboxId",
+                    "iterations",
+                    "currentIteration",
+                    "createdAt",
+                    "updatedAt",
+                    "spec",
+                    "steps",
+                    "timelineMessageCount"
+                  ]
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/implementations/{id}/timeline": {
+      "get": {
+        "operationId": "getTimeline",
+        "summary": "Get timeline messages",
+        "description": "Retrieve timeline messages for an implementation. Use the `after` query parameter to get messages after a specific message ID for reconnection support.",
+        "tags": [
+          "Implementations"
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "after",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string"
+            },
+            "allowEmptyValue": true,
+            "allowReserved": true
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "messages": {
+                      "type": "array",
+                      "items": {
+                        "anyOf": [
+                          {
+                            "type": "object",
+                            "properties": {
+                              "id": {
+                                "type": "string"
+                              },
+                              "type": {
+                                "const": "user_prompt"
+                              },
+                              "timestamp": {
+                                "type": "string"
+                              },
+                              "text": {
+                                "type": "string"
+                              },
+                              "specTitle": {
+                                "type": "string"
+                              }
+                            },
+                            "required": [
+                              "id",
+                              "type",
+                              "timestamp",
+                              "text"
+                            ]
+                          },
+                          {
+                            "type": "object",
+                            "properties": {
+                              "id": {
+                                "type": "string"
+                              },
+                              "type": {
+                                "const": "user_message"
+                              },
+                              "timestamp": {
+                                "type": "string"
+                              },
+                              "text": {
+                                "type": "string"
+                              },
+                              "specTitle": {
+                                "type": "string"
+                              }
+                            },
+                            "required": [
+                              "id",
+                              "type",
+                              "timestamp",
+                              "text"
+                            ]
+                          },
+                          {
+                            "type": "object",
+                            "properties": {
+                              "id": {
+                                "type": "string"
+                              },
+                              "type": {
+                                "const": "iteration_marker"
+                              },
+                              "timestamp": {
+                                "type": "string"
+                              },
+                              "iteration": {
+                                "type": "number"
+                              },
+                              "event": {
+                                "enum": [
+                                  "start",
+                                  "complete"
+                                ]
+                              }
+                            },
+                            "required": [
+                              "id",
+                              "type",
+                              "timestamp",
+                              "iteration",
+                              "event"
+                            ]
+                          },
+                          {
+                            "type": "object",
+                            "properties": {
+                              "id": {
+                                "type": "string"
+                              },
+                              "type": {
+                                "const": "assistant_text"
+                              },
+                              "timestamp": {
+                                "type": "string"
+                              },
+                              "text": {
+                                "type": "string"
+                              },
+                              "isPartial": {
+                                "type": "boolean"
+                              }
+                            },
+                            "required": [
+                              "id",
+                              "type",
+                              "timestamp",
+                              "text"
+                            ]
+                          },
+                          {
+                            "type": "object",
+                            "properties": {
+                              "id": {
+                                "type": "string"
+                              },
+                              "type": {
+                                "const": "assistant_thinking"
+                              },
+                              "timestamp": {
+                                "type": "string"
+                              },
+                              "thinking": {
+                                "type": "string"
+                              }
+                            },
+                            "required": [
+                              "id",
+                              "type",
+                              "timestamp",
+                              "thinking"
+                            ]
+                          },
+                          {
+                            "type": "object",
+                            "properties": {
+                              "id": {
+                                "type": "string"
+                              },
+                              "type": {
+                                "const": "tool_call"
+                              },
+                              "timestamp": {
+                                "type": "string"
+                              },
+                              "toolCallId": {
+                                "type": "string"
+                              },
+                              "toolName": {
+                                "type": "string"
+                              },
+                              "parameters": {
+                                "type": "object",
+                                "propertyNames": {
+                                  "type": "string"
+                                },
+                                "additionalProperties": {},
+                                "description": "JSON object of tool call parameters (arbitrary key-value pairs)"
+                              },
+                              "status": {
+                                "enum": [
+                                  "pending",
+                                  "running",
+                                  "completed",
+                                  "error"
+                                ],
+                                "default": "pending"
+                              }
+                            },
+                            "required": [
+                              "id",
+                              "type",
+                              "timestamp",
+                              "toolCallId",
+                              "toolName",
+                              "parameters"
+                            ]
+                          },
+                          {
+                            "type": "object",
+                            "properties": {
+                              "id": {
+                                "type": "string"
+                              },
+                              "type": {
+                                "const": "tool_result"
+                              },
+                              "timestamp": {
+                                "type": "string"
+                              },
+                              "toolCallId": {
+                                "type": "string"
+                              },
+                              "toolName": {
+                                "type": "string"
+                              },
+                              "output": {
+                                "type": "string"
+                              },
+                              "isError": {
+                                "type": "boolean",
+                                "default": false
+                              },
+                              "truncated": {
+                                "type": "boolean"
+                              }
+                            },
+                            "required": [
+                              "id",
+                              "type",
+                              "timestamp",
+                              "toolCallId",
+                              "toolName",
+                              "output"
+                            ]
+                          },
+                          {
+                            "type": "object",
+                            "properties": {
+                              "id": {
+                                "type": "string"
+                              },
+                              "type": {
+                                "const": "file_change"
+                              },
+                              "timestamp": {
+                                "type": "string"
+                              },
+                              "filePath": {
+                                "type": "string"
+                              },
+                              "operation": {
+                                "enum": [
+                                  "create",
+                                  "edit",
+                                  "delete"
+                                ]
+                              },
+                              "diff": {
+                                "type": "string"
+                              },
+                              "language": {
+                                "type": "string"
+                              },
+                              "content": {
+                                "type": "string"
+                              }
+                            },
+                            "required": [
+                              "id",
+                              "type",
+                              "timestamp",
+                              "filePath",
+                              "operation"
+                            ]
+                          },
+                          {
+                            "type": "object",
+                            "properties": {
+                              "id": {
+                                "type": "string"
+                              },
+                              "type": {
+                                "const": "git_operation"
+                              },
+                              "timestamp": {
+                                "type": "string"
+                              },
+                              "operation": {
+                                "enum": [
+                                  "push",
+                                  "commit",
+                                  "branch",
+                                  "tag",
+                                  "checkout"
+                                ]
+                              },
+                              "success": {
+                                "type": "boolean"
+                              },
+                              "branch": {
+                                "type": "string"
+                              },
+                              "commitHash": {
+                                "type": "string"
+                              },
+                              "commitMessage": {
+                                "type": "string"
+                              },
+                              "details": {
+                                "type": "string"
+                              }
+                            },
+                            "required": [
+                              "id",
+                              "type",
+                              "timestamp",
+                              "operation",
+                              "success"
+                            ]
+                          },
+                          {
+                            "type": "object",
+                            "properties": {
+                              "id": {
+                                "type": "string"
+                              },
+                              "type": {
+                                "const": "pr_created"
+                              },
+                              "timestamp": {
+                                "type": "string"
+                              },
+                              "prUrl": {
+                                "type": "string"
+                              },
+                              "prNumber": {
+                                "type": "number"
+                              },
+                              "title": {
+                                "type": "string"
+                              },
+                              "status": {
+                                "enum": [
+                                  "open",
+                                  "draft",
+                                  "closed",
+                                  "merged"
+                                ]
+                              }
+                            },
+                            "required": [
+                              "id",
+                              "type",
+                              "timestamp",
+                              "prUrl"
+                            ]
+                          },
+                          {
+                            "type": "object",
+                            "properties": {
+                              "id": {
+                                "type": "string"
+                              },
+                              "type": {
+                                "const": "status_change"
+                              },
+                              "timestamp": {
+                                "type": "string"
+                              },
+                              "fromStatus": {
+                                "enum": [
+                                  "pending",
+                                  "running",
+                                  "completed",
+                                  "failed",
+                                  "stopped",
+                                  "merged",
+                                  "cancelled"
+                                ]
+                              },
+                              "toStatus": {
+                                "enum": [
+                                  "pending",
+                                  "running",
+                                  "completed",
+                                  "failed",
+                                  "stopped",
+                                  "merged",
+                                  "cancelled"
+                                ]
+                              },
+                              "reason": {
+                                "type": "string"
+                              }
+                            },
+                            "required": [
+                              "id",
+                              "type",
+                              "timestamp",
+                              "toStatus"
+                            ]
+                          },
+                          {
+                            "type": "object",
+                            "properties": {
+                              "id": {
+                                "type": "string"
+                              },
+                              "type": {
+                                "const": "error"
+                              },
+                              "timestamp": {
+                                "type": "string"
+                              },
+                              "severity": {
+                                "enum": [
+                                  "warning",
+                                  "error",
+                                  "fatal"
+                                ]
+                              },
+                              "message": {
+                                "type": "string"
+                              },
+                              "code": {
+                                "type": "string"
+                              },
+                              "details": {
+                                "type": "string"
+                              }
+                            },
+                            "required": [
+                              "id",
+                              "type",
+                              "timestamp",
+                              "severity",
+                              "message"
+                            ]
+                          },
+                          {
+                            "type": "object",
+                            "properties": {
+                              "id": {
+                                "type": "string"
+                              },
+                              "type": {
+                                "const": "raw_text"
+                              },
+                              "timestamp": {
+                                "type": "string"
+                              },
+                              "text": {
+                                "type": "string"
+                              },
+                              "parseError": {
+                                "type": "string"
+                              }
+                            },
+                            "required": [
+                              "id",
+                              "type",
+                              "timestamp",
+                              "text"
+                            ]
+                          },
+                          {
+                            "type": "object",
+                            "properties": {
+                              "id": {
+                                "type": "string"
+                              },
+                              "type": {
+                                "const": "todo"
+                              },
+                              "timestamp": {
+                                "type": "string"
+                              },
+                              "todos": {
+                                "type": "array",
+                                "items": {
+                                  "type": "object",
+                                  "properties": {
+                                    "status": {
+                                      "enum": [
+                                        "completed",
+                                        "in_progress",
+                                        "pending"
+                                      ]
+                                    },
+                                    "content": {
+                                      "type": "string"
+                                    },
+                                    "activeForm": {
+                                      "type": "string"
+                                    }
+                                  },
+                                  "required": [
+                                    "status",
+                                    "content",
+                                    "activeForm"
+                                  ]
+                                }
+                              }
+                            },
+                            "required": [
+                              "id",
+                              "type",
+                              "timestamp",
+                              "todos"
+                            ]
+                          },
+                          {
+                            "type": "object",
+                            "properties": {
+                              "id": {
+                                "type": "string"
+                              },
+                              "type": {
+                                "const": "test_report"
+                              },
+                              "timestamp": {
+                                "type": "string"
+                              },
+                              "summary": {
+                                "type": "object",
+                                "properties": {
+                                  "status": {
+                                    "enum": [
+                                      "passing",
+                                      "failing",
+                                      "partial"
+                                    ]
+                                  },
+                                  "message": {
+                                    "type": "string"
+                                  },
+                                  "stats": {
+                                    "type": "object",
+                                    "properties": {
+                                      "newTests": {
+                                        "type": "number"
+                                      },
+                                      "totalBefore": {
+                                        "type": "number"
+                                      },
+                                      "totalAfter": {
+                                        "type": "number"
+                                      },
+                                      "preExistingFailures": {
+                                        "type": "number"
+                                      }
+                                    },
+                                    "required": [
+                                      "newTests",
+                                      "totalBefore",
+                                      "totalAfter"
+                                    ]
+                                  }
+                                },
+                                "required": [
+                                  "status",
+                                  "message"
+                                ]
+                              },
+                              "testsAdded": {
+                                "type": "array",
+                                "items": {
+                                  "type": "object",
+                                  "properties": {
+                                    "file": {
+                                      "type": "string"
+                                    },
+                                    "count": {
+                                      "type": "number"
+                                    },
+                                    "criticalPath": {
+                                      "type": "string"
+                                    }
+                                  },
+                                  "required": [
+                                    "file",
+                                    "count",
+                                    "criticalPath"
+                                  ]
+                                },
+                                "default": []
+                              },
+                              "approach": {
+                                "type": "string"
+                              },
+                              "uncoveredPaths": {
+                                "type": "array",
+                                "items": {
+                                  "type": "object",
+                                  "properties": {
+                                    "name": {
+                                      "type": "string"
+                                    },
+                                    "detail": {
+                                      "type": "string"
+                                    },
+                                    "verificationMethod": {
+                                      "enum": [
+                                        "manual",
+                                        "e2e",
+                                        "none"
+                                      ],
+                                      "default": "manual"
+                                    }
+                                  },
+                                  "required": [
+                                    "name",
+                                    "detail"
+                                  ]
+                                },
+                                "default": []
+                              }
+                            },
+                            "required": [
+                              "id",
+                              "type",
+                              "timestamp",
+                              "summary"
+                            ]
+                          }
+                        ]
+                      }
+                    }
+                  },
+                  "required": [
+                    "messages"
+                  ]
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/implementations/{id}/plan": {
+      "get": {
+        "operationId": "getPlan",
+        "summary": "Get implementation plan",
+        "description": "Retrieve the AI-generated implementation plan. Returns 404 if no plan is available yet.",
+        "tags": [
+          "Implementations"
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "plan": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "plan"
+                  ]
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/implementations/{id}/analysis": {
+      "get": {
+        "operationId": "getAnalysis",
+        "summary": "Get implementation analysis",
+        "description": "Retrieve the AI-generated codebase analysis. Returns 404 if no analysis is available yet.",
+        "tags": [
+          "Implementations"
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "analysis": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "analysis"
+                  ]
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/implementations/{id}/changes": {
+      "get": {
+        "operationId": "getChanges",
+        "summary": "Get file changes / diff",
+        "description": "Retrieve file changes with unified diffs from the GitHub PR or branch comparison.",
+        "tags": [
+          "Implementations"
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "files": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "filename": {
+                            "type": "string"
+                          },
+                          "status": {
+                            "enum": [
+                              "added",
+                              "removed",
+                              "modified",
+                              "renamed",
+                              "copied",
+                              "changed",
+                              "unchanged"
+                            ]
+                          },
+                          "additions": {
+                            "type": "number"
+                          },
+                          "deletions": {
+                            "type": "number"
+                          },
+                          "changes": {
+                            "type": "number"
+                          },
+                          "patch": {
+                            "type": "string"
+                          },
+                          "previous_filename": {
+                            "type": "string"
+                          }
+                        },
+                        "required": [
+                          "filename",
+                          "status",
+                          "additions",
+                          "deletions",
+                          "changes"
+                        ]
+                      }
+                    }
+                  },
+                  "required": [
+                    "files"
+                  ]
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/implementations/{id}/test-output": {
+      "get": {
+        "operationId": "getTestOutput",
+        "summary": "Get test output",
+        "description": "Retrieve test reports from the implementation timeline. Extracts test_report messages from the timeline.",
+        "tags": [
+          "Implementations"
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "testReports": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "id": {
+                            "type": "string"
+                          },
+                          "type": {
+                            "const": "test_report"
+                          },
+                          "timestamp": {
+                            "type": "string"
+                          },
+                          "summary": {
+                            "type": "object",
+                            "properties": {
+                              "status": {
+                                "enum": [
+                                  "passing",
+                                  "failing",
+                                  "partial"
+                                ]
+                              },
+                              "message": {
+                                "type": "string"
+                              },
+                              "stats": {
+                                "type": "object",
+                                "properties": {
+                                  "newTests": {
+                                    "type": "number"
+                                  },
+                                  "totalBefore": {
+                                    "type": "number"
+                                  },
+                                  "totalAfter": {
+                                    "type": "number"
+                                  },
+                                  "preExistingFailures": {
+                                    "type": "number"
+                                  }
+                                },
+                                "required": [
+                                  "newTests",
+                                  "totalBefore",
+                                  "totalAfter"
+                                ]
+                              }
+                            },
+                            "required": [
+                              "status",
+                              "message"
+                            ]
+                          },
+                          "testsAdded": {
+                            "type": "array",
+                            "items": {
+                              "type": "object",
+                              "properties": {
+                                "file": {
+                                  "type": "string"
+                                },
+                                "count": {
+                                  "type": "number"
+                                },
+                                "criticalPath": {
+                                  "type": "string"
+                                }
+                              },
+                              "required": [
+                                "file",
+                                "count",
+                                "criticalPath"
+                              ]
+                            },
+                            "default": []
+                          },
+                          "approach": {
+                            "type": "string"
+                          },
+                          "uncoveredPaths": {
+                            "type": "array",
+                            "items": {
+                              "type": "object",
+                              "properties": {
+                                "name": {
+                                  "type": "string"
+                                },
+                                "detail": {
+                                  "type": "string"
+                                },
+                                "verificationMethod": {
+                                  "enum": [
+                                    "manual",
+                                    "e2e",
+                                    "none"
+                                  ],
+                                  "default": "manual"
+                                }
+                              },
+                              "required": [
+                                "name",
+                                "detail"
+                              ]
+                            },
+                            "default": []
+                          }
+                        },
+                        "required": [
+                          "id",
+                          "type",
+                          "timestamp",
+                          "summary"
+                        ]
+                      }
+                    }
+                  },
+                  "required": [
+                    "testReports"
+                  ]
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/implementations/{id}/ssh": {
+      "get": {
+        "operationId": "getSsh",
+        "summary": "Get SSH access metadata",
+        "description": "Retrieve SSH connection details for a running implementation sandbox. Returns host, port, username, and a ready-to-execute SSH command. Returns 404 if the sandbox is not available.",
+        "tags": [
+          "Implementations"
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "host": {
+                      "type": "string"
+                    },
+                    "port": {
+                      "type": "number"
+                    },
+                    "username": {
+                      "type": "string"
+                    },
+                    "sshCommand": {
+                      "type": "string"
+                    },
+                    "sandboxId": {
+                      "type": "string"
+                    },
+                    "sandboxUrl": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "host",
+                    "port",
+                    "username",
+                    "sshCommand",
+                    "sandboxId",
+                    "sandboxUrl"
+                  ]
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/implementations/{id}/steps": {
+      "get": {
+        "operationId": "getSteps",
+        "summary": "Get workflow steps",
+        "description": "Retrieve the list of workflow steps for an implementation, including their status and timing.",
+        "tags": [
+          "Implementations"
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "steps": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "id": {
+                            "type": "string"
+                          },
+                          "name": {
+                            "type": "string"
+                          },
+                          "order": {
+                            "type": "number"
+                          },
+                          "status": {
+                            "type": "string"
+                          },
+                          "startedAt": {
+                            "anyOf": [
+                              {
+                                "type": "string",
+                                "format": "date-time",
+                                "x-native-type": "date"
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ]
+                          },
+                          "completedAt": {
+                            "anyOf": [
+                              {
+                                "type": "string",
+                                "format": "date-time",
+                                "x-native-type": "date"
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ]
+                          },
+                          "error": {
+                            "anyOf": [
+                              {
+                                "type": "string"
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ]
+                          },
+                          "timelineMessageCount": {
+                            "type": "number"
+                          }
+                        },
+                        "required": [
+                          "id",
+                          "name",
+                          "order",
+                          "status",
+                          "startedAt",
+                          "completedAt",
+                          "error",
+                          "timelineMessageCount"
+                        ]
+                      }
+                    }
+                  },
+                  "required": [
+                    "steps"
+                  ]
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/implementations/{id}/status": {
+      "get": {
+        "operationId": "getStatus",
+        "summary": "Get implementation status with step progress",
+        "description": "Retrieve the current implementation status including step-by-step progress with timing information. Useful for building status dashboards and monitoring implementation runs.",
+        "tags": [
+          "Implementations"
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "status": {
+                      "type": "string"
+                    },
+                    "waitingForInput": {
+                      "type": "boolean"
+                    },
+                    "currentStepName": {
+                      "anyOf": [
+                        {
+                          "type": "string"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    },
+                    "startedAt": {
+                      "anyOf": [
+                        {
+                          "type": "string",
+                          "format": "date-time",
+                          "x-native-type": "date"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    },
+                    "completedAt": {
+                      "anyOf": [
+                        {
+                          "type": "string",
+                          "format": "date-time",
+                          "x-native-type": "date"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    },
+                    "duration": {
+                      "anyOf": [
+                        {
+                          "type": "number"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    },
+                    "steps": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "id": {
+                            "type": "string"
+                          },
+                          "name": {
+                            "type": "string"
+                          },
+                          "order": {
+                            "type": "number"
+                          },
+                          "status": {
+                            "type": "string"
+                          },
+                          "startedAt": {
+                            "anyOf": [
+                              {
+                                "type": "string",
+                                "format": "date-time",
+                                "x-native-type": "date"
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ]
+                          },
+                          "completedAt": {
+                            "anyOf": [
+                              {
+                                "type": "string",
+                                "format": "date-time",
+                                "x-native-type": "date"
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ]
+                          },
+                          "duration": {
+                            "anyOf": [
+                              {
+                                "type": "number"
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ]
+                          },
+                          "error": {
+                            "anyOf": [
+                              {
+                                "type": "string"
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ]
+                          }
+                        },
+                        "required": [
+                          "id",
+                          "name",
+                          "order",
+                          "status",
+                          "startedAt",
+                          "completedAt",
+                          "duration",
+                          "error"
+                        ]
+                      }
+                    }
+                  },
+                  "required": [
+                    "status",
+                    "waitingForInput",
+                    "currentStepName",
+                    "startedAt",
+                    "completedAt",
+                    "duration",
+                    "steps"
+                  ]
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/implementations/{id}/prompt": {
+      "post": {
+        "operationId": "sendPrompt",
+        "summary": "Send a prompt to an implementation",
+        "description": "Send a message to an implementation. If the implementation is waiting for input, the message is delivered as a workflow event. If the implementation is in a terminal state (completed, failed, stopped, cancelled, merged), a follow-up chat is started. Returns 409 if the implementation is running but not waiting for input, or has not started yet.",
+        "tags": [
+          "Implementations"
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "message": {
+                    "type": "string",
+                    "minLength": 1
+                  }
+                },
+                "required": [
+                  "message"
+                ]
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "sent": {
+                      "type": "boolean"
+                    },
+                    "followUpId": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "sent"
+                  ]
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/implementations/{id}/pr": {
+      "post": {
+        "operationId": "createPR",
+        "summary": "Create a pull request",
+        "description": "Create a GitHub pull request for an implementation. Requires that the branch has been pushed and no PR exists yet.",
+        "tags": [
+          "Implementations"
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": false,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {},
+                "required": []
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "prUrl": {
+                      "type": "string"
+                    },
+                    "prNumber": {
+                      "type": "number"
+                    }
+                  },
+                  "required": [
+                    "prUrl",
+                    "prNumber"
+                  ]
+                }
+              }
+            }
+          }
+        }
+      },
+      "get": {
+        "operationId": "getPR",
+        "summary": "Get pull request details",
+        "description": "Retrieve live pull request details from GitHub. Syncs the stored PR status if it differs from the live state.",
+        "tags": [
+          "Implementations"
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "url": {
+                      "type": "string"
+                    },
+                    "number": {
+                      "type": "number"
+                    },
+                    "status": {
+                      "type": "string"
+                    },
+                    "title": {
+                      "type": "string"
+                    },
+                    "mergeable": {
+                      "anyOf": [
+                        {
+                          "type": "boolean"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    },
+                    "merged": {
+                      "type": "boolean"
+                    },
+                    "draft": {
+                      "type": "boolean"
+                    }
+                  },
+                  "required": [
+                    "url",
+                    "number",
+                    "status",
+                    "title",
+                    "mergeable",
+                    "merged",
+                    "draft"
+                  ]
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/implementations/{id}/pr/merge": {
+      "post": {
+        "operationId": "mergePR",
+        "summary": "Merge pull request",
+        "description": "Merge the pull request for an implementation. The PR must exist and be in an open state.",
+        "tags": [
+          "Implementations"
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": false,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {},
+                "required": []
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "success": {
+                      "type": "boolean"
+                    }
+                  },
+                  "required": [
+                    "success"
+                  ]
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/implementations/{id}/pr/close": {
+      "post": {
+        "operationId": "closePR",
+        "summary": "Close pull request",
+        "description": "Close the pull request for an implementation. The PR must exist and be in an open state.",
+        "tags": [
+          "Implementations"
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": false,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {},
+                "required": []
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "success": {
+                      "type": "boolean"
+                    }
+                  },
+                  "required": [
+                    "success"
+                  ]
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/implementations/{id}/pr/reopen": {
+      "post": {
+        "operationId": "reopenPR",
+        "summary": "Reopen pull request",
+        "description": "Reopen a closed pull request for an implementation. The PR must exist and be in a closed state.",
+        "tags": [
+          "Implementations"
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": false,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {},
+                "required": []
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "success": {
+                      "type": "boolean"
+                    }
+                  },
+                  "required": [
+                    "success"
+                  ]
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/implementations/{id}/restart": {
+      "post": {
+        "operationId": "restart",
+        "summary": "Restart a failed implementation",
+        "description": "Restart a failed, stopped, or cancelled implementation. If the sandbox is still alive, it resumes from the failure point. Otherwise, a new implementation is started.",
+        "tags": [
+          "Implementations"
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": false,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {},
+                "required": []
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "implementationId": {
+                      "type": "string"
+                    },
+                    "isNewImplementation": {
+                      "type": "boolean"
+                    }
+                  },
+                  "required": [
+                    "implementationId",
+                    "isNewImplementation"
+                  ]
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  },
+  "components": {
+    "securitySchemes": {
+      "bearerAuth": {
+        "type": "http",
+        "scheme": "bearer",
+        "description": "API key authentication. Example: `tzv_1234567890abcdefghijklmnopqrstuvwxyz`"
+      }
+    }
+  }
+}
