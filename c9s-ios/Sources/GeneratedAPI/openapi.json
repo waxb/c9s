@@ -16,7 +16,90 @@
   ],
   "openapi": "3.1.1",
   "paths": {
+    "/workspaces": {
+      "get": {
+        "operationId": "listWorkspaces",
+        "summary": "List workspaces",
+        "description": "List workspaces the authenticated user has access to.",
+        "tags": ["Workspaces"],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "items": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "id": { "type": "string" },
+                          "name": { "type": "string" },
+                          "slug": { "type": "string" },
+                          "logo": { "anyOf": [{ "type": "string" }, { "type": "null" }] }
+                        },
+                        "required": ["id", "name", "slug"]
+                      }
+                    }
+                  },
+                  "required": ["items"]
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/implementations": {
+      "post": {
+        "operationId": "createImplementation",
+        "summary": "Create a new implementation",
+        "description": "Create a new implementation in a workspace. Requires a prompt, mode, and workspace ID.",
+        "tags": ["Implementations"],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "prompt": { "type": "string", "minLength": 1 },
+                  "mode": { "type": "string" },
+                  "workspaceId": { "type": "string" },
+                  "repositoryName": { "anyOf": [{ "type": "string" }, { "type": "null" }] },
+                  "baseBranch": { "anyOf": [{ "type": "string" }, { "type": "null" }] }
+                },
+                "required": ["prompt", "mode", "workspaceId"]
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "id": { "type": "string" },
+                    "title": { "anyOf": [{ "type": "string" }, { "type": "null" }] },
+                    "status": { "type": "string" },
+                    "mode": { "type": "string" },
+                    "repoUrl": { "anyOf": [{ "type": "string" }, { "type": "null" }] },
+                    "branch": { "anyOf": [{ "type": "string" }, { "type": "null" }] },
+                    "createdAt": { "type": "string", "format": "date-time" },
+                    "updatedAt": { "anyOf": [{ "type": "string", "format": "date-time" }, { "type": "null" }] }
+                  },
+                  "required": ["id", "status", "mode", "createdAt"]
+                }
+              }
+            }
+          }
+        }
+      },
       "get": {
         "operationId": "list",
         "summary": "List implementations",
