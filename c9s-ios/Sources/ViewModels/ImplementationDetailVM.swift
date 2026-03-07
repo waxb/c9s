@@ -212,6 +212,11 @@ final class ImplementationDetailVM {
         isStreaming = false
     }
 
+    /// Handle an SSE event. Internal visibility for testing.
+    func handleSSEEventForTest(_ event: SSEEvent) async {
+        await handleSSEEvent(event)
+    }
+
     private func handleSSEEvent(_ event: SSEEvent) async {
         switch event {
         case .connected:

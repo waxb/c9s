@@ -149,7 +149,9 @@ final class SSEStreamService: Sendable {
     /// Parse a JSON envelope from SSE data.
     /// Matches the Rust SSE parser: extracts timeline messages, plan/analysis updates,
     /// waitingForInput flags, and completion signals.
-    private func parseSSEData(_ data: String, cursor: inout String?) -> [SSEEvent] {
+    ///
+    /// Internal visibility for testing.
+    func parseSSEData(_ data: String, cursor: inout String?) -> [SSEEvent] {
         var events: [SSEEvent] = []
 
         guard let jsonData = data.data(using: .utf8),
