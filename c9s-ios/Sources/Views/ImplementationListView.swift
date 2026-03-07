@@ -6,6 +6,7 @@ struct ImplementationListView: View {
     @State private var viewModel: ImplementationListVM
     @State private var showCreateSheet = false
     @State private var navigationPath = NavigationPath()
+    private var deepLinkRouter = DeepLinkRouter.shared
     var onSignOut: () -> Void
 
     init(service: TervezoServiceProtocol = TervezoService(), onSignOut: @escaping () -> Void) {
@@ -58,8 +59,15 @@ struct ImplementationListView: View {
             }
             .sheet(isPresented: $showCreateSheet) {
                 CreateImplementationView { createdId in
+                    HapticFeedback.success()
                     navigationPath.append(createdId)
                     Task { await viewModel.refresh() }
+                }
+            }
+            .onChange(of: deepLinkRouter.pendingImplementationId) { _, newId in
+                if let id = newId {
+                    navigationPath.append(id)
+                    deepLinkRouter.consumePendingNavigation()
                 }
             }
         }

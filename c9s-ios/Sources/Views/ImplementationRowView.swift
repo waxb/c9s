@@ -53,6 +53,8 @@ struct ImplementationRowView: View {
             }
         }
         .padding(.vertical, 4)
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel("\(implementation.title ?? "Untitled"), \(implementation.status), \(implementation.mode)")
     }
 
     private func repoShort(_ url: String) -> String {

@@ -14,6 +14,7 @@ struct StatusBadge: View {
             .padding(.vertical, 3)
             .background(backgroundColor)
             .clipShape(Capsule())
+            .accessibilityLabel("Status: \(displayText)")
     }
 
     private var displayText: String {
