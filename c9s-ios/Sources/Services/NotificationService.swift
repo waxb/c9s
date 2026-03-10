@@ -58,9 +58,13 @@ final class NotificationService: NSObject, ObservableObject {
 
     /// Check current authorization status.
     func checkAuthorizationStatus() async {
-        let center = UNUserNotificationCenter.current()
-        let settings = await center.notificationSettings()
-        isAuthorized = settings.authorizationStatus == .authorized
+        let authorized = await Self.fetchIsAuthorized()
+        isAuthorized = authorized
+    }
+
+    private nonisolated static func fetchIsAuthorized() async -> Bool {
+        let settings = await UNUserNotificationCenter.current().notificationSettings()
+        return settings.authorizationStatus == .authorized
     }
 
     /// Called when APNs returns a device token.
@@ -219,9 +223,20 @@ extension NotificationService: UNUserNotificationCenterDelegate {
         didReceive response: UNNotificationResponse
     ) async {
         let userInfo = response.notification.request.content.userInfo
+        let implementationId = userInfo["implementationId"] as? String
+        let category = userInfo["category"] as? String
+        let title = userInfo["title"] as? String
+        let message = userInfo["message"] as? String
+        let actionIdentifier = response.actionIdentifier
         await MainActor.run {
-            guard let payload = parseNotificationPayload(userInfo) else { return }
-            let action = handleAction(response.actionIdentifier, payload: payload)
+            guard let implementationId else { return }
+            let payload = NotificationPayload(
+                implementationId: implementationId,
+                category: category,
+                title: title,
+                message: message
+            )
+            let action = handleAction(actionIdentifier, payload: payload)
             DeepLinkRouter.shared.handle(action)
         }
     }

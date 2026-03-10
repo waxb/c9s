@@ -65,7 +65,9 @@ final class ImplementationListVM {
     }
 
     deinit {
-        pollingTask?.cancel()
+        MainActor.assumeIsolated {
+            pollingTask?.cancel()
+        }
     }
 
     // MARK: - Fetching

@@ -1,6 +1,7 @@
 import UIKit
 
 /// Haptic feedback helpers for user interactions.
+@MainActor
 enum HapticFeedback {
     /// Light impact for button taps and selections.
     static func light() {

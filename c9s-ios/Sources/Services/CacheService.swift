@@ -18,8 +18,9 @@ final class CacheService {
     /// Creates new entries or updates existing ones by ID.
     func syncImplementationList(_ list: ImplementationList) throws {
         for summary in list.items {
+            let summaryId = summary.id
             let descriptor = FetchDescriptor<CachedImplementation>(
-                predicate: #Predicate { $0.id == summary.id }
+                predicate: #Predicate { $0.id == summaryId }
             )
             let existing = try modelContext.fetch(descriptor)
 
@@ -34,8 +35,9 @@ final class CacheService {
 
     /// Upsert a single implementation from the detail API response.
     func syncImplementationDetail(_ detail: ImplementationDetail) throws {
+        let detailId = detail.id
         let descriptor = FetchDescriptor<CachedImplementation>(
-            predicate: #Predicate { $0.id == detail.id }
+            predicate: #Predicate { $0.id == detailId }
         )
         let existing = try modelContext.fetch(descriptor)
 
@@ -70,8 +72,9 @@ final class CacheService {
     /// Upsert workspaces from the list API response.
     func syncWorkspaces(_ workspaces: [TervezoWorkspace]) throws {
         for workspace in workspaces {
+            let workspaceId = workspace.id
             let descriptor = FetchDescriptor<CachedWorkspace>(
-                predicate: #Predicate { $0.id == workspace.id }
+                predicate: #Predicate { $0.id == workspaceId }
             )
             let existing = try modelContext.fetch(descriptor)
 

@@ -124,8 +124,8 @@ struct TimelineMessageView: View {
                 .padding(.vertical, 2)
                 .background(.orange.opacity(0.1))
                 .clipShape(Capsule())
-
-            if let text = extractText(), !text.isEmpty {
+            let text = extractText()
+            if !text.isEmpty {
                 Text(text)
                     .lineLimit(2)
                     .foregroundStyle(.secondary)
@@ -190,7 +190,8 @@ struct TimelineMessageView: View {
             Image(systemName: "checkmark.circle")
             Text("Test Report")
                 .fontWeight(.medium)
-            if let text = extractText(), !text.isEmpty {
+            let text = extractText()
+            if !text.isEmpty {
                 Text(text)
                     .foregroundStyle(.secondary)
             }

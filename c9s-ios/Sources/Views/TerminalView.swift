@@ -214,6 +214,18 @@ struct SwiftTerminalView: UIViewRepresentable {
     }
 
     class Coordinator: NSObject, SwiftTerm.TerminalViewDelegate {
+        func hostCurrentDirectoryUpdate(source: SwiftTerm.TerminalView, directory: String?) {
+            
+        }
+        
+        func requestOpenLink(source: SwiftTerm.TerminalView, link: String, params: [String : String]) {
+            if let url = URL(string: link) {
+                Task { @MainActor in
+                    UIApplication.shared.open(url)
+                }
+            }
+        }
+        
         var onDataFromTerminal: ((Data) -> Void)?
 
         func send(source: SwiftTerm.TerminalView, data: ArraySlice<UInt8>) {

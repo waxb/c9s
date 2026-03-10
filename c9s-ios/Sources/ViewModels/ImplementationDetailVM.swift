@@ -91,8 +91,10 @@ final class ImplementationDetailVM {
     }
 
     deinit {
-        pollingTask?.cancel()
-        sseTask?.cancel()
+        MainActor.assumeIsolated {
+            pollingTask?.cancel()
+            sseTask?.cancel()
+        }
     }
 
     // MARK: - Loading
