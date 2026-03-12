@@ -31,6 +31,7 @@ pub enum ViewMode {
     TervezoQSwitcher,
     TervezoCreateDialog,
     NewSessionMenu,
+    ConfirmKill,
     Log,
 }
 
@@ -715,6 +716,7 @@ pub struct App {
     ci_tx: mpsc::Sender<(String, CiStatus)>,
     ci_rx: mpsc::Receiver<(String, CiStatus)>,
     ci_last_check: std::time::Instant,
+    pub confirm_kill_session_id: Option<String>,
 }
 
 impl App {
@@ -768,6 +770,7 @@ impl App {
             ci_last_check: std::time::Instant::now()
                 .checked_sub(std::time::Duration::from_secs(300))
                 .unwrap_or_else(std::time::Instant::now),
+            confirm_kill_session_id: None,
         };
 
         app.refresh()?;

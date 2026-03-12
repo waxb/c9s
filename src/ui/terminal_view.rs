@@ -165,6 +165,15 @@ fn render_tab_bar(f: &mut Frame, tabs: &[TabEntry], area: Rect) {
             format!("{}: {}", i + 1, tab.name)
         };
 
+        if tab.is_active {
+            if col < max_col {
+                let cell = &mut buf[(col, area.y)];
+                cell.set_style(Style::default().fg(Color::Cyan).bg(bg));
+                cell.set_symbol("[");
+                col += 1;
+            }
+        }
+
         for ch in text.chars() {
             if col >= max_col {
                 break;
@@ -172,6 +181,13 @@ fn render_tab_bar(f: &mut Frame, tabs: &[TabEntry], area: Rect) {
             let cell = &mut buf[(col, area.y)];
             cell.set_style(tab_style);
             cell.set_symbol(&ch.to_string());
+            col += 1;
+        }
+
+        if tab.is_active && col < max_col {
+            let cell = &mut buf[(col, area.y)];
+            cell.set_style(Style::default().fg(Color::Cyan).bg(bg));
+            cell.set_symbol("]");
             col += 1;
         }
     }

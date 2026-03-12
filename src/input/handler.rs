@@ -76,6 +76,10 @@ pub enum Action {
     TervezoCreateSubmit,
     ToggleLog,
     ClearLog,
+    KillSession,
+    ConfirmKill,
+    CancelKill,
+    ResumeSessionPicker,
     ToggleSideTerminal,
     SideTerminalInput(Vec<u8>),
     None,
@@ -130,6 +134,9 @@ fn handle_key(key: &KeyEvent, mode: &ViewMode, side_focused: bool) -> Action {
             if key.modifiers.contains(KeyModifiers::CONTROL) && key.code == KeyCode::Char('c') {
                 return Action::Quit;
             }
+            if key.modifiers.contains(KeyModifiers::CONTROL) && key.code == KeyCode::Char('b') {
+                return Action::ResumeSessionPicker;
+            }
         }
     }
 
@@ -140,6 +147,7 @@ fn handle_key(key: &KeyEvent, mode: &ViewMode, side_focused: bool) -> Action {
         ViewMode::TerminalQSwitcher => handle_terminal_qswitcher_key(key),
         ViewMode::Command => handle_command_key(key),
         ViewMode::ConfirmQuit => handle_confirm_quit_key(key),
+        ViewMode::ConfirmKill => handle_confirm_kill_key(key),
         ViewMode::TervezoDetail => handle_tervezo_detail_key(key),
         ViewMode::TervezoQSwitcher => handle_qswitcher_key(key),
         ViewMode::TervezoActionMenu => handle_tervezo_action_menu_key(key),
@@ -169,6 +177,7 @@ fn handle_normal_key(key: &KeyEvent) -> Action {
         KeyCode::Char('r') => Action::Refresh,
         KeyCode::Char('n') => Action::LaunchNew,
         KeyCode::Char('c') => Action::FixCi,
+        KeyCode::Char('x') => Action::KillSession,
         KeyCode::Char('L') => Action::ToggleLog,
         KeyCode::Char(' ') => Action::ToggleQSwitcher,
         KeyCode::Char(c @ '1'..='9') => Action::AttachByIndex((c as usize) - ('1' as usize)),
@@ -239,6 +248,14 @@ fn handle_confirm_quit_key(key: &KeyEvent) -> Action {
         KeyCode::Esc | KeyCode::Char('q') => Action::CancelQuit,
         KeyCode::Char('y') => Action::ConfirmQuit,
         KeyCode::Char('n') => Action::CancelQuit,
+        _ => Action::None,
+    }
+}
+
+fn handle_confirm_kill_key(key: &KeyEvent) -> Action {
+    match key.code {
+        KeyCode::Char('y') | KeyCode::Enter => Action::ConfirmKill,
+        KeyCode::Char('n') | KeyCode::Esc => Action::CancelKill,
         _ => Action::None,
     }
 }

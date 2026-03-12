@@ -66,6 +66,17 @@ impl EmbeddedTerminal {
         Self::spawn_inner(&id, "shell", "bash", &["--login"], cwd, rows, cols)
     }
 
+    pub fn spawn_resume_picker(cwd: &Path, rows: u16, cols: u16) -> Result<Self> {
+        let project_name = cwd
+            .file_name()
+            .map(|n| n.to_string_lossy().to_string())
+            .unwrap_or_else(|| cwd.to_string_lossy().to_string());
+
+        let id = uuid::Uuid::new_v4().to_string();
+
+        Self::spawn_inner(&id, &project_name, "claude", &["--resume"], cwd, rows, cols)
+    }
+
     pub fn spawn_new(cwd: &Path, rows: u16, cols: u16) -> Result<Self> {
         let project_name = cwd
             .file_name()

@@ -296,6 +296,20 @@ fn run_loop(
                         ui::render_session_list(f, app, area);
                         ui::render_command_input(f, app.command_input(), area);
                     }
+                    ViewMode::ConfirmKill => {
+                        ui::render_session_list(f, app, area);
+                        let name = app
+                            .confirm_kill_session_id
+                            .as_ref()
+                            .and_then(|id| {
+                                app.filtered_sessions()
+                                    .iter()
+                                    .find(|e| e.id() == id)
+                                    .map(|e| e.display_name().to_string())
+                            })
+                            .unwrap_or_else(|| "unknown".to_string());
+                        ui::render_confirm_kill(f, &name, area);
+                    }
                     ViewMode::ConfirmQuit => {
                         ui::render_session_list(f, app, area);
                         let active = app.active_attached_sessions();
@@ -481,6 +495,50 @@ fn process_action(
         }
         Action::ConfirmQuit => app.quit(),
         Action::CancelQuit => app.set_view_mode(ViewMode::List),
+        Action::KillSession => {
+            if let Some(entry) = app.selected_session() {
+                if let Some(session) = entry.as_local() {
+                    if session.pid.is_some() {
+                        app.confirm_kill_session_id = Some(session.id.clone());
+                        app.set_view_mode(ViewMode::ConfirmKill);
+                    }
+                }
+            }
+        }
+        Action::ConfirmKill => {
+            if let Some(session_id) = app.confirm_kill_session_id.take() {
+                if let Some(pid) = app
+                    .all_sessions()
+                    .iter()
+                    .find(|s| s.id == session_id)
+                    .and_then(|s| s.pid)
+                {
+                    unsafe {
+                        libc::kill(pid as i32, libc::SIGTERM);
+                    }
+                }
+            }
+            app.set_view_mode(ViewMode::List);
+            let _ = app.refresh();
+        }
+        Action::CancelKill => {
+            app.confirm_kill_session_id = None;
+            app.set_view_mode(ViewMode::List);
+        }
+        Action::ResumeSessionPicker => {
+            if let Some(entry) = app.selected_session() {
+                if let Some(session) = entry.as_local() {
+                    let cwd = session.cwd.clone();
+                    let area = terminal.size()?;
+                    let rows = area.height.saturating_sub(1);
+                    let cols = area.width;
+                    let _ = app
+                        .terminal_manager_mut()
+                        .attach_resume_picker(&cwd, rows, cols);
+                    app.set_view_mode(ViewMode::Terminal);
+                }
+            }
+        }
         Action::MoveUp => app.move_up(),
         Action::MoveDown => app.move_down(),
         Action::MoveToTop => app.move_to_top(),

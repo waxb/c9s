@@ -307,9 +307,9 @@ fn render_footer(f: &mut Frame, app: &App, area: Rect) {
     );
 
     let keys = if app.has_tervezo() {
-        "  a:attach  d:detail  Space:switch  n:new  c:fix-ci  /:filter  s:sort  C-t:shell  ?:help"
+        "  a:attach  C-b:resume  d:detail  x:kill  Space:switch  n:new  c:fix-ci  /:filter  s:sort  ?:help"
     } else {
-        "  a:attach  d:detail  Space:switch  1-9:jump  n:new  /:filter  s:sort  C-t:shell  ?:help"
+        "  a:attach  C-b:resume  d:detail  x:kill  Space:switch  1-9:jump  n:new  /:filter  s:sort  ?:help"
     };
 
     let footer = Line::from(vec![

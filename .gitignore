@@ -7,3 +7,8 @@ ideas.save
 .DS_Store
 .codegraph/
 openspec/
+.memelord/
+.codex/
+.mcp.json
+opencode.json
+config/

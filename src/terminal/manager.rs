@@ -82,6 +82,18 @@ impl TerminalManager {
         Ok(id)
     }
 
+    pub fn attach_resume_picker(&mut self, cwd: &Path, rows: u16, cols: u16) -> Result<String> {
+        self.clear_active_bells();
+        let term = EmbeddedTerminal::spawn_resume_picker(cwd, rows, cols)?;
+        let id = term.session_id().to_string();
+        self.notifiers
+            .insert(id.clone(), JsonlNotifier::new(cwd, &id));
+        self.order.push(id.clone());
+        self.terminals.insert(id.clone(), term);
+        self.active_id = Some(id.clone());
+        Ok(id)
+    }
+
     pub fn attach_ssh(
         &mut self,
         impl_id: &str,
