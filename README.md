@@ -55,6 +55,23 @@ c9s
 | `Ctrl+n` / `Ctrl+p` | Cycle next / prev session |
 | `Ctrl+k` / `Ctrl+j` | Scroll history up / down |
 
+## iOS Companion App
+
+c9s includes an iOS companion app (`c9s-ios/`) for managing Tervezo AI implementations on the go. The mobile app connects to the same Tervezo API and provides:
+
+- Implementation list with filtering, sorting, and search
+- Real-time SSE streaming of implementation progress
+- Send prompts and respond to "waiting for input" steps
+- PR management (create, merge, close, reopen)
+- SSH sandbox terminal access via SwiftTerm
+- Push notifications for status changes
+- iPad split view with sidebar navigation
+- Offline caching via SwiftData
+
+**Tech stack:** Swift 6, SwiftUI, iOS 18+, SwiftData, SwiftTerm
+
+See [`c9s-ios/README.md`](c9s-ios/README.md) for build instructions and architecture details.
+
 ## Requirements
 
 - Rust 1.75+ (edition 2021)

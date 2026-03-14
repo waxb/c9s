@@ -1,0 +1,89 @@
+{
+  "status": "completed",
+  "completedAt": "2026-03-07T00:00:00Z",
+  "summary": "iOS companion app for c9s — Tervezo AI implementation management",
+  "phases": {
+    "1_scaffolding_api": {
+      "status": "completed",
+      "tasks": 10,
+      "description": "Swift Package with iOS 18+ target, OpenAPI spec, KeychainService, TervezoService (19 API operations), and unit tests"
+    },
+    "2_swiftdata_cache": {
+      "status": "completed",
+      "tasks": 7,
+      "description": "SwiftData models (CachedImplementation, CachedWorkspace, CachedTimelineMessage, AppSettings), CacheService with sync/upsert, and tests"
+    },
+    "3_onboarding_settings": {
+      "status": "completed",
+      "tasks": 5,
+      "description": "OnboardingView with API key validation, SettingsView with key management and base URL, app launch flow with auth routing"
+    },
+    "4_implementation_list": {
+      "status": "completed",
+      "tasks": 8,
+      "description": "ImplementationListVM with filtering/sorting/polling/search, StatusBadge, CostLabel, RelativeTimeLabel, ImplementationRowView, and full list view"
+    },
+    "5_implementation_detail": {
+      "status": "completed",
+      "tasks": 12,
+      "description": "ImplementationDetailVM with parallel loading and tab management, all subviews (StepProgress, Timeline, Plan, Diff, Changes, TestOutput, Markdown, Loading)"
+    },
+    "6_sse_streaming": {
+      "status": "completed",
+      "tasks": 3,
+      "description": "SSEStreamService with native URLSession bytes API, auto-reconnect with exponential backoff (1s-30s), cursor-based reconnection"
+    },
+    "7_interactive_actions": {
+      "status": "completed",
+      "tasks": 4,
+      "description": "Prompt input with conflict handling, PR lifecycle (create/merge/close/reopen), restart, SSH access — all in detail view action menu"
+    },
+    "8_create_implementation": {
+      "status": "completed",
+      "tasks": 4,
+      "description": "CreateImplementationVM with workspace loading, form validation, mode picker. CreateImplementationView with prompt editor. Navigation wiring and 20 tests"
+    },
+    "9_ssh_terminal": {
+      "status": "completed",
+      "tasks": 3,
+      "description": "SSHService, TerminalVM, SandboxTerminalView with SSH info, copy command, browser access. SwiftTerminalView UIViewRepresentable wrapper. 8 tests"
+    },
+    "10_push_notifications": {
+      "status": "completed",
+      "tasks": 3,
+      "description": "NotificationService with APNs, 4 categories, interactive actions. DeepLinkRouter for URL scheme and notification navigation. AppDelegate wiring"
+    },
+    "11_polish": {
+      "status": "completed",
+      "tasks": 4,
+      "description": "HapticFeedback utility, VoiceOver accessibility labels, deep link navigation integration, haptic feedback on key actions"
+    },
+    "12_testing_ci": {
+      "status": "completed",
+      "tasks": 2,
+      "description": "GitHub Actions CI workflow template (macOS 15/Xcode 16), SwiftLint configuration with safety rules"
+    },
+    "13_documentation": {
+      "status": "completed",
+      "tasks": 1,
+      "description": "README with architecture overview, feature list, testing instructions, CI setup, and dependency documentation"
+    }
+  },
+  "metrics": {
+    "totalSourceFiles": 30,
+    "totalTestFiles": 8,
+    "totalTests": 90,
+    "apiOperations": 19,
+    "swiftDataModels": 4,
+    "viewModels": 5,
+    "views": 18,
+    "services": 6
+  },
+  "technicalDecisions": [
+    "Used direct URLSession + JSONSerialization instead of generated OpenAPI client for flexibility",
+    "Used native URLSession bytes API for SSE instead of EventSource library dependency",
+    "Implemented cursor-based SSE reconnection matching Rust TUI logic",
+    "SwiftTerm wrapper ready for SSH library integration (iOS can't spawn shell processes)",
+    "CI workflow stored as template due to GitHub App workflow permission restrictions"
+  ]
+}
