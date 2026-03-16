@@ -72,11 +72,11 @@ fn render_tree_layout(
 
     let footer_text = if always_total > 0 {
         format!(
-            " Esc:back  a:attach  Up/Dn:navigate  Enter:preview  ~{}tk always-loaded",
+            " Esc:back  a:attach  f:sessions  Up/Dn:navigate  Enter:preview  ~{}tk always-loaded",
             format_tokens_short(always_total),
         )
     } else {
-        " Esc:back  a:attach  Up/Dn:navigate  Enter:preview file".to_string()
+        " Esc:back  a:attach  f:sessions  Up/Dn:navigate  Enter:preview file".to_string()
     };
 
     let footer = Paragraph::new(Line::from(Span::styled(footer_text, Theme::footer())));

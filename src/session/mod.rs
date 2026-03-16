@@ -3,7 +3,7 @@ mod discovery;
 mod manager;
 
 pub use config::SessionConfig;
-pub use discovery::SessionDiscovery;
+pub use discovery::{list_session_files, SessionDiscovery, SessionFile};
 pub use manager::SessionManager;
 
 use chrono::{DateTime, Utc};

@@ -403,6 +403,87 @@ impl SessionDiscovery {
     }
 }
 
+#[derive(Debug, Clone)]
+pub struct SessionFile {
+    pub session_id: String,
+    pub path: PathBuf,
+    pub size_bytes: u64,
+    pub last_modified: Option<DateTime<Utc>>,
+    pub message_count: u32,
+    pub is_current: bool,
+}
+
+pub fn list_session_files(cwd: &Path, current_session_id: &str) -> Vec<SessionFile> {
+    let claude_dir = dirs::home_dir()
+        .unwrap_or_else(|| PathBuf::from("~"))
+        .join(".claude");
+
+    let encoded = cwd.to_string_lossy().replace('/', "-");
+    let project_dir = claude_dir.join("projects").join(&encoded);
+
+    if !project_dir.exists() {
+        return Vec::new();
+    }
+
+    let mut files: Vec<SessionFile> = Vec::new();
+
+    if let Ok(entries) = std::fs::read_dir(&project_dir) {
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.extension().is_none_or(|e| e != "jsonl") {
+                continue;
+            }
+            let session_id = path
+                .file_stem()
+                .unwrap_or_default()
+                .to_string_lossy()
+                .to_string();
+            if session_id.contains('.') {
+                continue;
+            }
+
+            let meta = std::fs::metadata(&path).ok();
+            let size_bytes = meta.as_ref().map(|m| m.len()).unwrap_or(0);
+            if size_bytes == 0 {
+                continue;
+            }
+            let last_modified = meta
+                .and_then(|m| m.modified().ok())
+                .map(|t| DateTime::<Utc>::from(t));
+
+            let msg_count = count_messages(&path);
+            if msg_count == 0 && session_id != current_session_id {
+                continue;
+            }
+
+            files.push(SessionFile {
+                is_current: session_id == current_session_id,
+                session_id,
+                path,
+                size_bytes,
+                last_modified,
+                message_count: msg_count,
+            });
+        }
+    }
+
+    files.sort_by(|a, b| b.last_modified.cmp(&a.last_modified));
+    files
+}
+
+fn count_messages(path: &Path) -> u32 {
+    let content = match std::fs::read_to_string(path) {
+        Ok(c) => c,
+        Err(_) => return 0,
+    };
+    content
+        .lines()
+        .filter(|l| {
+            l.contains("\"type\":\"user\"") || l.contains("\"type\":\"assistant\"")
+        })
+        .count() as u32
+}
+
 fn decode_project_path(encoded: &str) -> String {
     encoded.replace('-', "/")
 }

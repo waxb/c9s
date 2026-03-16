@@ -79,7 +79,13 @@ pub enum Action {
     KillSession,
     ConfirmKill,
     CancelKill,
+    UnfollowSession,
     ResumeSessionPicker,
+    OpenSessionFiles,
+    SessionFileUp,
+    SessionFileDown,
+    SessionFileSelect,
+    SessionFileClose,
     ToggleSideTerminal,
     SideTerminalInput(Vec<u8>),
     None,
@@ -148,6 +154,7 @@ fn handle_key(key: &KeyEvent, mode: &ViewMode, side_focused: bool) -> Action {
         ViewMode::Command => handle_command_key(key),
         ViewMode::ConfirmQuit => handle_confirm_quit_key(key),
         ViewMode::ConfirmKill => handle_confirm_kill_key(key),
+        ViewMode::SessionFilePicker => handle_session_file_picker_key(key),
         ViewMode::TervezoDetail => handle_tervezo_detail_key(key),
         ViewMode::TervezoQSwitcher => handle_qswitcher_key(key),
         ViewMode::TervezoActionMenu => handle_tervezo_action_menu_key(key),
@@ -170,6 +177,7 @@ fn handle_normal_key(key: &KeyEvent) -> Action {
         KeyCode::Enter => Action::Select,
         KeyCode::Esc => Action::Back,
         KeyCode::Char('d') => Action::ShowDetail,
+        KeyCode::Char('f') => Action::OpenSessionFiles,
         KeyCode::Char('a') => Action::AttachSession,
         KeyCode::Char('?') => Action::ShowHelp,
         KeyCode::Char('/') => Action::ToggleFilter,
@@ -177,6 +185,7 @@ fn handle_normal_key(key: &KeyEvent) -> Action {
         KeyCode::Char('r') => Action::Refresh,
         KeyCode::Char('n') => Action::LaunchNew,
         KeyCode::Char('c') => Action::FixCi,
+        KeyCode::Char('u') => Action::UnfollowSession,
         KeyCode::Char('x') => Action::KillSession,
         KeyCode::Char('L') => Action::ToggleLog,
         KeyCode::Char(' ') => Action::ToggleQSwitcher,
@@ -248,6 +257,16 @@ fn handle_confirm_quit_key(key: &KeyEvent) -> Action {
         KeyCode::Esc | KeyCode::Char('q') => Action::CancelQuit,
         KeyCode::Char('y') => Action::ConfirmQuit,
         KeyCode::Char('n') => Action::CancelQuit,
+        _ => Action::None,
+    }
+}
+
+fn handle_session_file_picker_key(key: &KeyEvent) -> Action {
+    match key.code {
+        KeyCode::Char('j') | KeyCode::Down => Action::SessionFileDown,
+        KeyCode::Char('k') | KeyCode::Up => Action::SessionFileUp,
+        KeyCode::Enter => Action::SessionFileSelect,
+        KeyCode::Esc | KeyCode::Char('q') => Action::SessionFileClose,
         _ => Action::None,
     }
 }

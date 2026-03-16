@@ -241,6 +241,32 @@ fn run_loop(
                             }
                         }
                     }
+                    ViewMode::SessionFilePicker => {
+                        if let Some(entry) = app.selected_session() {
+                            if let Some(session) = entry.as_local() {
+                                let session = session.clone();
+                                let items = app.detail_items().to_vec();
+                                let cursor = app.detail_cursor();
+                                let preview = app.detail_preview().cloned();
+                                let preview_scroll = app.detail_preview_scroll();
+                                ui::render_session_detail(
+                                    f,
+                                    &session,
+                                    &items,
+                                    cursor,
+                                    preview.as_ref(),
+                                    preview_scroll,
+                                    area,
+                                );
+                            }
+                        }
+                        ui::render_session_file_picker(
+                            f,
+                            &app.session_files,
+                            app.session_file_cursor,
+                            area,
+                        );
+                    }
                     ViewMode::TervezoDetail => {
                         if let Some(ref state) = app.tervezo_detail {
                             ui::render_tervezo_detail(f, state, area);
@@ -402,17 +428,25 @@ fn run_loop(
             app.view_mode(),
             ViewMode::Terminal | ViewMode::TerminalQSwitcher
         );
-        app.terminal_manager_mut()
+        let notified = app
+            .terminal_manager_mut()
             .check_and_forward_notifications(viewing_active);
+
+        if notified {
+            app.invalidate_usage();
+        }
 
         app.terminal_manager_mut().cleanup_inactive_exited();
 
-        if !matches!(
-            app.view_mode(),
-            ViewMode::Terminal | ViewMode::TerminalQSwitcher
-        ) && last_refresh.elapsed() >= refresh_interval
-        {
-            app.refresh()?;
+        if last_refresh.elapsed() >= refresh_interval {
+            if matches!(
+                app.view_mode(),
+                ViewMode::Terminal | ViewMode::TerminalQSwitcher
+            ) {
+                app.refresh_usage();
+            } else {
+                app.refresh()?;
+            }
             last_refresh = Instant::now();
             needs_draw = true;
         }
@@ -456,7 +490,7 @@ fn render_terminal_view(app: &App, f: &mut ratatui::Frame, area: ratatui::layout
         let scrolled = screen.scrollback() > 0;
         let exited = term.is_exited();
         let tabs = app.terminal_manager().tab_info();
-        ui::render_terminal(f, screen, &tabs, exited, scrolled, area);
+        ui::render_terminal(f, screen, &tabs, exited, scrolled, app.usage(), area);
     }
 }
 
@@ -524,6 +558,68 @@ fn process_action(
         Action::CancelKill => {
             app.confirm_kill_session_id = None;
             app.set_view_mode(ViewMode::List);
+        }
+        Action::OpenSessionFiles => {
+            if *app.view_mode() == ViewMode::Detail {
+                if let Some(entry) = app.selected_session() {
+                    if let Some(session) = entry.as_local() {
+                        let files =
+                            session::list_session_files(&session.cwd, &session.id);
+                        if !files.is_empty() {
+                            let current_idx = files.iter().position(|f| f.is_current).unwrap_or(0);
+                            app.session_files = files;
+                            app.session_file_cursor = current_idx;
+                            app.set_view_mode(ViewMode::SessionFilePicker);
+                        }
+                    }
+                }
+            }
+        }
+        Action::SessionFileUp => {
+            if app.session_file_cursor > 0 {
+                app.session_file_cursor -= 1;
+            }
+        }
+        Action::SessionFileDown => {
+            if app.session_file_cursor + 1 < app.session_files.len() {
+                app.session_file_cursor += 1;
+            }
+        }
+        Action::SessionFileSelect => {
+            if let Some(file) = app.session_files.get(app.session_file_cursor) {
+                let session_id = file.session_id.clone();
+                if let Some(entry) = app.selected_session() {
+                    if let Some(session) = entry.as_local() {
+                        let cwd = session.cwd.clone();
+                        let pid = session.pid;
+                        let area = terminal.size()?;
+                        let rows = area.height.saturating_sub(1);
+                        let cols = area.width;
+                        let name = session.project_name.clone();
+                        app.terminal_manager_mut().attach(
+                            &session_id,
+                            &name,
+                            &cwd,
+                            pid,
+                            rows,
+                            cols,
+                        )?;
+                        app.set_view_mode(ViewMode::Terminal);
+                    }
+                }
+            }
+            app.session_files.clear();
+        }
+        Action::SessionFileClose => {
+            app.session_files.clear();
+            app.set_view_mode(ViewMode::Detail);
+        }
+        Action::UnfollowSession => {
+            if let Some(entry) = app.selected_session() {
+                let id = entry.id().to_string();
+                app.unfollow_session(&id);
+                app.merge_and_refilter();
+            }
         }
         Action::ResumeSessionPicker => {
             if let Some(entry) = app.selected_session() {

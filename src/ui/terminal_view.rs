@@ -6,6 +6,7 @@ use ratatui::Frame;
 
 use crate::terminal::TabEntry;
 use crate::ui::theme::Theme;
+use crate::usage::UsageData;
 
 pub fn render_terminal(
     f: &mut Frame,
@@ -13,6 +14,7 @@ pub fn render_terminal(
     tabs: &[TabEntry],
     exited: bool,
     scrolled: bool,
+    usage: &UsageData,
     area: Rect,
 ) {
     let chunks = Layout::vertical([
@@ -63,6 +65,12 @@ pub fn render_terminal(
         ])
     };
     f.render_widget(Paragraph::new(status_line), chunks[2]);
+
+    if usage.api_available {
+        if let Some(pct) = usage.five_hour {
+            render_usage_bar_right(f, usage, pct, chunks[2]);
+        }
+    }
 }
 
 pub(crate) fn render_screen(f: &mut Frame, screen: &vt100::Screen, area: Rect) {
@@ -190,6 +198,53 @@ fn render_tab_bar(f: &mut Frame, tabs: &[TabEntry], area: Rect) {
             cell.set_symbol("]");
             col += 1;
         }
+    }
+}
+
+fn render_usage_bar_right(f: &mut Frame, usage: &UsageData, pct: u8, area: Rect) {
+    let label = match &usage.plan_name {
+        Some(p) => format!(" {} {}% ", p, pct),
+        None => format!(" {}% ", pct),
+    };
+    let bar_width: usize = 20;
+    let filled = (bar_width as f64 * pct as f64 / 100.0).round() as usize;
+    let empty = bar_width.saturating_sub(filled);
+    let total_len = bar_width + label.len();
+
+    let color = if pct >= 80 {
+        Color::Red
+    } else if pct >= 50 {
+        Color::Yellow
+    } else {
+        Color::Indexed(75)
+    };
+
+    let start_col = (area.x + area.width).saturating_sub(total_len as u16);
+    let row = area.y;
+    let buf = f.buffer_mut();
+    let max_col = area.x + area.width;
+
+    let mut col = start_col;
+    for _ in 0..filled {
+        if col >= max_col { break; }
+        let cell = &mut buf[(col, row)];
+        cell.set_symbol("\u{2588}");
+        cell.set_style(Style::default().fg(color));
+        col += 1;
+    }
+    for _ in 0..empty {
+        if col >= max_col { break; }
+        let cell = &mut buf[(col, row)];
+        cell.set_symbol("\u{2591}");
+        cell.set_style(Style::default().fg(Color::Indexed(238)));
+        col += 1;
+    }
+    for ch in label.chars() {
+        if col >= max_col { break; }
+        let cell = &mut buf[(col, row)];
+        cell.set_symbol(&ch.to_string());
+        cell.set_style(Style::default().fg(Color::White));
+        col += 1;
     }
 }
 

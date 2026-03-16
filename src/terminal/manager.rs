@@ -235,7 +235,7 @@ impl TerminalManager {
             .collect()
     }
 
-    pub fn check_and_forward_notifications(&mut self, viewing_active: bool) {
+    pub fn check_and_forward_notifications(&mut self, viewing_active: bool) -> bool {
         self.check_count += 1;
         for (id, notifier) in &mut self.notifiers {
             if notifier.check() {
@@ -251,9 +251,10 @@ impl TerminalManager {
                     }
                 }
                 let _ = std::io::Write::write_all(&mut std::io::stderr(), b"\x07");
-                return;
+                return true;
             }
         }
+        false
     }
 
     fn clear_active_bells(&self) {

@@ -32,6 +32,7 @@ pub enum ViewMode {
     TervezoCreateDialog,
     NewSessionMenu,
     ConfirmKill,
+    SessionFilePicker,
     Log,
 }
 
@@ -717,6 +718,9 @@ pub struct App {
     ci_rx: mpsc::Receiver<(String, CiStatus)>,
     ci_last_check: std::time::Instant,
     pub confirm_kill_session_id: Option<String>,
+    unfollowed: HashSet<String>,
+    pub session_files: Vec<crate::session::SessionFile>,
+    pub session_file_cursor: usize,
 }
 
 impl App {
@@ -771,6 +775,9 @@ impl App {
                 .checked_sub(std::time::Duration::from_secs(300))
                 .unwrap_or_else(std::time::Instant::now),
             confirm_kill_session_id: None,
+            unfollowed: HashSet::new(),
+            session_files: Vec::new(),
+            session_file_cursor: 0,
         };
 
         app.refresh()?;
@@ -797,6 +804,14 @@ impl App {
         self.usage = self.usage_fetcher.get().clone();
 
         Ok(())
+    }
+
+    pub fn refresh_usage(&mut self) {
+        self.usage = self.usage_fetcher.get().clone();
+    }
+
+    pub fn invalidate_usage(&mut self) {
+        self.usage_fetcher.invalidate();
     }
 
     pub fn check_tervezo_dirty(&mut self) -> bool {
@@ -1008,6 +1023,7 @@ impl App {
         let mut entries: Vec<SessionEntry> = self
             .local_sessions
             .iter()
+            .filter(|s| !self.unfollowed.contains(&s.id))
             .cloned()
             .map(SessionEntry::Local)
             .collect();
@@ -1015,11 +1031,26 @@ impl App {
         if let Some(ref fetcher) = self.tervezo_fetcher {
             let remote = fetcher.implementations();
             for imp in remote {
-                entries.push(SessionEntry::Remote(imp));
+                if !self.unfollowed.contains(&imp.id) {
+                    entries.push(SessionEntry::Remote(imp));
+                }
             }
         }
 
         self.entries = entries;
+    }
+
+    pub fn unfollow_session(&mut self, id: &str) {
+        self.unfollowed.insert(id.to_string());
+    }
+
+    pub fn merge_and_refilter(&mut self) {
+        self.merge_entries();
+        self.apply_sort();
+        self.apply_filter();
+        if self.selected >= self.filtered.len() && !self.filtered.is_empty() {
+            self.selected = self.filtered.len() - 1;
+        }
     }
 
     pub fn usage(&self) -> &UsageData {

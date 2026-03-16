@@ -1,7 +1,10 @@
 use serde::Deserialize;
+use std::sync::mpsc;
 use std::time::{Instant, SystemTime, UNIX_EPOCH};
 
-const CACHE_TTL_SECS: u64 = 60;
+const CACHE_TTL_SECS: u64 = 300;
+const INVALIDATED_TTL_SECS: u64 = 30;
+const BACKOFF_TTL_SECS: u64 = 120;
 const REQUEST_TIMEOUT_SECS: u64 = 5;
 
 #[derive(Debug, Clone, Default)]
@@ -16,7 +19,10 @@ pub struct UsageData {
 
 pub struct UsageFetcher {
     cached: UsageData,
-    last_fetch: Option<Instant>,
+    last_request: Option<Instant>,
+    rx: mpsc::Receiver<UsageData>,
+    tx: mpsc::Sender<()>,
+    inflight: bool,
 }
 
 #[derive(Deserialize)]
@@ -49,24 +55,61 @@ struct WindowData {
 
 impl UsageFetcher {
     pub fn new() -> Self {
+        let (result_tx, result_rx) = mpsc::channel();
+        let (trigger_tx, trigger_rx) = mpsc::channel::<()>();
+
+        std::thread::spawn(move || {
+            while trigger_rx.recv().is_ok() {
+                let data = fetch_usage();
+                if result_tx.send(data).is_err() {
+                    break;
+                }
+            }
+        });
+
         Self {
             cached: UsageData::default(),
-            last_fetch: None,
+            last_request: None,
+            rx: result_rx,
+            tx: trigger_tx,
+            inflight: false,
         }
     }
 
     pub fn get(&mut self) -> &UsageData {
-        let should_fetch = match self.last_fetch {
-            Some(t) => t.elapsed().as_secs() >= CACHE_TTL_SECS,
-            None => true,
-        };
+        while let Ok(data) = self.rx.try_recv() {
+            self.inflight = false;
+            if data.api_available {
+                self.cached = data;
+            } else {
+                self.last_request = Some(
+                    Instant::now()
+                        - std::time::Duration::from_secs(CACHE_TTL_SECS - BACKOFF_TTL_SECS),
+                );
+                return &self.cached;
+            }
+            self.last_request = Some(Instant::now());
+        }
 
-        if should_fetch {
-            self.cached = fetch_usage();
-            self.last_fetch = Some(Instant::now());
+        if !self.inflight {
+            let should_fetch = match self.last_request {
+                Some(t) => t.elapsed().as_secs() >= CACHE_TTL_SECS,
+                None => true,
+            };
+            if should_fetch {
+                self.inflight = true;
+                let _ = self.tx.send(());
+            }
         }
 
         &self.cached
+    }
+
+    pub fn invalidate(&mut self) {
+        if let Some(ref mut t) = self.last_request {
+            *t = Instant::now()
+                - std::time::Duration::from_secs(CACHE_TTL_SECS - INVALIDATED_TTL_SECS);
+        }
     }
 }
 
