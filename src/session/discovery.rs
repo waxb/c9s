@@ -12,7 +12,7 @@ use super::{Session, SessionStatus};
 
 pub struct SessionDiscovery {
     claude_dir: PathBuf,
-    stats_cache: HashMap<PathBuf, (SystemTime, JsonlStats)>,
+    stats_cache: HashMap<PathBuf, (SystemTime, u64, JsonlStats)>,
 }
 
 #[derive(Debug)]
@@ -266,12 +266,20 @@ impl SessionDiscovery {
     }
 
     fn parse_jsonl_cached(&mut self, path: &Path) -> JsonlStats {
-        let mtime = std::fs::metadata(path).and_then(|m| m.modified()).ok();
+        let meta = std::fs::metadata(path).ok();
+        let mtime = meta.as_ref().and_then(|m| m.modified().ok());
+        let file_size = meta.as_ref().map(|m| m.len()).unwrap_or(0);
 
         if let Some(mtime) = mtime {
-            if let Some((cached_mtime, cached_stats)) = self.stats_cache.get(path) {
+            if let Some((cached_mtime, cached_size, cached_stats)) = self.stats_cache.get(path) {
                 if *cached_mtime == mtime {
                     return cached_stats.clone();
+                }
+                if file_size > 2 * 1024 * 1024 {
+                    let growth = file_size.saturating_sub(*cached_size);
+                    if growth < 64 * 1024 {
+                        return cached_stats.clone();
+                    }
                 }
             }
         }
@@ -280,7 +288,7 @@ impl SessionDiscovery {
 
         if let Some(mtime) = mtime {
             self.stats_cache
-                .insert(path.to_path_buf(), (mtime, stats.clone()));
+                .insert(path.to_path_buf(), (mtime, file_size, stats.clone()));
         }
 
         stats
@@ -289,11 +297,78 @@ impl SessionDiscovery {
     fn parse_jsonl(path: &Path) -> JsonlStats {
         let mut stats = JsonlStats::default();
 
+        let file_size = std::fs::metadata(path).map(|m| m.len()).unwrap_or(0);
+        const TAIL_SIZE: u64 = 512 * 1024;
+        const LARGE_FILE_THRESHOLD: u64 = 2 * 1024 * 1024;
+
+        if file_size > LARGE_FILE_THRESHOLD {
+            Self::parse_jsonl_fast(path, file_size, TAIL_SIZE, &mut stats);
+        } else {
+            Self::parse_jsonl_full(path, &mut stats);
+        }
+
+        stats
+    }
+
+    fn parse_jsonl_full(path: &Path, stats: &mut JsonlStats) {
         let content = match std::fs::read_to_string(path) {
             Ok(c) => c,
-            Err(_) => return stats,
+            Err(_) => return,
+        };
+        Self::parse_jsonl_lines(&content, stats, true);
+    }
+
+    fn parse_jsonl_fast(path: &Path, file_size: u64, tail_size: u64, stats: &mut JsonlStats) {
+        use std::io::{Read, Seek, SeekFrom, BufRead, BufReader};
+
+        let file = match std::fs::File::open(path) {
+            Ok(f) => f,
+            Err(_) => return,
         };
 
+        let mut reader = BufReader::new(&file);
+
+        let mut head = String::new();
+        let mut head_bytes = 0u64;
+        const HEAD_LIMIT: u64 = 64 * 1024;
+        loop {
+            let mut line = String::new();
+            match reader.read_line(&mut line) {
+                Ok(0) => break,
+                Ok(n) => {
+                    head_bytes += n as u64;
+                    head.push_str(&line);
+                    if head_bytes >= HEAD_LIMIT {
+                        break;
+                    }
+                }
+                Err(_) => break,
+            }
+        }
+        Self::parse_jsonl_lines(&head, stats, false);
+
+        let tail_start = if file_size > tail_size { file_size - tail_size } else { 0 };
+        if tail_start > head_bytes {
+            let file2 = match std::fs::File::open(path) {
+                Ok(f) => f,
+                Err(_) => return,
+            };
+            let mut reader2 = BufReader::new(file2);
+            if reader2.seek(SeekFrom::Start(tail_start)).is_err() {
+                return;
+            }
+            let mut tail = String::new();
+            if reader2.read_to_string(&mut tail).is_err() {
+                return;
+            }
+            if let Some(first_nl) = tail.find('\n') {
+                let tail_clean = &tail[first_nl + 1..];
+                Self::parse_jsonl_lines(tail_clean, stats, false);
+            }
+        }
+    }
+
+    fn parse_jsonl_lines(content: &str, stats: &mut JsonlStats, count_messages: bool) {
         for line in content.lines() {
             let value: Value = match serde_json::from_str(line) {
                 Ok(v) => v,
@@ -330,10 +405,6 @@ impl SessionDiscovery {
                 }
             }
 
-            if value.get("isCompactSummary").and_then(|v| v.as_bool()) == Some(true) {
-                stats.compaction_count += 1;
-            }
-
             if let Some(hc) = value.get("hookCount").and_then(|v| v.as_u64()) {
                 stats.hook_run_count += hc as u32;
             }
@@ -355,11 +426,15 @@ impl SessionDiscovery {
 
             match msg_type {
                 "user" => {
-                    stats.message_count += 1;
+                    if count_messages {
+                        stats.message_count += 1;
+                    }
                     stats.last_message_type = Some("user".to_string());
                 }
                 "assistant" => {
-                    stats.message_count += 1;
+                    if count_messages {
+                        stats.message_count += 1;
+                    }
                     stats.last_message_type = Some("assistant".to_string());
 
                     if let Some(message) = value.get("message") {
@@ -398,8 +473,6 @@ impl SessionDiscovery {
                 _ => {}
             }
         }
-
-        stats
     }
 }
 

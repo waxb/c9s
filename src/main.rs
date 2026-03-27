@@ -680,7 +680,6 @@ fn process_action(
                 app.terminal_manager_mut().detach();
             }
             app.set_view_mode(ViewMode::List);
-            let _ = app.refresh();
         }
         Action::TerminalInput(bytes) => {
             let _ = app.terminal_manager_mut().write_to_active(&bytes);
