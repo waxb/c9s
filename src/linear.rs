@@ -132,6 +132,7 @@ pub struct LinearEvent {
     pub issue_id: String,
     pub prompt_context: Option<String>,
     pub comment: Option<String>,
+    pub agent_session_id: Option<String>,
 }
 
 pub struct LinearClient {
@@ -235,6 +236,18 @@ impl LinearClient {
         let query = format!(
             r#"{{ "query": "mutation {{ issueUpdate(id: \"{}\", input: {{ stateId: \"{}\" }}) {{ success }} }}" }}"#,
             identifier, status_name
+        );
+
+        let _ = self.graphql_request(&query)?;
+
+        Ok(())
+    }
+
+    pub fn acknowledge_session(&mut self, agent_session_id: &str, message: &str) -> Result<()> {
+        let escaped_message = message.replace('\\', "\\\\").replace('"', "\\\"").replace('\n', "\\n");
+        let query = format!(
+            r#"{{ "query": "mutation {{ agentActivityCreate(input: {{ agentSessionId: \"{}\", content: {{ type: \"thought\", thought: \"{}\" }} }}) {{ success }} }}" }}"#,
+            agent_session_id, escaped_message
         );
 
         let _ = self.graphql_request(&query)?;
@@ -620,10 +633,18 @@ fn parse_webhook_body(body: &[u8]) -> Result<LinearEvent> {
         .and_then(|v| v.as_str())
         .map(|s| s.to_string());
 
+    let agent_session_id = value
+        .get("data")
+        .and_then(|d| d.get("agentSession"))
+        .and_then(|s| s.get("id"))
+        .and_then(|v| v.as_str())
+        .map(|s| s.to_string());
+
     Ok(LinearEvent {
         issue_id,
         prompt_context,
         comment,
+        agent_session_id,
     })
 }
 
@@ -646,6 +667,7 @@ fn parse_queue_body(body: &[u8]) -> Result<LinearEvent> {
         issue_id,
         prompt_context: None,
         comment,
+        agent_session_id: None,
     })
 }
 
@@ -768,6 +790,7 @@ mod tests {
             issue_id: "LUM-1".to_string(),
             prompt_context: None,
             comment: None,
+            agent_session_id: None,
         };
         let prompt = build_prompt(&issue, &event);
         assert!(prompt.contains("Implement LUM-1: Fix the bug"));
@@ -792,6 +815,7 @@ mod tests {
             issue_id: "LUM-2".to_string(),
             prompt_context: Some("<context>issue details here</context>".to_string()),
             comment: None,
+            agent_session_id: None,
         };
         let prompt = build_prompt(&issue, &event);
         assert!(prompt.contains("--- Linear Context ---"));
@@ -814,6 +838,7 @@ mod tests {
             issue_id: "LUM-3".to_string(),
             prompt_context: None,
             comment: Some("Focus on the header area only".to_string()),
+            agent_session_id: None,
         };
         let prompt = build_prompt(&issue, &event);
         assert!(prompt.contains("--- Additional Instructions ---"));
@@ -836,6 +861,7 @@ mod tests {
             issue_id: "LUM-4".to_string(),
             prompt_context: Some("xml context".to_string()),
             comment: Some("do it fast".to_string()),
+            agent_session_id: None,
         };
         let prompt = build_prompt(&issue, &event);
         assert!(prompt.contains("Implement LUM-4"));
@@ -850,6 +876,7 @@ mod tests {
         let body = r#"{
             "data": {
                 "agentSession": {
+                    "id": "session-abc-123",
                     "issue": { "identifier": "LUM-100" },
                     "promptContext": "<issue>context here</issue>",
                     "comment": { "body": "please fix this fast" }
@@ -860,6 +887,7 @@ mod tests {
         assert_eq!(event.issue_id, "LUM-100");
         assert_eq!(event.prompt_context.as_deref(), Some("<issue>context here</issue>"));
         assert_eq!(event.comment.as_deref(), Some("please fix this fast"));
+        assert_eq!(event.agent_session_id.as_deref(), Some("session-abc-123"));
     }
 
     #[test]

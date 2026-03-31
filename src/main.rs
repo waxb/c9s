@@ -2033,6 +2033,14 @@ fn process_linear_event(
     event: &linear::LinearEvent,
 ) -> Result<()> {
     let mut client = linear::LinearClient::new(config);
+
+    if let Some(ref session_id) = event.agent_session_id {
+        let _ = client.acknowledge_session(
+            session_id,
+            &format!("Setting up worktree for {}...", event.issue_id),
+        );
+    }
+
     let issue = client.fetch_issue(&event.issue_id)?;
 
     let repo_root = if let Some(remote_url) = config.repos.get(&issue.team_key) {
