@@ -2075,7 +2075,21 @@ fn process_linear_event(
 
     let wt_dir = repo_root.join(worktree::WORKTREE_DIR).join(&sanitized);
     if wt_dir.exists() {
-        tlog!(info, "Linear: worktree already exists for {}, skipping", event.issue_id);
+        if let Some(ref comment) = event.comment {
+            tlog!(info, "Linear: follow-up for {} -> forwarding to session", event.issue_id);
+            let tab_label = format!("{}:{}",
+                repo_root.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_default(),
+                sanitized);
+            if let Some(session_id) = app.terminal_manager().find_session_by_name(&tab_label) {
+                let msg = format!("{}\n", comment);
+                let _ = app.terminal_manager_mut().write_to_session(&session_id, msg.as_bytes());
+                tlog!(info, "Linear: forwarded follow-up to session {}", session_id);
+            } else {
+                tlog!(warn, "Linear: no active session found for {}, queuing follow-up", event.issue_id);
+            }
+        } else {
+            tlog!(info, "Linear: duplicate webhook for {} (worktree exists), skipping", event.issue_id);
+        }
         return Ok(());
     }
 

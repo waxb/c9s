@@ -140,6 +140,21 @@ impl TerminalManager {
         self.active_id.as_deref()
     }
 
+    pub fn write_to_session(&mut self, session_id: &str, bytes: &[u8]) -> Result<()> {
+        if let Some(term) = self.terminals.get_mut(session_id) {
+            term.write_input(bytes)?;
+        }
+        Ok(())
+    }
+
+    pub fn find_session_by_name(&self, name: &str) -> Option<String> {
+        self.order.iter().find(|id| {
+            self.terminals.get(*id)
+                .map(|t| t.project_name() == name)
+                .unwrap_or(false)
+        }).cloned()
+    }
+
     pub fn write_to_active(&mut self, bytes: &[u8]) -> Result<()> {
         if let Some(term) = self.active_terminal_mut() {
             term.write_input(bytes)?;
