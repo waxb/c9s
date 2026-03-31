@@ -368,6 +368,8 @@ pub fn verify_webhook_signature(body: &[u8], signature: &str, secret: &str) -> b
 }
 
 pub fn start_http_listener(port: u16, secret: String, client_id: Option<String>, client_secret: Option<String>, tx: mpsc::Sender<LinearEvent>) {
+    start_tailscale_funnel(port);
+
     std::thread::spawn(move || {
         let addr = format!("0.0.0.0:{}", port);
         let server = match tiny_http::Server::http(&addr) {
@@ -521,6 +523,29 @@ pub fn start_http_listener(port: u16, secret: String, client_id: Option<String>,
                         .with_status_code(404);
                     let _ = request.respond(resp);
                 }
+            }
+        }
+    });
+}
+
+fn start_tailscale_funnel(port: u16) {
+    std::thread::spawn(move || {
+        let port_str = port.to_string();
+        crate::tlog!(info, "Starting Tailscale Funnel on port {}...", port);
+        let result = std::process::Command::new("tailscale")
+            .args(["funnel", &port_str])
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::piped())
+            .spawn();
+
+        match result {
+            Ok(mut child) => {
+                crate::tlog!(info, "Tailscale Funnel started (pid {})", child.id());
+                let _ = child.wait();
+                crate::tlog!(warn, "Tailscale Funnel exited");
+            }
+            Err(e) => {
+                crate::tlog!(warn, "Tailscale Funnel failed to start: {} (is tailscale installed?)", e);
             }
         }
     });
