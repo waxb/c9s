@@ -7,6 +7,9 @@ mod terminal;
 mod tervezo;
 mod ui;
 mod usage;
+mod worktree;
+#[cfg(test)]
+mod worktree_integration_tests;
 
 use anyhow::Result;
 use app::{
@@ -64,6 +67,10 @@ fn main() -> Result<()> {
     }
 
     let mut app = App::new()?;
+
+    if let Some(store) = app.store_ref() {
+        let _ = store.backfill_repo_roots();
+    }
 
     // Install panic hook that logs to c9s.log before printing to stderr
     std::panic::set_hook(Box::new(|info| {
@@ -345,6 +352,30 @@ fn run_loop(
                         let entries = log::entries();
                         ui::render_log_panel(f, &entries, app.log_scroll(), area);
                     }
+                    ViewMode::BranchInput => {
+                        ui::render_session_list(f, app, area);
+                        if let Some(ref state) = app.branch_input {
+                            ui::render_branch_input(f, state, area);
+                        }
+                    }
+                    ViewMode::WorktreePicker => {
+                        ui::render_session_list(f, app, area);
+                        if let Some(ref state) = app.worktree_picker {
+                            ui::render_worktree_picker(f, state, area);
+                        }
+                    }
+                    ViewMode::ConfirmWorktreeCleanup => {
+                        ui::render_session_list(f, app, area);
+                        if let Some(ref state) = app.confirm_worktree_cleanup {
+                            ui::render_confirm_worktree_cleanup(f, state, area);
+                        }
+                    }
+                    ViewMode::ConfirmRecreateWorktree => {
+                        ui::render_session_list(f, app, area);
+                        if let Some(ref state) = app.confirm_recreate_worktree {
+                            ui::render_confirm_recreate_worktree(f, state, area);
+                        }
+                    }
                 }
 
                 if app.is_side_panel_open() {
@@ -541,19 +572,44 @@ fn process_action(
         }
         Action::ConfirmKill => {
             if let Some(session_id) = app.confirm_kill_session_id.take() {
-                if let Some(pid) = app
+                let session = app
                     .all_sessions()
                     .iter()
                     .find(|s| s.id == session_id)
-                    .and_then(|s| s.pid)
-                {
-                    unsafe {
-                        libc::kill(pid as i32, libc::SIGTERM);
+                    .cloned();
+
+                if let Some(ref s) = session {
+                    if let Some(pid) = s.pid {
+                        unsafe {
+                            libc::kill(pid as i32, libc::SIGTERM);
+                        }
                     }
                 }
+
+                if let Some(ref s) = session {
+                    if let Some(ref wt_info) = s.worktree_info {
+                        let is_dirty =
+                            worktree::is_dirty(&wt_info.worktree_path).unwrap_or(true);
+                        app.confirm_worktree_cleanup =
+                            Some(app::ConfirmWorktreeCleanupState {
+                                session_id: session_id.clone(),
+                                worktree_path: wt_info.worktree_path.clone(),
+                                branch: wt_info.pinned_branch.clone(),
+                                is_dirty,
+                            });
+                        app.set_view_mode(ViewMode::ConfirmWorktreeCleanup);
+                    } else {
+                        app.set_view_mode(ViewMode::List);
+                        let _ = app.refresh();
+                    }
+                } else {
+                    app.set_view_mode(ViewMode::List);
+                    let _ = app.refresh();
+                }
+            } else {
+                app.set_view_mode(ViewMode::List);
+                let _ = app.refresh();
             }
-            app.set_view_mode(ViewMode::List);
-            let _ = app.refresh();
         }
         Action::CancelKill => {
             app.confirm_kill_session_id = None;
@@ -756,7 +812,16 @@ fn process_action(
             let _ = app.refresh();
         }
         Action::LaunchNew => {
-            if app.has_tervezo() {
+            let in_git_repo = app
+                .selected_session()
+                .and_then(|e| e.as_local())
+                .map(|s| s.cwd.clone())
+                .or_else(|| std::env::current_dir().ok())
+                .map(|cwd| worktree::resolve_repo_root(&cwd).is_ok())
+                .unwrap_or(false);
+
+            if app.has_tervezo() || in_git_repo {
+                app.open_new_session_menu(in_git_repo);
                 app.set_view_mode(ViewMode::NewSessionMenu);
             } else {
                 app.set_view_mode(ViewMode::Command);
@@ -1172,6 +1237,66 @@ fn process_action(
                     app::NewSessionOption::Local => {
                         app.set_view_mode(ViewMode::Command);
                     }
+                    app::NewSessionOption::BranchSession => {
+                        let cwd = app
+                            .selected_session()
+                            .and_then(|e| e.as_local())
+                            .map(|s| s.cwd.clone())
+                            .or_else(|| std::env::current_dir().ok())
+                            .unwrap_or_default();
+                        match worktree::resolve_repo_root(&cwd) {
+                            Ok(repo_root) => {
+                                let branches =
+                                    worktree::list_local_branches(&repo_root).unwrap_or_default();
+                                app.branch_input = Some(app::BranchInputState {
+                                    input: String::new(),
+                                    repo_root,
+                                    branches,
+                                    suggestion: None,
+                                    error: None,
+                                });
+                                app.set_view_mode(ViewMode::BranchInput);
+                            }
+                            Err(_) => {
+                                app.set_view_mode(ViewMode::List);
+                            }
+                        }
+                    }
+                    app::NewSessionOption::ExistingWorktree => {
+                        let cwd = app
+                            .selected_session()
+                            .and_then(|e| e.as_local())
+                            .map(|s| s.cwd.clone())
+                            .or_else(|| std::env::current_dir().ok())
+                            .unwrap_or_default();
+                        match worktree::resolve_repo_root(&cwd) {
+                            Ok(repo_root) => {
+                                let worktrees =
+                                    worktree::list_worktrees(&repo_root).unwrap_or_default();
+                                let active_cwds: std::collections::HashSet<std::path::PathBuf> =
+                                    app.all_sessions()
+                                        .iter()
+                                        .filter(|s| s.pid.is_some())
+                                        .map(|s| s.cwd.clone())
+                                        .collect();
+                                let available: Vec<_> = worktrees
+                                    .into_iter()
+                                    .filter(|wt| !wt.is_main && !active_cwds.contains(&wt.path))
+                                    .collect();
+                                if available.is_empty() {
+                                    app.set_view_mode(ViewMode::List);
+                                } else {
+                                    app.worktree_picker = Some(app::WorktreePickerState {
+                                        worktrees: available,
+                                        cursor: 0,
+                                        repo_root,
+                                    });
+                                    app.set_view_mode(ViewMode::WorktreePicker);
+                                }
+                            }
+                            Err(_) => app.set_view_mode(ViewMode::List),
+                        }
+                    }
                     app::NewSessionOption::Tervezo => {
                         app.set_view_mode(ViewMode::TervezoCreateDialog);
                     }
@@ -1229,6 +1354,161 @@ fn process_action(
             }
         }
         Action::None => {}
+        Action::BranchInputChar(c) => {
+            if let Some(ref mut state) = app.branch_input {
+                state.input.push(c);
+                state.error = None;
+                state.suggestion = state
+                    .branches
+                    .iter()
+                    .find(|b| b.starts_with(&state.input) && *b != &state.input)
+                    .cloned();
+            }
+        }
+        Action::BranchInputBackspace => {
+            if let Some(ref mut state) = app.branch_input {
+                state.input.pop();
+                state.error = None;
+                state.suggestion = if state.input.is_empty() {
+                    None
+                } else {
+                    state
+                        .branches
+                        .iter()
+                        .find(|b| b.starts_with(&state.input) && *b != &state.input)
+                        .cloned()
+                };
+            }
+        }
+        Action::BranchInputTab => {
+            if let Some(ref mut state) = app.branch_input {
+                if let Some(suggestion) = state.suggestion.take() {
+                    state.input = suggestion;
+                }
+            }
+        }
+        Action::BranchInputSubmit => {
+            if let Some(mut state) = app.branch_input.take() {
+                let branch = state.input.trim().to_string();
+                if branch.is_empty() {
+                    app.set_view_mode(ViewMode::List);
+                } else {
+                    let new_branch = !state.branches.contains(&branch);
+                    match worktree::create_worktree(&state.repo_root, &branch, new_branch) {
+                        Ok(wt_path) => {
+                            let area = terminal.size()?;
+                            let rows = area.height.saturating_sub(1);
+                            let cols = area.width;
+                            let _ =
+                                app.terminal_manager_mut()
+                                    .attach_new(&wt_path, rows, cols);
+                            app.set_view_mode(ViewMode::Terminal);
+                        }
+                        Err(e) => {
+                            state.error = Some(format!("{}", e));
+                            state.input = branch;
+                            app.branch_input = Some(state);
+                        }
+                    }
+                }
+            }
+        }
+        Action::BranchInputCancel => {
+            app.branch_input = None;
+            app.set_view_mode(ViewMode::List);
+        }
+        Action::WorktreePickerUp => {
+            if let Some(ref mut state) = app.worktree_picker {
+                if state.cursor > 0 {
+                    state.cursor -= 1;
+                }
+            }
+        }
+        Action::WorktreePickerDown => {
+            if let Some(ref mut state) = app.worktree_picker {
+                if state.cursor + 1 < state.worktrees.len() {
+                    state.cursor += 1;
+                }
+            }
+        }
+        Action::WorktreePickerSelect => {
+            if let Some(state) = app.worktree_picker.take() {
+                if let Some(wt) = state.worktrees.get(state.cursor) {
+                    let area = terminal.size()?;
+                    let rows = area.height.saturating_sub(1);
+                    let cols = area.width;
+                    let _ = app
+                        .terminal_manager_mut()
+                        .attach_new(&wt.path, rows, cols);
+                    app.set_view_mode(ViewMode::Terminal);
+                }
+            }
+        }
+        Action::WorktreePickerClose => {
+            app.worktree_picker = None;
+            app.set_view_mode(ViewMode::List);
+        }
+        Action::ConfirmWorktreeCleanupYes => {
+            if let Some(state) = app.confirm_worktree_cleanup.take() {
+                if let Some(repo_root) = app
+                    .all_sessions()
+                    .iter()
+                    .find(|s| s.id == state.session_id)
+                    .and_then(|s| s.repo_root.clone())
+                {
+                    let _ =
+                        worktree::remove_worktree(&repo_root, &state.worktree_path, state.is_dirty);
+                }
+            }
+            app.set_view_mode(ViewMode::List);
+            let _ = app.refresh();
+        }
+        Action::ConfirmWorktreeCleanupNo => {
+            app.confirm_worktree_cleanup = None;
+            app.set_view_mode(ViewMode::List);
+            let _ = app.refresh();
+        }
+        Action::ConfirmRecreateYes => {
+            if let Some(state) = app.confirm_recreate_worktree.take() {
+                match worktree::create_worktree(&state.repo_root, &state.branch, false) {
+                    Ok(wt_path) => {
+                        let area = terminal.size()?;
+                        let rows = area.height.saturating_sub(1);
+                        let cols = area.width;
+                        app.terminal_manager_mut().attach(
+                            &state.session_id,
+                            &state.branch,
+                            &wt_path,
+                            None,
+                            rows,
+                            cols,
+                        )?;
+                        app.set_view_mode(ViewMode::Terminal);
+                    }
+                    Err(_) => {
+                        app.set_view_mode(ViewMode::List);
+                    }
+                }
+            } else {
+                app.set_view_mode(ViewMode::List);
+            }
+        }
+        Action::ConfirmRecreateNo => {
+            app.confirm_recreate_worktree = None;
+            app.set_view_mode(ViewMode::List);
+        }
+        Action::PruneWorktrees => {
+            let cwd = app
+                .selected_session()
+                .and_then(|e| e.as_local())
+                .map(|s| s.cwd.clone())
+                .or_else(|| std::env::current_dir().ok())
+                .unwrap_or_default();
+            if let Ok(repo_root) = worktree::resolve_repo_root(&cwd) {
+                let _ = worktree::prune_worktrees(&repo_root);
+            }
+            let _ = app.refresh();
+        }
     }
     Ok(())
 }
@@ -1713,6 +1993,26 @@ fn attach_selected(
                 let name = session.project_name.clone();
                 let cwd = session.cwd.clone();
                 let pid = session.pid;
+
+                if session.is_worktree_session()
+                    && session.status == crate::session::SessionStatus::Dead
+                    && !cwd.exists()
+                {
+                    if let Some(ref wt_info) = session.worktree_info {
+                        app.confirm_recreate_worktree =
+                            Some(app::ConfirmRecreateWorktreeState {
+                                session_id: id,
+                                branch: wt_info.pinned_branch.clone(),
+                                repo_root: session
+                                    .repo_root
+                                    .clone()
+                                    .unwrap_or_default(),
+                            });
+                        app.set_view_mode(ViewMode::ConfirmRecreateWorktree);
+                        return Ok(());
+                    }
+                }
+
                 let area = terminal.size()?;
                 let rows = area.height.saturating_sub(1);
                 let cols = area.width;

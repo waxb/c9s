@@ -8,11 +8,12 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::time::SystemTime;
 
-use super::{Session, SessionStatus};
+use super::{Session, SessionStatus, WorktreeInfo};
 
 pub struct SessionDiscovery {
     claude_dir: PathBuf,
     stats_cache: HashMap<PathBuf, (SystemTime, u64, JsonlStats)>,
+    repo_root_cache: HashMap<PathBuf, Option<PathBuf>>,
 }
 
 #[derive(Debug)]
@@ -53,6 +54,7 @@ impl SessionDiscovery {
         Self {
             claude_dir,
             stats_cache: HashMap::new(),
+            repo_root_cache: HashMap::new(),
         }
     }
 
@@ -176,6 +178,8 @@ impl SessionDiscovery {
                             compaction_count: stats.compaction_count,
                             hook_run_count: stats.hook_run_count,
                             hook_error_count: stats.hook_error_count,
+                            repo_root: None,
+                            worktree_info: None,
                         };
 
                         let existing = seen_sessions.get(&project_cwd);
@@ -189,6 +193,35 @@ impl SessionDiscovery {
                         }
                     }
                 }
+            }
+        }
+
+        for session in seen_sessions.values_mut() {
+            let resolved = if let Some(cached) = self.repo_root_cache.get(&session.cwd) {
+                cached.clone()
+            } else {
+                let result = crate::worktree::resolve_repo_root(&session.cwd).ok();
+                self.repo_root_cache
+                    .insert(session.cwd.clone(), result.clone());
+                result
+            };
+
+            session.repo_root = resolved.clone();
+
+            if crate::worktree::is_inside_c9s_worktree(&session.cwd) {
+                let pinned_branch = crate::worktree::get_current_branch(&session.cwd)
+                    .unwrap_or_default();
+                session.worktree_info = Some(WorktreeInfo {
+                    worktree_path: session.cwd.clone(),
+                    pinned_branch: pinned_branch.clone(),
+                });
+
+                if let Some(ref repo_root) = resolved {
+                    session.project_name =
+                        extract_project_name(&repo_root.to_string_lossy());
+                }
+
+                session.git_branch = Some(pinned_branch);
             }
         }
 

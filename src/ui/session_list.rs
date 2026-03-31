@@ -250,7 +250,26 @@ fn render_table(f: &mut Frame, app: &App, area: Rect) {
                 Cell::from(marker).style(marker_style),
                 Cell::from(ci_symbol).style(ci_style),
                 Cell::from(entry.display_name().to_string()).style(name_style),
-                Cell::from(entry.branch().unwrap_or("-").to_string()),
+                Cell::from({
+                    let raw_branch = entry.branch().unwrap_or("-").to_string();
+                    if entry.is_worktree_session() {
+                        let label = format!("[W] {}", raw_branch);
+                        if label.len() > 19 {
+                            format!("{}...", &label[..16])
+                        } else {
+                            label
+                        }
+                    } else if raw_branch.len() > 19 {
+                        format!("{}...", &raw_branch[..16])
+                    } else {
+                        raw_branch
+                    }
+                })
+                .style(if entry.is_worktree_session() {
+                    Style::default().fg(Color::Green)
+                } else {
+                    Style::default()
+                }),
                 Cell::from(model_short),
                 Cell::from(entry.status_label()).style(status_style),
                 Cell::from(msg_str),
@@ -267,7 +286,7 @@ fn render_table(f: &mut Frame, app: &App, area: Rect) {
         Constraint::Length(3),
         Constraint::Length(2),
         Constraint::Min(20),
-        Constraint::Length(15),
+        Constraint::Length(20),
         Constraint::Length(10),
         Constraint::Length(10),
         Constraint::Length(6),
@@ -307,9 +326,9 @@ fn render_footer(f: &mut Frame, app: &App, area: Rect) {
     );
 
     let keys = if app.has_tervezo() {
-        "  a:attach  C-b:resume  d:detail  x:kill  u:unfollow  n:new  c:fix-ci  /:filter  s:sort  ?:help"
+        "  a:attach  C-b:resume  d:detail  x:kill  u:unfollow  n:new  W:prune-wt  c:fix-ci  /:filter  s:sort  ?:help"
     } else {
-        "  a:attach  C-b:resume  d:detail  x:kill  u:unfollow  n:new  /:filter  s:sort  ?:help"
+        "  a:attach  C-b:resume  d:detail  x:kill  u:unfollow  n:new  W:prune-wt  /:filter  s:sort  ?:help"
     };
 
     let footer = Line::from(vec![
