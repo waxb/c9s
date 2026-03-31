@@ -187,16 +187,16 @@ impl LinearClient {
         let client_secret = self.client_secret.as_ref()
             .ok_or_else(|| anyhow::anyhow!("no client_secret for token refresh"))?;
 
-        let body = serde_json::json!({
-            "grant_type": "refresh_token",
-            "refresh_token": refresh,
-            "client_id": client_id,
-            "client_secret": client_secret,
-        });
+        let body = format!(
+            "grant_type=refresh_token&refresh_token={}&client_id={}&client_secret={}",
+            urlencoded(refresh),
+            urlencoded(client_id),
+            urlencoded(client_secret),
+        );
 
         let response = ureq::post("https://api.linear.app/oauth/token")
-            .header("Content-Type", "application/json")
-            .send(body.to_string().as_bytes())
+            .header("Content-Type", "application/x-www-form-urlencoded")
+            .send(body.as_bytes())
             .context("token refresh request failed")?;
 
         let resp_body = response.into_body().read_to_string()
@@ -524,17 +524,17 @@ struct OAuthTokens {
 }
 
 fn exchange_oauth_token(code: &str, client_id: &str, client_secret: &str, redirect_uri: &str) -> Result<OAuthTokens> {
-    let body = serde_json::json!({
-        "grant_type": "authorization_code",
-        "code": code,
-        "client_id": client_id,
-        "client_secret": client_secret,
-        "redirect_uri": redirect_uri,
-    });
+    let body = format!(
+        "grant_type=authorization_code&code={}&client_id={}&client_secret={}&redirect_uri={}",
+        urlencoded(code),
+        urlencoded(client_id),
+        urlencoded(client_secret),
+        urlencoded(redirect_uri),
+    );
 
     let response = ureq::post("https://api.linear.app/oauth/token")
-        .header("Content-Type", "application/json")
-        .send(body.to_string().as_bytes())
+        .header("Content-Type", "application/x-www-form-urlencoded")
+        .send(body.as_bytes())
         .context("failed to exchange OAuth code")?;
 
     let resp_body = response.into_body().read_to_string()
