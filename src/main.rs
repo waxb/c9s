@@ -1396,12 +1396,16 @@ fn process_action(
                     let new_branch = !state.branches.contains(&branch);
                     match worktree::create_worktree(&state.repo_root, &branch, new_branch) {
                         Ok(wt_path) => {
+                            let repo_name = state.repo_root.file_name()
+                                .map(|n| n.to_string_lossy().to_string())
+                                .unwrap_or_default();
+                            let tab_label = format!("{}:{}", repo_name, branch);
                             let area = terminal.size()?;
                             let rows = area.height.saturating_sub(1);
                             let cols = area.width;
                             let _ =
                                 app.terminal_manager_mut()
-                                    .attach_new(&wt_path, rows, cols);
+                                    .attach_new_named(&wt_path, Some(&tab_label), rows, cols);
                             app.set_view_mode(ViewMode::Terminal);
                         }
                         Err(e) => {
@@ -1434,12 +1438,16 @@ fn process_action(
         Action::WorktreePickerSelect => {
             if let Some(state) = app.worktree_picker.take() {
                 if let Some(wt) = state.worktrees.get(state.cursor) {
+                    let repo_name = state.repo_root.file_name()
+                        .map(|n| n.to_string_lossy().to_string())
+                        .unwrap_or_default();
+                    let tab_label = format!("{}:{}", repo_name, wt.branch);
                     let area = terminal.size()?;
                     let rows = area.height.saturating_sub(1);
                     let cols = area.width;
                     let _ = app
                         .terminal_manager_mut()
-                        .attach_new(&wt.path, rows, cols);
+                        .attach_new_named(&wt.path, Some(&tab_label), rows, cols);
                     app.set_view_mode(ViewMode::Terminal);
                 }
             }
