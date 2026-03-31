@@ -253,14 +253,7 @@ fn render_table(f: &mut Frame, app: &App, area: Rect) {
                 Cell::from({
                     let raw_branch = entry.branch().unwrap_or("-").to_string();
                     if entry.is_worktree_session() {
-                        let label = format!("[W] {}", raw_branch);
-                        if label.len() > 19 {
-                            format!("{}...", &label[..16])
-                        } else {
-                            label
-                        }
-                    } else if raw_branch.len() > 19 {
-                        format!("{}...", &raw_branch[..16])
+                        format!("[W] {}", raw_branch)
                     } else {
                         raw_branch
                     }
@@ -285,8 +278,8 @@ fn render_table(f: &mut Frame, app: &App, area: Rect) {
     let widths = [
         Constraint::Length(3),
         Constraint::Length(2),
+        Constraint::Percentage(20),
         Constraint::Min(20),
-        Constraint::Length(20),
         Constraint::Length(10),
         Constraint::Length(10),
         Constraint::Length(6),

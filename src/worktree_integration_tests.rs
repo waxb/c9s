@@ -459,24 +459,16 @@ fn test_e2e_list_view_worktree_prefix() {
 }
 
 #[test]
-fn test_e2e_list_view_branch_truncation() {
+fn test_e2e_list_view_branch_flex_column() {
     let long_branch = "feature/this-is-a-very-long-branch-name-that-exceeds-column";
-    let display = if long_branch.len() > 19 {
-        format!("{}...", &long_branch[..16])
-    } else {
-        long_branch.to_string()
-    };
-    assert!(display.ends_with("..."));
-    assert!(display.len() <= 19);
-
     let wt_label = format!("[W] {}", long_branch);
-    let truncated = if wt_label.len() > 19 {
-        format!("{}...", &wt_label[..16])
-    } else {
-        wt_label.clone()
-    };
-    assert!(truncated.starts_with("[W]"));
-    assert!(truncated.ends_with("..."));
+
+    assert!(
+        wt_label.len() > 20,
+        "label should exceed old fixed column width"
+    );
+    assert!(wt_label.starts_with("[W] "));
+    assert!(wt_label.contains("exceeds-column"));
 }
 
 // ---------------------------------------------------------------------------
