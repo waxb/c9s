@@ -110,6 +110,7 @@ pub fn create_worktree(repo_root: &Path, branch: &str, new_branch: bool) -> Resu
     let sanitized = sanitize_branch_name(branch);
     let wt_path = repo_root.join(WORKTREE_DIR).join(&sanitized);
 
+    let _ = prune_worktrees(repo_root);
     ensure_git_info_exclude(repo_root)?;
 
     let output = if new_branch {
