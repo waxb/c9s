@@ -77,7 +77,7 @@ impl EmbeddedTerminal {
         Self::spawn_inner(&id, &project_name, "claude", &["--resume"], cwd, rows, cols)
     }
 
-    pub fn spawn_new_with_prompt(cwd: &Path, display_name: Option<&str>, prompt: Option<&str>, rows: u16, cols: u16) -> Result<Self> {
+    pub fn spawn_new_with_prompt(cwd: &Path, display_name: Option<&str>, prompt: Option<&str>, extra_args: &[&str], rows: u16, cols: u16) -> Result<Self> {
         let project_name = display_name
             .map(|n| n.to_string())
             .unwrap_or_else(|| {
@@ -88,10 +88,11 @@ impl EmbeddedTerminal {
 
         let id = uuid::Uuid::new_v4().to_string();
 
-        match prompt {
-            Some(p) => Self::spawn_inner(&id, &project_name, "claude", &[p], cwd, rows, cols),
-            None => Self::spawn_inner(&id, &project_name, "claude", &[], cwd, rows, cols),
+        let mut args: Vec<&str> = extra_args.to_vec();
+        if let Some(p) = prompt {
+            args.push(p);
         }
+        Self::spawn_inner(&id, &project_name, "claude", &args, cwd, rows, cols)
     }
 
     fn spawn_inner(

@@ -226,8 +226,13 @@ impl SessionDiscovery {
                 });
 
                 if let Some(ref repo_root) = resolved {
-                    session.project_name =
+                    let repo_name =
                         extract_project_name(&repo_root.to_string_lossy());
+                    session.project_name = if pinned_branch.is_empty() {
+                        repo_name
+                    } else {
+                        format!("{}:{}", repo_name, pinned_branch)
+                    };
                 }
 
                 session.git_branch = Some(pinned_branch);
@@ -605,12 +610,11 @@ fn decode_project_path(encoded: &str) -> String {
 }
 
 fn extract_project_name(cwd: &str) -> String {
-    let parts: Vec<&str> = cwd.trim_end_matches('/').rsplit('/').collect();
-    match parts.len() {
-        0 => cwd.to_string(),
-        1 => parts[0].to_string(),
-        _ => format!("{}/{}", parts[1], parts[0]),
-    }
+    cwd.trim_end_matches('/')
+        .rsplit('/')
+        .next()
+        .unwrap_or(cwd)
+        .to_string()
 }
 
 #[cfg(test)]

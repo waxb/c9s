@@ -2106,11 +2106,22 @@ fn process_linear_event(
         .unwrap_or_default();
     let tab_label = format!("{}:{}", repo_name, sanitized);
 
+    let mut extra_args: Vec<String> = Vec::new();
+    if let Some(ref mode) = config.permission_mode {
+        extra_args.push("--permission-mode".to_string());
+        extra_args.push(mode.clone());
+    }
+    extra_args.push("--name".to_string());
+    extra_args.push(tab_label.clone());
+
+    let extra_refs: Vec<&str> = extra_args.iter().map(|s| s.as_str()).collect();
+
     let area = terminal.size()?;
     let rows = area.height.saturating_sub(1);
     let cols = area.width;
     app.terminal_manager_mut()
-        .attach_new_with_prompt(&wt_path, Some(&tab_label), Some(&prompt), rows, cols)?;
+        .attach_new_with_prompt(&wt_path, Some(&tab_label), Some(&prompt), &extra_refs, rows, cols)?;
+    app.set_view_mode(ViewMode::Terminal);
 
     let _ = client.update_issue_status(&issue.identifier, "In Progress");
 

@@ -16,6 +16,7 @@ pub struct LinearConfig {
     pub client_id: Option<String>,
     pub client_secret: Option<String>,
     pub repos: std::collections::HashMap<String, String>,
+    pub permission_mode: Option<String>,
 }
 
 impl LinearConfig {
@@ -97,6 +98,11 @@ impl LinearConfig {
             })
             .unwrap_or_default();
 
+        let permission_mode = linear
+            .get("permission_mode")
+            .and_then(|v| v.as_str())
+            .map(|s| s.to_string());
+
         Some(LinearConfig {
             api_key,
             refresh_token,
@@ -106,6 +112,7 @@ impl LinearConfig {
             client_id,
             client_secret,
             repos,
+            permission_mode,
         })
     }
 }

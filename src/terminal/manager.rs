@@ -75,12 +75,12 @@ impl TerminalManager {
     }
 
     pub fn attach_new_named(&mut self, cwd: &Path, display_name: Option<&str>, rows: u16, cols: u16) -> Result<String> {
-        self.attach_new_with_prompt(cwd, display_name, None, rows, cols)
+        self.attach_new_with_prompt(cwd, display_name, None, &[], rows, cols)
     }
 
-    pub fn attach_new_with_prompt(&mut self, cwd: &Path, display_name: Option<&str>, prompt: Option<&str>, rows: u16, cols: u16) -> Result<String> {
+    pub fn attach_new_with_prompt(&mut self, cwd: &Path, display_name: Option<&str>, prompt: Option<&str>, extra_args: &[&str], rows: u16, cols: u16) -> Result<String> {
         self.clear_active_bells();
-        let term = EmbeddedTerminal::spawn_new_with_prompt(cwd, display_name, prompt, rows, cols)?;
+        let term = EmbeddedTerminal::spawn_new_with_prompt(cwd, display_name, prompt, extra_args, rows, cols)?;
         let id = term.session_id().to_string();
         self.notifiers
             .insert(id.clone(), JsonlNotifier::new(cwd, &id));
