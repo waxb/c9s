@@ -725,6 +725,126 @@ fn test_e2e_full_lifecycle_create_dirty_kill_force_cleanup() {
 }
 
 // ---------------------------------------------------------------------------
+// Session persistence across c9s restart
+// ---------------------------------------------------------------------------
+
+#[test]
+fn test_e2e_jsonl_files_survive_discovery_cycle() {
+    let tmp = tempfile::TempDir::new().unwrap();
+    let claude_dir = tmp.path().join(".claude");
+    let project_dir = claude_dir.join("projects").join("-tmp-myproject");
+    std::fs::create_dir_all(&project_dir).unwrap();
+
+    let jsonl_content = concat!(
+        r#"{"sessionId":"abc-123","cwd":"/tmp/myproject","gitBranch":"main","type":"user","timestamp":"2026-01-01T00:00:00Z"}"#,
+        "\n",
+        r#"{"type":"assistant","message":{"model":"claude-sonnet-4-20250514","stop_reason":"end_turn","usage":{"input_tokens":500,"output_tokens":200}},"timestamp":"2026-01-01T00:01:00Z"}"#,
+        "\n"
+    );
+    let jsonl_path = project_dir.join("abc-123.jsonl");
+    std::fs::write(&jsonl_path, jsonl_content).unwrap();
+
+    let content_before = std::fs::read_to_string(&jsonl_path).unwrap();
+    let mtime_before = std::fs::metadata(&jsonl_path).unwrap().modified().unwrap();
+
+    let mut discovery = crate::session::SessionDiscovery::new_with_dir(claude_dir.clone());
+    let sessions_1 = discovery.discover_all().unwrap();
+
+    let content_after = std::fs::read_to_string(&jsonl_path).unwrap();
+    let mtime_after = std::fs::metadata(&jsonl_path).unwrap().modified().unwrap();
+    assert_eq!(content_before, content_after, "JSONL file must not be modified by discovery");
+    assert_eq!(mtime_before, mtime_after, "JSONL file mtime must not change");
+
+    let mut discovery_2 = crate::session::SessionDiscovery::new_with_dir(claude_dir.clone());
+    let sessions_2 = discovery_2.discover_all().unwrap();
+
+    assert_eq!(sessions_1.len(), sessions_2.len(), "same sessions found across discovery instances");
+    assert_eq!(sessions_1[0].id, sessions_2[0].id);
+    assert_eq!(sessions_1[0].input_tokens, sessions_2[0].input_tokens);
+    assert_eq!(sessions_1[0].output_tokens, sessions_2[0].output_tokens);
+}
+
+#[test]
+fn test_e2e_sqlite_survives_store_reopen() {
+    let tmp = tempfile::TempDir::new().unwrap();
+    let db_path = tmp.path().join("data.db");
+
+    let session = make_test_session("persist-test", Path::new("/tmp/project"));
+
+    {
+        let store = crate::store::Store::open_at(&db_path).unwrap();
+        store.upsert_session(&session).unwrap();
+    }
+
+    {
+        let store = crate::store::Store::open_at(&db_path).unwrap();
+        let count = store.get_session_count().unwrap();
+        assert_eq!(count, 1, "session must survive store reopen");
+    }
+}
+
+#[test]
+fn test_e2e_dead_session_retains_all_data() {
+    let tmp = tempfile::TempDir::new().unwrap();
+    let claude_dir = tmp.path().join(".claude");
+    let project_dir = claude_dir.join("projects").join("-tmp-myproject");
+    std::fs::create_dir_all(&project_dir).unwrap();
+
+    let jsonl_content = concat!(
+        r#"{"sessionId":"dead-session-1","cwd":"/tmp/myproject","gitBranch":"feature/test","type":"user","timestamp":"2026-01-01T00:00:00Z"}"#,
+        "\n",
+        r#"{"type":"assistant","message":{"model":"claude-opus-4-20250514","stop_reason":"end_turn","usage":{"input_tokens":1000,"output_tokens":500,"cache_read_input_tokens":200,"cache_creation_input_tokens":100}},"timestamp":"2026-01-01T00:05:00Z"}"#,
+        "\n"
+    );
+    std::fs::write(project_dir.join("dead-session-1.jsonl"), jsonl_content).unwrap();
+
+    let mut discovery = crate::session::SessionDiscovery::new_with_dir(claude_dir);
+    let sessions = discovery.discover_all().unwrap();
+
+    assert_eq!(sessions.len(), 1);
+    let s = &sessions[0];
+    assert_eq!(s.id, "dead-session-1");
+    assert_eq!(s.status, SessionStatus::Dead, "no matching process = Dead");
+    assert_eq!(s.git_branch.as_deref(), Some("feature/test"));
+    assert!(s.model.as_deref().unwrap().contains("opus"));
+    assert_eq!(s.input_tokens, 1000);
+    assert_eq!(s.output_tokens, 500);
+    assert_eq!(s.cache_read_tokens, 200);
+    assert_eq!(s.cache_write_tokens, 100);
+    assert_eq!(s.message_count, 2);
+}
+
+#[test]
+fn test_e2e_worktree_session_data_survives_restart_cycle() {
+    let repo = init_git_repo();
+    let repo_root = repo.path().canonicalize().unwrap();
+
+    let wt_path = worktree::create_worktree(&repo_root, "persist-branch", true).unwrap();
+
+    let session = make_worktree_session("wt-persist", &repo_root, &wt_path, "persist-branch");
+
+    let tmp = tempfile::TempDir::new().unwrap();
+    let db_path = tmp.path().join("data.db");
+
+    {
+        let store = crate::store::Store::open_at(&db_path).unwrap();
+        store.upsert_session(&session).unwrap();
+    }
+
+    {
+        let store = crate::store::Store::open_at(&db_path).unwrap();
+        let count = store.get_session_count().unwrap();
+        assert_eq!(count, 1);
+    }
+
+    assert!(wt_path.exists(), "worktree directory survives store cycle");
+    let branch = worktree::get_current_branch(&wt_path).unwrap();
+    assert_eq!(branch, "persist-branch", "worktree branch is intact");
+
+    worktree::remove_worktree(&repo_root, &wt_path, false).unwrap();
+}
+
+// ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
 

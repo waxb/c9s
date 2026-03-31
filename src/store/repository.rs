@@ -17,7 +17,11 @@ impl Store {
         std::fs::create_dir_all(&data_dir)?;
 
         let db_path = data_dir.join("data.db");
-        let conn = Connection::open(&db_path)?;
+        Self::open_at(&db_path)
+    }
+
+    pub fn open_at(db_path: &std::path::Path) -> Result<Self> {
+        let conn = Connection::open(db_path)?;
         let store = Self { conn };
         store.migrate()?;
         Ok(store)

@@ -58,6 +58,15 @@ impl SessionDiscovery {
         }
     }
 
+    #[cfg(test)]
+    pub fn new_with_dir(claude_dir: PathBuf) -> Self {
+        Self {
+            claude_dir,
+            stats_cache: HashMap::new(),
+            repo_root_cache: HashMap::new(),
+        }
+    }
+
     pub fn discover_all(&mut self) -> Result<Vec<Session>> {
         let live_processes = self.find_claude_processes()?;
         let mut sessions = Vec::new();
