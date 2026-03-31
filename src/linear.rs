@@ -529,26 +529,31 @@ pub fn start_http_listener(port: u16, secret: String, client_id: Option<String>,
 }
 
 fn start_tailscale_funnel(port: u16) {
-    std::thread::spawn(move || {
-        let port_str = port.to_string();
-        crate::tlog!(info, "Starting Tailscale Funnel on port {}...", port);
-        let result = std::process::Command::new("tailscale")
-            .args(["funnel", &port_str])
-            .stdout(std::process::Stdio::null())
-            .stderr(std::process::Stdio::piped())
-            .spawn();
+    let port_str = port.to_string();
+    crate::tlog!(info, "Starting Tailscale Funnel on port {}...", port);
 
-        match result {
-            Ok(mut child) => {
-                crate::tlog!(info, "Tailscale Funnel started (pid {})", child.id());
-                let _ = child.wait();
-                crate::tlog!(warn, "Tailscale Funnel exited");
-            }
-            Err(e) => {
-                crate::tlog!(warn, "Tailscale Funnel failed to start: {} (is tailscale installed?)", e);
-            }
+    let output = std::process::Command::new("tailscale")
+        .args(["funnel", "--bg", &port_str])
+        .output();
+
+    match output {
+        Ok(o) if o.status.success() => {
+            crate::tlog!(info, "Tailscale Funnel configured (background mode)");
         }
-    });
+        Ok(o) => {
+            let stderr = String::from_utf8_lossy(&o.stderr);
+            crate::tlog!(warn, "Tailscale Funnel setup failed: {}", stderr.trim());
+        }
+        Err(e) => {
+            crate::tlog!(warn, "Tailscale Funnel failed to start: {} (is tailscale installed?)", e);
+        }
+    }
+}
+
+pub fn stop_tailscale_funnel() {
+    let _ = std::process::Command::new("tailscale")
+        .args(["funnel", "off"])
+        .output();
 }
 
 fn urlencoded(s: &str) -> String {

@@ -119,6 +119,8 @@ fn main() -> Result<()> {
         tlog!(error, "DIAG: run_loop returned error: {}", e);
     }
 
+    linear::stop_tailscale_funnel();
+
     stdout().execute(DisableMouseCapture)?;
     disable_raw_mode()?;
     stdout().execute(LeaveAlternateScreen)?;
