@@ -12,7 +12,7 @@ pub fn render_confirm_kill(
     area: Rect,
 ) {
     let has_extra = branch.is_some() || worktree_path.is_some();
-    let popup_width = 60;
+    let popup_width = 80;
     let popup_height = if has_extra { 9 } else { 7 };
 
     let popup_area = centered_rect(popup_width, popup_height, area);
@@ -34,14 +34,18 @@ pub fn render_confirm_kill(
     ];
 
     if let Some(b) = branch {
+        let display = if b.len() > 60 { &b[..57] } else { b };
+        let suffix = if b.len() > 60 { "..." } else { "" };
         lines.push(Line::from(Span::styled(
-            format!("  Branch: {}", b),
+            format!("  Branch: {}{}", display, suffix),
             info_style,
         )));
     }
     if let Some(wt) = worktree_path {
+        let display = if wt.len() > 55 { &wt[wt.len()-55..] } else { wt };
+        let prefix = if wt.len() > 55 { "..." } else { "" };
         lines.push(Line::from(Span::styled(
-            format!("  Worktree: {}", wt),
+            format!("  Worktree: {}{}", prefix, display),
             info_style,
         )));
     }

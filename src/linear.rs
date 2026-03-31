@@ -246,11 +246,12 @@ impl LinearClient {
     pub fn acknowledge_session(&mut self, agent_session_id: &str, message: &str) -> Result<()> {
         let escaped_message = message.replace('\\', "\\\\").replace('"', "\\\"").replace('\n', "\\n");
         let query = format!(
-            r#"{{ "query": "mutation {{ agentActivityCreate(input: {{ agentSessionId: \"{}\", content: {{ type: \"thought\", thought: \"{}\" }} }}) {{ success }} }}" }}"#,
+            r#"{{ "query": "mutation {{ agentActivityCreate(input: {{ agentSessionId: \"{}\", content: {{ type: \"thought\", body: \"{}\" }} }}) {{ success }} }}" }}"#,
             agent_session_id, escaped_message
         );
 
-        let _ = self.graphql_request(&query)?;
+        let body = self.graphql_request(&query)?;
+        crate::tlog!(info, "Linear acknowledge response: {}", &body[..body.len().min(200)]);
 
         Ok(())
     }
@@ -413,9 +414,12 @@ pub fn start_http_listener(port: u16, secret: String, client_id: Option<String>,
                         }
                     }
 
+                    let body_preview = String::from_utf8_lossy(&body);
+                    crate::tlog!(info, "Linear webhook raw body: {}", &body_preview[..body_preview.len().min(500)]);
+
                     match parse_webhook_body(&body) {
                         Ok(event) => {
-                            crate::tlog!(info, "Linear webhook received for issue: {}", event.issue_id);
+                            crate::tlog!(info, "Linear webhook parsed: issue={}, session_id={:?}", event.issue_id, event.agent_session_id);
                             let _ = tx.send(event);
                             let resp = tiny_http::Response::from_string("ok");
                             let _ = request.respond(resp);
