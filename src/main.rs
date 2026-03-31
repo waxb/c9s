@@ -2072,6 +2072,13 @@ fn process_linear_event(
         .as_deref()
         .unwrap_or(&issue.identifier);
     let sanitized = worktree::sanitize_branch_name(branch_name);
+
+    let wt_dir = repo_root.join(worktree::WORKTREE_DIR).join(&sanitized);
+    if wt_dir.exists() {
+        tlog!(info, "Linear: worktree already exists for {}, skipping", event.issue_id);
+        return Ok(());
+    }
+
     let branches = worktree::list_local_branches(&repo_root).unwrap_or_default();
     let new_branch = !branches.contains(&branch_name.to_string());
 

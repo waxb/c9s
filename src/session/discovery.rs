@@ -519,6 +519,7 @@ impl SessionDiscovery {
 }
 
 #[derive(Debug, Clone)]
+#[allow(dead_code)]
 pub struct SessionFile {
     pub session_id: String,
     pub path: PathBuf,

@@ -1,7 +1,6 @@
-use anyhow::{bail, Context, Result};
+use anyhow::{Context, Result};
 use hmac::{Hmac, Mac};
 use sha2::Sha256;
-use std::io::Read;
 use std::path::PathBuf;
 use std::sync::mpsc;
 
@@ -22,10 +21,6 @@ pub struct LinearConfig {
 impl LinearConfig {
     pub fn needs_auth(&self) -> bool {
         self.api_key.is_empty() && self.client_id.is_some() && self.client_secret.is_some()
-    }
-
-    pub fn is_ready(&self) -> bool {
-        !self.api_key.is_empty()
     }
 
     pub fn oauth_authorize_url(&self) -> Option<String> {
@@ -116,6 +111,7 @@ impl LinearConfig {
 }
 
 #[derive(Debug, Clone)]
+#[allow(dead_code)]
 pub struct LinearIssue {
     pub identifier: String,
     pub title: String,

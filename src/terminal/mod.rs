@@ -77,14 +77,6 @@ impl EmbeddedTerminal {
         Self::spawn_inner(&id, &project_name, "claude", &["--resume"], cwd, rows, cols)
     }
 
-    pub fn spawn_new(cwd: &Path, rows: u16, cols: u16) -> Result<Self> {
-        Self::spawn_new_named(cwd, None, rows, cols)
-    }
-
-    pub fn spawn_new_named(cwd: &Path, display_name: Option<&str>, rows: u16, cols: u16) -> Result<Self> {
-        Self::spawn_new_with_prompt(cwd, display_name, None, rows, cols)
-    }
-
     pub fn spawn_new_with_prompt(cwd: &Path, display_name: Option<&str>, prompt: Option<&str>, rows: u16, cols: u16) -> Result<Self> {
         let project_name = display_name
             .map(|n| n.to_string())
