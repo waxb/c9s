@@ -112,14 +112,16 @@ fn main() -> Result<()> {
     let backend = CrosstermBackend::new(stdout());
     let mut terminal = Terminal::new(backend)?;
 
+    let linear_port = linear_rx.as_ref().map(|(_, c)| c.port);
     let result = run_loop(&mut terminal, &mut app, linear_rx);
-
 
     if let Err(ref e) = result {
         tlog!(error, "DIAG: run_loop returned error: {}", e);
     }
 
-    linear::stop_tailscale_funnel();
+    if let Some(port) = linear_port {
+        linear::stop_tailscale_funnel(port);
+    }
 
     stdout().execute(DisableMouseCapture)?;
     disable_raw_mode()?;

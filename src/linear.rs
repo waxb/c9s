@@ -550,10 +550,16 @@ fn start_tailscale_funnel(port: u16) {
     }
 }
 
-pub fn stop_tailscale_funnel() {
+pub fn stop_tailscale_funnel(port: u16) {
+    let port_str = port.to_string();
     let _ = std::process::Command::new("tailscale")
-        .args(["funnel", "off"])
-        .output();
+        .args(["funnel", "--bg", "--remove", &port_str])
+        .output()
+        .or_else(|_| {
+            std::process::Command::new("tailscale")
+                .args(["funnel", "off", &port_str])
+                .output()
+        });
 }
 
 fn urlencoded(s: &str) -> String {
