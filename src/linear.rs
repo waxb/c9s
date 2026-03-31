@@ -2,9 +2,77 @@ use anyhow::{bail, Context, Result};
 use hmac::{Hmac, Mac};
 use sha2::Sha256;
 use std::io::Read;
+use std::path::PathBuf;
 use std::sync::mpsc;
 
 type HmacSha256 = Hmac<Sha256>;
+
+#[derive(Debug, Clone)]
+pub struct LinearConfig {
+    pub api_key: String,
+    pub webhook_secret: String,
+    pub port: u16,
+    pub default_repo: Option<PathBuf>,
+    pub client_id: Option<String>,
+    pub client_secret: Option<String>,
+}
+
+impl LinearConfig {
+    pub fn load() -> Option<Self> {
+        let config_path = dirs::home_dir()?.join(".c9s").join("config.toml");
+        let content = std::fs::read_to_string(&config_path).ok()?;
+        let table: toml::Table = content.parse().ok()?;
+        let linear = table.get("linear")?;
+
+        let api_key = linear
+            .get("api_key")
+            .and_then(|v| v.as_str())
+            .map(|s| s.to_string())
+            .or_else(|| std::env::var("LINEAR_API_KEY").ok())?;
+
+        let webhook_secret = linear
+            .get("webhook_secret")
+            .and_then(|v| v.as_str())
+            .map(|s| s.to_string())
+            .or_else(|| std::env::var("LINEAR_WEBHOOK_SECRET").ok())?;
+
+        let port = linear
+            .get("port")
+            .and_then(|v| v.as_integer())
+            .map(|p| p as u16)
+            .or_else(|| {
+                std::env::var("C9S_LINEAR_PORT")
+                    .ok()
+                    .and_then(|p| p.parse().ok())
+            })
+            .unwrap_or(9519);
+
+        let default_repo = linear
+            .get("default_repo")
+            .and_then(|v| v.as_str())
+            .map(PathBuf::from)
+            .or_else(|| std::env::var("C9S_DEFAULT_REPO").ok().map(PathBuf::from));
+
+        let client_id = linear
+            .get("client_id")
+            .and_then(|v| v.as_str())
+            .map(|s| s.to_string());
+
+        let client_secret = linear
+            .get("client_secret")
+            .and_then(|v| v.as_str())
+            .map(|s| s.to_string());
+
+        Some(LinearConfig {
+            api_key,
+            webhook_secret,
+            port,
+            default_repo,
+            client_id,
+            client_secret,
+        })
+    }
+}
 
 #[derive(Debug, Clone)]
 pub struct LinearIssue {
@@ -171,7 +239,7 @@ pub fn verify_webhook_signature(body: &[u8], signature: &str, secret: &str) -> b
     mac.verify_slice(&expected).is_ok()
 }
 
-pub fn start_http_listener(port: u16, secret: String, tx: mpsc::Sender<LinearEvent>) {
+pub fn start_http_listener(port: u16, secret: String, client_id: Option<String>, client_secret: Option<String>, tx: mpsc::Sender<LinearEvent>) {
     std::thread::spawn(move || {
         let addr = format!("0.0.0.0:{}", port);
         let server = match tiny_http::Server::http(&addr) {
@@ -270,6 +338,53 @@ pub fn start_http_listener(port: u16, secret: String, tx: mpsc::Sender<LinearEve
                         }
                     }
                 }
+                ("GET", url) if url.starts_with("/oauth/callback") => {
+                    let query = url.splitn(2, '?').nth(1).unwrap_or("");
+                    let code = query
+                        .split('&')
+                        .find_map(|pair| {
+                            let mut kv = pair.splitn(2, '=');
+                            match (kv.next(), kv.next()) {
+                                (Some("code"), Some(v)) => Some(v.to_string()),
+                                _ => None,
+                            }
+                        });
+
+                    match (code, client_id.as_ref(), client_secret.as_ref()) {
+                        (Some(code), Some(cid), Some(csec)) => {
+                            let redirect_uri = format!("http://localhost:{}/oauth/callback", port);
+                            match exchange_oauth_token(&code, cid, csec, &redirect_uri) {
+                                Ok(token) => {
+                                    if let Err(e) = save_token_to_config(&token) {
+                                        crate::tlog!(error, "Failed to save Linear token: {}", e);
+                                    } else {
+                                        crate::tlog!(info, "Linear OAuth token saved to config");
+                                    }
+                                    let html = "<html><body><h1>c9s connected to Linear</h1><p>You can close this tab. The API token has been saved to ~/.c9s/config.toml</p></body></html>";
+                                    let resp = tiny_http::Response::from_string(html)
+                                        .with_header("Content-Type: text/html".parse::<tiny_http::Header>().unwrap());
+                                    let _ = request.respond(resp);
+                                }
+                                Err(e) => {
+                                    crate::tlog!(error, "Linear OAuth token exchange failed: {}", e);
+                                    let resp = tiny_http::Response::from_string(format!("OAuth failed: {}", e))
+                                        .with_status_code(500);
+                                    let _ = request.respond(resp);
+                                }
+                            }
+                        }
+                        (None, _, _) => {
+                            let resp = tiny_http::Response::from_string("missing code parameter")
+                                .with_status_code(400);
+                            let _ = request.respond(resp);
+                        }
+                        _ => {
+                            let resp = tiny_http::Response::from_string("client_id/client_secret not configured in ~/.c9s/config.toml")
+                                .with_status_code(500);
+                            let _ = request.respond(resp);
+                        }
+                    }
+                }
                 _ => {
                     let resp = tiny_http::Response::from_string("not found")
                         .with_status_code(404);
@@ -278,6 +393,56 @@ pub fn start_http_listener(port: u16, secret: String, tx: mpsc::Sender<LinearEve
             }
         }
     });
+}
+
+fn exchange_oauth_token(code: &str, client_id: &str, client_secret: &str, redirect_uri: &str) -> Result<String> {
+    let body = serde_json::json!({
+        "grant_type": "authorization_code",
+        "code": code,
+        "client_id": client_id,
+        "client_secret": client_secret,
+        "redirect_uri": redirect_uri,
+    });
+
+    let response = ureq::post("https://api.linear.app/oauth/token")
+        .header("Content-Type", "application/json")
+        .send(body.to_string().as_bytes())
+        .context("failed to exchange OAuth code")?;
+
+    let resp_body = response.into_body().read_to_string()
+        .context("failed to read token response")?;
+
+    let value: serde_json::Value = serde_json::from_str(&resp_body)
+        .context("failed to parse token response")?;
+
+    value
+        .get("access_token")
+        .and_then(|v| v.as_str())
+        .map(|s| s.to_string())
+        .ok_or_else(|| anyhow::anyhow!("no access_token in OAuth response: {}", resp_body))
+}
+
+fn save_token_to_config(token: &str) -> Result<()> {
+    let config_path = dirs::home_dir()
+        .ok_or_else(|| anyhow::anyhow!("cannot determine home directory"))?
+        .join(".c9s")
+        .join("config.toml");
+
+    let content = std::fs::read_to_string(&config_path).unwrap_or_default();
+    let mut table: toml::Table = content.parse().unwrap_or_default();
+
+    let linear = table
+        .entry("linear")
+        .or_insert_with(|| toml::Value::Table(toml::Table::new()));
+
+    if let toml::Value::Table(ref mut t) = linear {
+        t.insert("api_key".to_string(), toml::Value::String(token.to_string()));
+    }
+
+    std::fs::write(&config_path, table.to_string())
+        .context("failed to write config.toml")?;
+
+    Ok(())
 }
 
 fn parse_webhook_body(body: &[u8]) -> Result<LinearEvent> {

@@ -73,18 +73,18 @@ fn main() -> Result<()> {
         let _ = store.backfill_repo_roots();
     }
 
-    let linear_rx: Option<(std::sync::mpsc::Receiver<linear::LinearEvent>, String)> =
-        if let (Ok(api_key), Ok(secret)) = (
-            std::env::var("LINEAR_API_KEY"),
-            std::env::var("LINEAR_WEBHOOK_SECRET"),
-        ) {
-            let port: u16 = std::env::var("C9S_LINEAR_PORT")
-                .ok()
-                .and_then(|p| p.parse().ok())
-                .unwrap_or(9519);
+    let linear_config = linear::LinearConfig::load();
+    let linear_rx: Option<(std::sync::mpsc::Receiver<linear::LinearEvent>, linear::LinearConfig)> =
+        if let Some(config) = linear_config {
             let (tx, rx) = std::sync::mpsc::channel();
-            linear::start_http_listener(port, secret, tx);
-            Some((rx, api_key))
+            linear::start_http_listener(
+                config.port,
+                config.webhook_secret.clone(),
+                config.client_id.clone(),
+                config.client_secret.clone(),
+                tx,
+            );
+            Some((rx, config))
         } else {
             None
         };
@@ -106,6 +106,7 @@ fn main() -> Result<()> {
 
     let result = run_loop(&mut terminal, &mut app, linear_rx);
 
+
     if let Err(ref e) = result {
         tlog!(error, "DIAG: run_loop returned error: {}", e);
     }
@@ -120,7 +121,7 @@ fn main() -> Result<()> {
 fn run_loop(
     terminal: &mut Terminal<CrosstermBackend<std::io::Stdout>>,
     app: &mut App,
-    linear_rx: Option<(std::sync::mpsc::Receiver<linear::LinearEvent>, String)>,
+    linear_rx: Option<(std::sync::mpsc::Receiver<linear::LinearEvent>, linear::LinearConfig)>,
 ) -> Result<()> {
     let refresh_interval = Duration::from_secs(5);
     let detail_refresh_interval = Duration::from_secs(10);
@@ -153,9 +154,9 @@ fn run_loop(
             needs_draw = true;
         }
 
-        if let Some((ref rx, ref api_key)) = linear_rx {
+        if let Some((ref rx, ref config)) = linear_rx {
             while let Ok(event) = rx.try_recv() {
-                if let Err(e) = process_linear_event(app, terminal, api_key, &event) {
+                if let Err(e) = process_linear_event(app, terminal, config, &event) {
                     tlog!(error, "Linear event processing failed: {}", e);
                 }
                 needs_draw = true;
@@ -2020,15 +2021,16 @@ fn submit_tervezo_create(app: &mut App) {
 fn process_linear_event(
     app: &mut App,
     terminal: &Terminal<CrosstermBackend<std::io::Stdout>>,
-    api_key: &str,
+    config: &linear::LinearConfig,
     event: &linear::LinearEvent,
 ) -> Result<()> {
-    let client = linear::LinearClient::new(api_key);
+    let client = linear::LinearClient::new(&config.api_key);
     let issue = client.fetch_issue(&event.issue_id)?;
 
-    let default_repo = std::env::var("C9S_DEFAULT_REPO")
-        .map(std::path::PathBuf::from)
-        .or_else(|_| std::env::current_dir())
+    let default_repo = config
+        .default_repo
+        .clone()
+        .or_else(|| std::env::current_dir().ok())
         .unwrap_or_default();
 
     let repo_root = worktree::resolve_repo_root(&default_repo)?;
