@@ -18,6 +18,24 @@ pub struct LinearConfig {
 }
 
 impl LinearConfig {
+    pub fn needs_auth(&self) -> bool {
+        self.api_key.is_empty() && self.client_id.is_some() && self.client_secret.is_some()
+    }
+
+    pub fn is_ready(&self) -> bool {
+        !self.api_key.is_empty()
+    }
+
+    pub fn oauth_authorize_url(&self) -> Option<String> {
+        let client_id = self.client_id.as_ref()?;
+        let redirect = format!("http://localhost:{}/oauth/callback", self.port);
+        Some(format!(
+            "https://linear.app/oauth/authorize?response_type=code&client_id={}&redirect_uri={}&scope=read,write&actor=app",
+            client_id,
+            urlencoded(&redirect),
+        ))
+    }
+
     pub fn load() -> Option<Self> {
         let config_path = dirs::home_dir()?.join(".c9s").join("config.toml");
         let content = std::fs::read_to_string(&config_path).ok()?;
@@ -27,14 +45,17 @@ impl LinearConfig {
         let api_key = linear
             .get("api_key")
             .and_then(|v| v.as_str())
+            .filter(|s| !s.is_empty())
             .map(|s| s.to_string())
-            .or_else(|| std::env::var("LINEAR_API_KEY").ok())?;
+            .or_else(|| std::env::var("LINEAR_API_KEY").ok())
+            .unwrap_or_default();
 
         let webhook_secret = linear
             .get("webhook_secret")
             .and_then(|v| v.as_str())
             .map(|s| s.to_string())
-            .or_else(|| std::env::var("LINEAR_WEBHOOK_SECRET").ok())?;
+            .or_else(|| std::env::var("LINEAR_WEBHOOK_SECRET").ok())
+            .unwrap_or_default();
 
         let port = linear
             .get("port")
@@ -393,6 +414,15 @@ pub fn start_http_listener(port: u16, secret: String, client_id: Option<String>,
             }
         }
     });
+}
+
+fn urlencoded(s: &str) -> String {
+    s.chars()
+        .map(|c| match c {
+            'A'..='Z' | 'a'..='z' | '0'..='9' | '-' | '_' | '.' | '~' => c.to_string(),
+            _ => format!("%{:02X}", c as u8),
+        })
+        .collect()
 }
 
 fn exchange_oauth_token(code: &str, client_id: &str, client_secret: &str, redirect_uri: &str) -> Result<String> {

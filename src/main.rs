@@ -84,6 +84,14 @@ fn main() -> Result<()> {
                 config.client_secret.clone(),
                 tx,
             );
+
+            if config.needs_auth() {
+                if let Some(url) = config.oauth_authorize_url() {
+                    tlog!(info, "Linear: opening browser for OAuth authorization...");
+                    let _ = open::that(&url);
+                }
+            }
+
             Some((rx, config))
         } else {
             None
