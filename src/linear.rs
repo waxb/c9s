@@ -417,7 +417,7 @@ pub fn start_http_listener(port: u16, secret: String, client_id: Option<String>,
                     }
 
                     let body_preview = String::from_utf8_lossy(&body);
-                    crate::tlog!(info, "Linear webhook raw body: {}", &body_preview[..body_preview.len().min(500)]);
+                    crate::tlog!(info, "Linear webhook raw body: {}", &body_preview[..body_preview.len().min(2000)]);
 
                     match parse_webhook_body(&body) {
                         Ok(event) => {
@@ -632,39 +632,53 @@ fn parse_webhook_body(body: &[u8]) -> Result<LinearEvent> {
     let value: serde_json::Value =
         serde_json::from_slice(body).context("invalid webhook JSON")?;
 
-    let issue_id = value
-        .get("data")
-        .and_then(|d| d.get("agentSession"))
+    let session = value.get("agentSession")
+        .or_else(|| value.get("data").and_then(|d| d.get("agentSession")))
+        .or_else(|| value.get("data"));
+
+    let issue_id = session
         .and_then(|s| s.get("issue"))
-        .and_then(|i| i.get("identifier"))
+        .and_then(|i| i.get("identifier").or_else(|| i.get("id")))
         .and_then(|v| v.as_str())
         .or_else(|| {
-            value
-                .get("issue_id")
+            session
+                .and_then(|s| s.get("issueId").or_else(|| s.get("issue_id")))
+                .and_then(|v| v.as_str())
+        })
+        .or_else(|| {
+            value.get("issue_id")
                 .or_else(|| value.get("issueId"))
                 .and_then(|v| v.as_str())
         })
-        .ok_or_else(|| anyhow::anyhow!("missing issue identifier in webhook payload"))?
+        .ok_or_else(|| {
+            let keys: Vec<String> = value.as_object()
+                .map(|o| o.keys().cloned().collect())
+                .unwrap_or_default();
+            let data_keys: Vec<String> = value.get("data")
+                .and_then(|d| d.as_object())
+                .map(|o| o.keys().cloned().collect())
+                .unwrap_or_default();
+            anyhow::anyhow!(
+                "missing issue identifier in webhook. top-level keys: {:?}, data keys: {:?}",
+                keys, data_keys
+            )
+        })?
         .to_string();
 
-    let prompt_context = value
-        .get("data")
-        .and_then(|d| d.get("agentSession"))
+    let prompt_context = session
         .and_then(|s| s.get("promptContext"))
         .and_then(|v| v.as_str())
         .map(|s| s.to_string());
 
-    let comment = value
-        .get("data")
-        .and_then(|d| d.get("agentSession"))
+    let comment = session
         .and_then(|s| s.get("comment"))
-        .and_then(|c| c.get("body"))
-        .and_then(|v| v.as_str())
+        .and_then(|c| {
+            c.get("body").and_then(|v| v.as_str())
+                .or_else(|| c.as_str())
+        })
         .map(|s| s.to_string());
 
-    let agent_session_id = value
-        .get("data")
-        .and_then(|d| d.get("agentSession"))
+    let agent_session_id = session
         .and_then(|s| s.get("id"))
         .and_then(|v| v.as_str())
         .map(|s| s.to_string());
@@ -903,13 +917,13 @@ mod tests {
     #[test]
     fn test_parse_webhook_body_agent_session() {
         let body = r#"{
-            "data": {
-                "agentSession": {
-                    "id": "session-abc-123",
-                    "issue": { "identifier": "LUM-100" },
-                    "promptContext": "<issue>context here</issue>",
-                    "comment": { "body": "please fix this fast" }
-                }
+            "type": "AgentSessionEvent",
+            "action": "created",
+            "agentSession": {
+                "id": "session-abc-123",
+                "issue": { "identifier": "LUM-100" },
+                "promptContext": "<issue>context here</issue>",
+                "comment": { "body": "please fix this fast" }
             }
         }"#;
         let event = parse_webhook_body(body.as_bytes()).unwrap();
