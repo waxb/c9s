@@ -32,7 +32,7 @@ impl LinearConfig {
         let client_id = self.client_id.as_ref()?;
         let redirect = format!("http://localhost:{}/oauth/callback", self.port);
         Some(format!(
-            "https://linear.app/oauth/authorize?response_type=code&client_id={}&redirect_uri={}&scope=read,write&actor=app",
+            "https://linear.app/oauth/authorize?response_type=code&client_id={}&redirect_uri={}&scope=read,write,app:assignable,app:mentionable&actor=app",
             client_id,
             urlencoded(&redirect),
         ))
