@@ -259,6 +259,14 @@ fn render_info_column(f: &mut Frame, session: &Session, area: Rect) {
         kv_line("CWD", &session.cwd.to_string_lossy()),
         kv_line("Project", &session.project_name),
         kv_line("Branch", session.git_branch.as_deref().unwrap_or("-")),
+    ];
+
+    if let Some(ref wt_info) = session.worktree_info {
+        lines.push(kv_line("Worktree", &wt_info.worktree_path.to_string_lossy()));
+        lines.push(kv_line("WT Branch", &wt_info.pinned_branch));
+    }
+
+    lines.extend([
         kv_line("Model", session.model.as_deref().unwrap_or("-")),
         kv_line("Status", session.status.label()),
         kv_line(
@@ -267,7 +275,7 @@ fn render_info_column(f: &mut Frame, session: &Session, area: Rect) {
         ),
         kv_line("Version", session.claude_version.as_deref().unwrap_or("-")),
         kv_line("Perm", session.permission_mode.as_deref().unwrap_or("-")),
-    ];
+    ]);
 
     if !session.plan_slugs.is_empty() {
         let slugs = session.plan_slugs.join(", ");

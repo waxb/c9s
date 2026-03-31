@@ -86,6 +86,20 @@ pub enum Action {
     SessionFileDown,
     SessionFileSelect,
     SessionFileClose,
+    BranchInputChar(char),
+    BranchInputBackspace,
+    BranchInputSubmit,
+    BranchInputCancel,
+    BranchInputTab,
+    WorktreePickerUp,
+    WorktreePickerDown,
+    WorktreePickerSelect,
+    WorktreePickerClose,
+    ConfirmWorktreeCleanupYes,
+    ConfirmWorktreeCleanupNo,
+    ConfirmRecreateYes,
+    ConfirmRecreateNo,
+    PruneWorktrees,
     ToggleSideTerminal,
     SideTerminalInput(Vec<u8>),
     None,
@@ -162,6 +176,10 @@ fn handle_key(key: &KeyEvent, mode: &ViewMode, side_focused: bool) -> Action {
         ViewMode::TervezoPromptInput => handle_tervezo_prompt_key(key),
         ViewMode::TervezoCreateDialog => handle_tervezo_create_key(key),
         ViewMode::NewSessionMenu => handle_new_session_menu_key(key),
+        ViewMode::BranchInput => handle_branch_input_key(key),
+        ViewMode::WorktreePicker => handle_worktree_picker_key(key),
+        ViewMode::ConfirmWorktreeCleanup => handle_confirm_worktree_cleanup_key(key),
+        ViewMode::ConfirmRecreateWorktree => handle_confirm_recreate_key(key),
         ViewMode::Log => handle_log_key(key),
         _ => handle_normal_key(key),
     }
@@ -188,6 +206,7 @@ fn handle_normal_key(key: &KeyEvent) -> Action {
         KeyCode::Char('u') => Action::UnfollowSession,
         KeyCode::Char('x') => Action::KillSession,
         KeyCode::Char('L') => Action::ToggleLog,
+        KeyCode::Char('W') => Action::PruneWorktrees,
         KeyCode::Char(' ') => Action::ToggleQSwitcher,
         KeyCode::Char(c @ '1'..='9') => Action::AttachByIndex((c as usize) - ('1' as usize)),
         _ => Action::None,
@@ -371,6 +390,43 @@ fn handle_log_key(key: &KeyEvent) -> Action {
         KeyCode::Char('g') => Action::MoveToTop,
         KeyCode::Char('G') => Action::MoveToBottom,
         KeyCode::Char('c') => Action::ClearLog,
+        _ => Action::None,
+    }
+}
+
+fn handle_branch_input_key(key: &KeyEvent) -> Action {
+    match key.code {
+        KeyCode::Enter => Action::BranchInputSubmit,
+        KeyCode::Esc => Action::BranchInputCancel,
+        KeyCode::Backspace => Action::BranchInputBackspace,
+        KeyCode::Tab => Action::BranchInputTab,
+        KeyCode::Char(c) => Action::BranchInputChar(c),
+        _ => Action::None,
+    }
+}
+
+fn handle_worktree_picker_key(key: &KeyEvent) -> Action {
+    match key.code {
+        KeyCode::Char('j') | KeyCode::Down => Action::WorktreePickerDown,
+        KeyCode::Char('k') | KeyCode::Up => Action::WorktreePickerUp,
+        KeyCode::Enter => Action::WorktreePickerSelect,
+        KeyCode::Esc | KeyCode::Char('q') => Action::WorktreePickerClose,
+        _ => Action::None,
+    }
+}
+
+fn handle_confirm_worktree_cleanup_key(key: &KeyEvent) -> Action {
+    match key.code {
+        KeyCode::Char('y') | KeyCode::Enter => Action::ConfirmWorktreeCleanupYes,
+        KeyCode::Char('n') | KeyCode::Esc => Action::ConfirmWorktreeCleanupNo,
+        _ => Action::None,
+    }
+}
+
+fn handle_confirm_recreate_key(key: &KeyEvent) -> Action {
+    match key.code {
+        KeyCode::Char('y') | KeyCode::Enter => Action::ConfirmRecreateYes,
+        KeyCode::Char('n') | KeyCode::Esc => Action::ConfirmRecreateNo,
         _ => Action::None,
     }
 }
@@ -589,5 +645,151 @@ mod tests {
     fn test_normal_mode_c_triggers_fix_ci() {
         let action = handle_normal_key(&key(KeyCode::Char('c')));
         assert_eq!(action, Action::FixCi);
+    }
+
+    #[test]
+    fn test_normal_mode_w_triggers_prune_worktrees() {
+        let action = handle_normal_key(&key(KeyCode::Char('W')));
+        assert_eq!(action, Action::PruneWorktrees);
+    }
+
+    #[test]
+    fn test_branch_input_enter_submits() {
+        let action = handle_branch_input_key(&key(KeyCode::Enter));
+        assert_eq!(action, Action::BranchInputSubmit);
+    }
+
+    #[test]
+    fn test_branch_input_esc_cancels() {
+        let action = handle_branch_input_key(&key(KeyCode::Esc));
+        assert_eq!(action, Action::BranchInputCancel);
+    }
+
+    #[test]
+    fn test_branch_input_backspace() {
+        let action = handle_branch_input_key(&key(KeyCode::Backspace));
+        assert_eq!(action, Action::BranchInputBackspace);
+    }
+
+    #[test]
+    fn test_branch_input_tab_completes() {
+        let action = handle_branch_input_key(&key(KeyCode::Tab));
+        assert_eq!(action, Action::BranchInputTab);
+    }
+
+    #[test]
+    fn test_branch_input_char() {
+        let action = handle_branch_input_key(&key(KeyCode::Char('f')));
+        assert_eq!(action, Action::BranchInputChar('f'));
+    }
+
+    #[test]
+    fn test_worktree_picker_navigation() {
+        assert_eq!(
+            handle_worktree_picker_key(&key(KeyCode::Char('j'))),
+            Action::WorktreePickerDown
+        );
+        assert_eq!(
+            handle_worktree_picker_key(&key(KeyCode::Char('k'))),
+            Action::WorktreePickerUp
+        );
+        assert_eq!(
+            handle_worktree_picker_key(&key(KeyCode::Down)),
+            Action::WorktreePickerDown
+        );
+        assert_eq!(
+            handle_worktree_picker_key(&key(KeyCode::Up)),
+            Action::WorktreePickerUp
+        );
+        assert_eq!(
+            handle_worktree_picker_key(&key(KeyCode::Enter)),
+            Action::WorktreePickerSelect
+        );
+        assert_eq!(
+            handle_worktree_picker_key(&key(KeyCode::Esc)),
+            Action::WorktreePickerClose
+        );
+        assert_eq!(
+            handle_worktree_picker_key(&key(KeyCode::Char('q'))),
+            Action::WorktreePickerClose
+        );
+    }
+
+    #[test]
+    fn test_confirm_worktree_cleanup_keys() {
+        assert_eq!(
+            handle_confirm_worktree_cleanup_key(&key(KeyCode::Char('y'))),
+            Action::ConfirmWorktreeCleanupYes
+        );
+        assert_eq!(
+            handle_confirm_worktree_cleanup_key(&key(KeyCode::Enter)),
+            Action::ConfirmWorktreeCleanupYes
+        );
+        assert_eq!(
+            handle_confirm_worktree_cleanup_key(&key(KeyCode::Char('n'))),
+            Action::ConfirmWorktreeCleanupNo
+        );
+        assert_eq!(
+            handle_confirm_worktree_cleanup_key(&key(KeyCode::Esc)),
+            Action::ConfirmWorktreeCleanupNo
+        );
+    }
+
+    #[test]
+    fn test_confirm_recreate_keys() {
+        assert_eq!(
+            handle_confirm_recreate_key(&key(KeyCode::Char('y'))),
+            Action::ConfirmRecreateYes
+        );
+        assert_eq!(
+            handle_confirm_recreate_key(&key(KeyCode::Enter)),
+            Action::ConfirmRecreateYes
+        );
+        assert_eq!(
+            handle_confirm_recreate_key(&key(KeyCode::Char('n'))),
+            Action::ConfirmRecreateNo
+        );
+        assert_eq!(
+            handle_confirm_recreate_key(&key(KeyCode::Esc)),
+            Action::ConfirmRecreateNo
+        );
+    }
+
+    #[test]
+    fn test_branch_input_viewmode_routing() {
+        let action = handle_key(&key(KeyCode::Enter), &ViewMode::BranchInput, false);
+        assert_eq!(action, Action::BranchInputSubmit);
+
+        let action = handle_key(&key(KeyCode::Esc), &ViewMode::BranchInput, false);
+        assert_eq!(action, Action::BranchInputCancel);
+    }
+
+    #[test]
+    fn test_worktree_picker_viewmode_routing() {
+        let action = handle_key(&key(KeyCode::Enter), &ViewMode::WorktreePicker, false);
+        assert_eq!(action, Action::WorktreePickerSelect);
+
+        let action = handle_key(&key(KeyCode::Esc), &ViewMode::WorktreePicker, false);
+        assert_eq!(action, Action::WorktreePickerClose);
+    }
+
+    #[test]
+    fn test_confirm_worktree_cleanup_viewmode_routing() {
+        let action = handle_key(
+            &key(KeyCode::Char('y')),
+            &ViewMode::ConfirmWorktreeCleanup,
+            false,
+        );
+        assert_eq!(action, Action::ConfirmWorktreeCleanupYes);
+    }
+
+    #[test]
+    fn test_confirm_recreate_viewmode_routing() {
+        let action = handle_key(
+            &key(KeyCode::Char('y')),
+            &ViewMode::ConfirmRecreateWorktree,
+            false,
+        );
+        assert_eq!(action, Action::ConfirmRecreateYes);
     }
 }

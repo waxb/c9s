@@ -78,10 +78,17 @@ impl EmbeddedTerminal {
     }
 
     pub fn spawn_new(cwd: &Path, rows: u16, cols: u16) -> Result<Self> {
-        let project_name = cwd
-            .file_name()
-            .map(|n| n.to_string_lossy().to_string())
-            .unwrap_or_else(|| cwd.to_string_lossy().to_string());
+        Self::spawn_new_named(cwd, None, rows, cols)
+    }
+
+    pub fn spawn_new_named(cwd: &Path, display_name: Option<&str>, rows: u16, cols: u16) -> Result<Self> {
+        let project_name = display_name
+            .map(|n| n.to_string())
+            .unwrap_or_else(|| {
+                cwd.file_name()
+                    .map(|n| n.to_string_lossy().to_string())
+                    .unwrap_or_else(|| cwd.to_string_lossy().to_string())
+            });
 
         let id = uuid::Uuid::new_v4().to_string();
 

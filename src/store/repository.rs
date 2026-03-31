@@ -1,5 +1,6 @@
 use anyhow::Result;
 use rusqlite::Connection;
+use std::collections::HashMap;
 use std::path::PathBuf;
 
 use crate::session::Session;
@@ -16,7 +17,11 @@ impl Store {
         std::fs::create_dir_all(&data_dir)?;
 
         let db_path = data_dir.join("data.db");
-        let conn = Connection::open(&db_path)?;
+        Self::open_at(&db_path)
+    }
+
+    pub fn open_at(db_path: &std::path::Path) -> Result<Self> {
+        let conn = Connection::open(db_path)?;
         let store = Self { conn };
         store.migrate()?;
         Ok(store)
@@ -55,16 +60,77 @@ impl Store {
             CREATE INDEX IF NOT EXISTS idx_sessions_project ON sessions(project_name);
             CREATE INDEX IF NOT EXISTS idx_sessions_started ON sessions(started_at);",
         )?;
+
+        let has_repo_root: bool = {
+            let mut stmt = self.conn.prepare("PRAGMA table_info(sessions)")?;
+            let columns: Vec<String> = stmt
+                .query_map([], |row| row.get::<_, String>(1))?
+                .filter_map(|r| r.ok())
+                .collect();
+            columns.iter().any(|c| c == "repo_root")
+        };
+
+        if !has_repo_root {
+            self.conn.execute_batch(
+                "ALTER TABLE sessions ADD COLUMN repo_root TEXT;
+                 ALTER TABLE sessions ADD COLUMN worktree_path TEXT;
+                 ALTER TABLE sessions ADD COLUMN pinned_branch TEXT;",
+            )?;
+        }
+
+        Ok(())
+    }
+
+    pub fn backfill_repo_roots(&self) -> Result<()> {
+        let mut stmt = self
+            .conn
+            .prepare("SELECT id, cwd FROM sessions WHERE repo_root IS NULL")?;
+        let rows: Vec<(String, String)> = stmt
+            .query_map([], |row| Ok((row.get(0)?, row.get(1)?)))?
+            .filter_map(|r| r.ok())
+            .collect();
+
+        let mut cache: HashMap<String, Option<String>> = HashMap::new();
+
+        for (id, cwd) in &rows {
+            let repo_root = if let Some(cached) = cache.get(cwd.as_str()) {
+                cached.clone()
+            } else {
+                let resolved = crate::worktree::resolve_repo_root(std::path::Path::new(cwd))
+                    .ok()
+                    .map(|p| p.to_string_lossy().to_string());
+                cache.insert(cwd.clone(), resolved.clone());
+                resolved
+            };
+
+            if let Some(root) = &repo_root {
+                self.conn.execute(
+                    "UPDATE sessions SET repo_root = ?1 WHERE id = ?2",
+                    rusqlite::params![root, id],
+                )?;
+            }
+        }
+
         Ok(())
     }
 
     pub fn upsert_session(&self, session: &Session) -> Result<()> {
+        let repo_root_str = session.repo_root.as_ref().map(|p| p.to_string_lossy().to_string());
+        let worktree_path_str = session
+            .worktree_info
+            .as_ref()
+            .map(|wt| wt.worktree_path.to_string_lossy().to_string());
+        let pinned_branch_str = session
+            .worktree_info
+            .as_ref()
+            .map(|wt| wt.pinned_branch.clone());
+
         self.conn.execute(
             "INSERT INTO sessions (id, cwd, project_name, git_branch, model, started_at,
                 total_input_tokens, total_output_tokens, total_cache_read_tokens,
                 total_cache_write_tokens, estimated_cost_usd, message_count,
-                tool_call_count, claude_version)
-            VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14)
+                tool_call_count, claude_version, repo_root, worktree_path, pinned_branch)
+            VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17)
             ON CONFLICT(id) DO UPDATE SET
                 git_branch = excluded.git_branch,
                 model = excluded.model,
@@ -75,7 +141,10 @@ impl Store {
                 estimated_cost_usd = excluded.estimated_cost_usd,
                 message_count = excluded.message_count,
                 tool_call_count = excluded.tool_call_count,
-                claude_version = excluded.claude_version",
+                claude_version = excluded.claude_version,
+                repo_root = excluded.repo_root,
+                worktree_path = excluded.worktree_path,
+                pinned_branch = excluded.pinned_branch",
             rusqlite::params![
                 session.id,
                 session.cwd.to_string_lossy(),
@@ -91,6 +160,9 @@ impl Store {
                 session.message_count,
                 session.tool_call_count,
                 session.claude_version,
+                repo_root_str,
+                worktree_path_str,
+                pinned_branch_str,
             ],
         )?;
         Ok(())

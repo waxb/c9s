@@ -34,6 +34,10 @@ pub enum ViewMode {
     ConfirmKill,
     SessionFilePicker,
     Log,
+    BranchInput,
+    WorktreePicker,
+    ConfirmWorktreeCleanup,
+    ConfirmRecreateWorktree,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -51,6 +55,8 @@ pub enum CiStatus {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum NewSessionOption {
     Local,
+    BranchSession,
+    ExistingWorktree,
     Tervezo,
 }
 
@@ -58,6 +64,8 @@ impl NewSessionOption {
     pub fn label(self) -> &'static str {
         match self {
             Self::Local => "Local session",
+            Self::BranchSession => "New branch session...",
+            Self::ExistingWorktree => "Existing worktree...",
             Self::Tervezo => "Tervezo session",
         }
     }
@@ -69,13 +77,45 @@ pub struct NewSessionMenuState {
 }
 
 impl NewSessionMenuState {
-    pub fn new(has_tervezo: bool) -> Self {
+    pub fn new(has_tervezo: bool, in_git_repo: bool) -> Self {
         let mut items = vec![NewSessionOption::Local];
+        if in_git_repo {
+            items.push(NewSessionOption::BranchSession);
+            items.push(NewSessionOption::ExistingWorktree);
+        }
         if has_tervezo {
             items.push(NewSessionOption::Tervezo);
         }
         Self { items, cursor: 0 }
     }
+}
+
+pub struct BranchInputState {
+    pub input: String,
+    pub repo_root: std::path::PathBuf,
+    pub branches: Vec<String>,
+    pub suggestion: Option<String>,
+    pub error: Option<String>,
+}
+
+pub struct WorktreePickerState {
+    pub worktrees: Vec<crate::worktree::Worktree>,
+    pub cursor: usize,
+    #[allow(dead_code)]
+    pub repo_root: std::path::PathBuf,
+}
+
+pub struct ConfirmWorktreeCleanupState {
+    pub session_id: String,
+    pub worktree_path: std::path::PathBuf,
+    pub branch: String,
+    pub is_dirty: bool,
+}
+
+pub struct ConfirmRecreateWorktreeState {
+    pub session_id: String,
+    pub branch: String,
+    pub repo_root: std::path::PathBuf,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -146,6 +186,13 @@ impl SessionEntry {
 
     pub fn is_remote(&self) -> bool {
         matches!(self, Self::Remote(_))
+    }
+
+    pub fn is_worktree_session(&self) -> bool {
+        match self {
+            Self::Local(s) => s.is_worktree_session(),
+            Self::Remote(_) => false,
+        }
     }
 
     pub fn matches_filter(&self, query: &str) -> bool {
@@ -721,6 +768,10 @@ pub struct App {
     unfollowed: HashSet<String>,
     pub session_files: Vec<crate::session::SessionFile>,
     pub session_file_cursor: usize,
+    pub branch_input: Option<BranchInputState>,
+    pub worktree_picker: Option<WorktreePickerState>,
+    pub confirm_worktree_cleanup: Option<ConfirmWorktreeCleanupState>,
+    pub confirm_recreate_worktree: Option<ConfirmRecreateWorktreeState>,
 }
 
 impl App {
@@ -778,6 +829,10 @@ impl App {
             unfollowed: HashSet::new(),
             session_files: Vec::new(),
             session_file_cursor: 0,
+            branch_input: None,
+            worktree_picker: None,
+            confirm_worktree_cleanup: None,
+            confirm_recreate_worktree: None,
         };
 
         app.refresh()?;
@@ -1175,9 +1230,9 @@ impl App {
             self.tervezo_detail_rx = None;
             self.stop_sse_stream();
         }
-        if mode == ViewMode::NewSessionMenu {
-            self.new_session_menu = Some(NewSessionMenuState::new(self.has_tervezo()));
-        } else if self.new_session_menu.is_some() {
+        if mode == ViewMode::NewSessionMenu && self.new_session_menu.is_none() {
+            self.new_session_menu = Some(NewSessionMenuState::new(self.has_tervezo(), false));
+        } else if mode != ViewMode::NewSessionMenu && self.new_session_menu.is_some() {
             self.new_session_menu = None;
         }
         if mode == ViewMode::TervezoCreateDialog {
@@ -1213,6 +1268,14 @@ impl App {
 
     pub fn has_tervezo(&self) -> bool {
         self.tervezo_config.is_some()
+    }
+
+    pub fn store_ref(&self) -> Option<&crate::store::Store> {
+        self.store.as_ref()
+    }
+
+    pub fn open_new_session_menu(&mut self, in_git_repo: bool) {
+        self.new_session_menu = Some(NewSessionMenuState::new(self.has_tervezo(), in_git_repo));
     }
 
     pub fn tervezo_fetcher_ref(&self) -> Option<&TervezoFetcher> {

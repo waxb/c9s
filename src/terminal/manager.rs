@@ -71,8 +71,12 @@ impl TerminalManager {
     }
 
     pub fn attach_new(&mut self, cwd: &Path, rows: u16, cols: u16) -> Result<String> {
+        self.attach_new_named(cwd, None, rows, cols)
+    }
+
+    pub fn attach_new_named(&mut self, cwd: &Path, display_name: Option<&str>, rows: u16, cols: u16) -> Result<String> {
         self.clear_active_bells();
-        let term = EmbeddedTerminal::spawn_new(cwd, rows, cols)?;
+        let term = EmbeddedTerminal::spawn_new_named(cwd, display_name, rows, cols)?;
         let id = term.session_id().to_string();
         self.notifiers
             .insert(id.clone(), JsonlNotifier::new(cwd, &id));

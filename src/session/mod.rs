@@ -36,6 +36,12 @@ impl std::fmt::Display for SessionStatus {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct WorktreeInfo {
+    pub worktree_path: PathBuf,
+    pub pinned_branch: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Session {
     pub id: String,
     pub pid: Option<u32>,
@@ -58,6 +64,8 @@ pub struct Session {
     pub compaction_count: u32,
     pub hook_run_count: u32,
     pub hook_error_count: u32,
+    pub repo_root: Option<PathBuf>,
+    pub worktree_info: Option<WorktreeInfo>,
 }
 
 impl Session {
@@ -87,6 +95,10 @@ impl Session {
         } else {
             format!("{}m", minutes)
         }
+    }
+
+    pub fn is_worktree_session(&self) -> bool {
+        self.worktree_info.is_some()
     }
 
     pub fn last_activity_display(&self) -> String {
@@ -150,7 +162,21 @@ mod tests {
             compaction_count: 0,
             hook_run_count: 0,
             hook_error_count: 0,
+            repo_root: None,
+            worktree_info: None,
         }
+    }
+
+    #[test]
+    fn test_is_worktree_session() {
+        let mut session = make_session("claude-sonnet-4-20250514", 0, 0, 0, 0);
+        assert!(!session.is_worktree_session());
+
+        session.worktree_info = Some(WorktreeInfo {
+            worktree_path: PathBuf::from("/tmp/wt"),
+            pinned_branch: "feat".to_string(),
+        });
+        assert!(session.is_worktree_session());
     }
 
     #[test]
