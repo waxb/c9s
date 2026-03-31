@@ -223,34 +223,40 @@ impl LinearClient {
     }
 
     pub fn fetch_issue(&mut self, identifier: &str) -> Result<LinearIssue> {
-        let query = format!(
-            r#"{{ "query": "query {{ issue(id: \"{}\") {{ identifier title description branchName status {{ name }} team {{ name key }} labels {{ nodes {{ name }} }} }} }}" }}"#,
-            identifier
-        );
+        let query = serde_json::json!({
+            "query": format!(
+                "query {{ issue(id: \"{}\") {{ identifier title description branchName status {{ name }} team {{ name key }} labels {{ nodes {{ name }} }} }} }}",
+                identifier
+            )
+        });
 
-        let body = self.graphql_request(&query)?;
+        let body = self.graphql_request(&query.to_string())?;
         parse_issue_response(&body)
     }
 
     pub fn update_issue_status(&mut self, identifier: &str, status_name: &str) -> Result<()> {
-        let query = format!(
-            r#"{{ "query": "mutation {{ issueUpdate(id: \"{}\", input: {{ stateId: \"{}\" }}) {{ success }} }}" }}"#,
-            identifier, status_name
-        );
+        let query = serde_json::json!({
+            "query": format!(
+                "mutation {{ issueUpdate(id: \"{}\", input: {{ stateId: \"{}\" }}) {{ success }} }}",
+                identifier, status_name
+            )
+        });
 
-        let _ = self.graphql_request(&query)?;
+        let _ = self.graphql_request(&query.to_string())?;
 
         Ok(())
     }
 
     pub fn acknowledge_session(&mut self, agent_session_id: &str, message: &str) -> Result<()> {
-        let escaped_message = message.replace('\\', "\\\\").replace('"', "\\\"").replace('\n', "\\n");
-        let query = format!(
-            r#"{{ "query": "mutation {{ agentActivityCreate(input: {{ agentSessionId: \"{}\", content: {{ type: \"thought\", body: \"{}\" }} }}) {{ success }} }}" }}"#,
-            agent_session_id, escaped_message
-        );
+        let escaped = message.replace('"', "\\\"").replace('\n', "\\n");
+        let query = serde_json::json!({
+            "query": format!(
+                "mutation {{ agentActivityCreate(input: {{ agentSessionId: \"{}\", content: {{ type: \"thought\", body: \"{}\" }} }}) {{ success }} }}",
+                agent_session_id, escaped
+            )
+        });
 
-        let body = self.graphql_request(&query)?;
+        let body = self.graphql_request(&query.to_string())?;
         crate::tlog!(info, "Linear acknowledge response: {}", &body[..body.len().min(200)]);
 
         Ok(())
