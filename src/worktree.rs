@@ -290,6 +290,46 @@ pub fn is_inside_c9s_worktree(path: &Path) -> bool {
     path.components().any(|c| c.as_os_str() == WORKTREE_DIR)
 }
 
+pub fn ensure_local_clone(remote_url: &str) -> Result<PathBuf> {
+    let worktrees_base = dirs::home_dir()
+        .ok_or_else(|| anyhow::anyhow!("cannot determine home directory"))?
+        .join(".c9s")
+        .join("worktrees");
+    std::fs::create_dir_all(&worktrees_base)
+        .context("failed to create ~/.c9s/worktrees/")?;
+
+    let repo_name = remote_url
+        .rsplit('/')
+        .next()
+        .unwrap_or("repo")
+        .trim_end_matches(".git");
+    let clone_path = worktrees_base.join(repo_name);
+
+    if clone_path.join(".git").exists() {
+        let output = Command::new("git")
+            .args(["-C", &clone_path.to_string_lossy(), "fetch", "origin"])
+            .output()
+            .context("failed to run git fetch")?;
+
+        if !output.status.success() {
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            bail!("git fetch failed: {}", stderr.trim());
+        }
+    } else {
+        let output = Command::new("git")
+            .args(["clone", remote_url, &clone_path.to_string_lossy()])
+            .output()
+            .context("failed to run git clone")?;
+
+        if !output.status.success() {
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            bail!("git clone failed: {}", stderr.trim());
+        }
+    }
+
+    Ok(clone_path)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

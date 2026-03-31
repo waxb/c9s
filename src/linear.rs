@@ -16,6 +16,7 @@ pub struct LinearConfig {
     pub default_repo: Option<PathBuf>,
     pub client_id: Option<String>,
     pub client_secret: Option<String>,
+    pub repos: std::collections::HashMap<String, String>,
 }
 
 impl LinearConfig {
@@ -91,6 +92,16 @@ impl LinearConfig {
             .filter(|s| !s.is_empty())
             .map(|s| s.to_string());
 
+        let repos = linear
+            .get("repos")
+            .and_then(|v| v.as_table())
+            .map(|t| {
+                t.iter()
+                    .filter_map(|(k, v)| v.as_str().map(|s| (k.clone(), s.to_string())))
+                    .collect()
+            })
+            .unwrap_or_default();
+
         Some(LinearConfig {
             api_key,
             refresh_token,
@@ -99,6 +110,7 @@ impl LinearConfig {
             default_repo,
             client_id,
             client_secret,
+            repos,
         })
     }
 }
@@ -111,6 +123,7 @@ pub struct LinearIssue {
     pub git_branch_name: Option<String>,
     pub status: String,
     pub team: String,
+    pub team_key: String,
     pub labels: Vec<String>,
 }
 
@@ -210,7 +223,7 @@ impl LinearClient {
 
     pub fn fetch_issue(&mut self, identifier: &str) -> Result<LinearIssue> {
         let query = format!(
-            r#"{{ "query": "query {{ issue(id: \"{}\") {{ identifier title description branchName status {{ name }} team {{ name }} labels {{ nodes {{ name }} }} }} }}" }}"#,
+            r#"{{ "query": "query {{ issue(id: \"{}\") {{ identifier title description branchName status {{ name }} team {{ name key }} labels {{ nodes {{ name }} }} }} }}" }}"#,
             identifier
         );
 
@@ -276,6 +289,13 @@ pub fn parse_issue_response(json: &str) -> Result<LinearIssue> {
         .unwrap_or("")
         .to_string();
 
+    let team_key = issue
+        .get("team")
+        .and_then(|t| t.get("key"))
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .to_string();
+
     let labels = issue
         .get("labels")
         .and_then(|l| l.get("nodes"))
@@ -295,6 +315,7 @@ pub fn parse_issue_response(json: &str) -> Result<LinearIssue> {
         git_branch_name,
         status,
         team,
+        team_key,
         labels,
     })
 }
@@ -640,7 +661,7 @@ mod tests {
                 "description": "the review readonly renderer is looking very barebones",
                 "branchName": "feature/lum-631-restyle-validation-review-readonly-renderer",
                 "status": { "name": "In Review" },
-                "team": { "name": "Lumen" },
+                "team": { "name": "Lumen", "key": "LUM" },
                 "labels": { "nodes": [{ "name": "UI" }, { "name": "Improvement" }] }
             }
         }
@@ -658,6 +679,7 @@ mod tests {
         );
         assert_eq!(issue.status, "In Review");
         assert_eq!(issue.team, "Lumen");
+        assert_eq!(issue.team_key, "LUM");
         assert_eq!(issue.labels, vec!["UI", "Improvement"]);
     }
 
@@ -670,7 +692,7 @@ mod tests {
                     "title": "Test",
                     "description": "",
                     "status": { "name": "Todo" },
-                    "team": { "name": "Eng" },
+                    "team": { "name": "Eng", "key": "ENG" },
                     "labels": { "nodes": [] }
                 }
             }
@@ -739,6 +761,7 @@ mod tests {
             git_branch_name: None,
             status: "Todo".to_string(),
             team: "Eng".to_string(),
+            team_key: "ENG".to_string(),
             labels: vec![],
         };
         let event = LinearEvent {
@@ -762,6 +785,7 @@ mod tests {
             git_branch_name: None,
             status: "Todo".to_string(),
             team: "Eng".to_string(),
+            team_key: "ENG".to_string(),
             labels: vec![],
         };
         let event = LinearEvent {
@@ -783,6 +807,7 @@ mod tests {
             git_branch_name: None,
             status: "Todo".to_string(),
             team: "Eng".to_string(),
+            team_key: "ENG".to_string(),
             labels: vec![],
         };
         let event = LinearEvent {
@@ -804,6 +829,7 @@ mod tests {
             git_branch_name: None,
             status: "Todo".to_string(),
             team: "Eng".to_string(),
+            team_key: "ENG".to_string(),
             labels: vec![],
         };
         let event = LinearEvent {

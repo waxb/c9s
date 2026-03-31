@@ -2035,13 +2035,15 @@ fn process_linear_event(
     let mut client = linear::LinearClient::new(config);
     let issue = client.fetch_issue(&event.issue_id)?;
 
-    let default_repo = config
-        .default_repo
-        .clone()
-        .or_else(|| std::env::current_dir().ok())
-        .unwrap_or_default();
-
-    let repo_root = worktree::resolve_repo_root(&default_repo)?;
+    let repo_root = if let Some(remote_url) = config.repos.get(&issue.team_key) {
+        let clone_path = worktree::ensure_local_clone(remote_url)?;
+        worktree::resolve_repo_root(&clone_path)?
+    } else if let Some(ref default) = config.default_repo {
+        worktree::resolve_repo_root(default)?
+    } else {
+        let cwd = std::env::current_dir()?;
+        worktree::resolve_repo_root(&cwd)?
+    };
 
     let branch_name = issue
         .git_branch_name
