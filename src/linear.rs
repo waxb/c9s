@@ -225,7 +225,7 @@ impl LinearClient {
     pub fn fetch_issue(&mut self, identifier: &str) -> Result<LinearIssue> {
         let query = serde_json::json!({
             "query": format!(
-                "query {{ issue(id: \"{}\") {{ identifier title description branchName status {{ name }} team {{ name key }} labels {{ nodes {{ name }} }} }} }}",
+                "query {{ issue(id: \"{}\") {{ identifier title description branchName state {{ name }} team {{ name key }} labels {{ nodes {{ name }} }} }} }}",
                 identifier
             )
         });
@@ -296,7 +296,7 @@ pub fn parse_issue_response(json: &str) -> Result<LinearIssue> {
         .map(|s| s.to_string());
 
     let status = issue
-        .get("status")
+        .get("state")
         .and_then(|s| s.get("name"))
         .and_then(|v| v.as_str())
         .unwrap_or("Unknown")
@@ -742,7 +742,7 @@ mod tests {
                 "title": "restyle validation review readonly renderer",
                 "description": "the review readonly renderer is looking very barebones",
                 "branchName": "feature/lum-631-restyle-validation-review-readonly-renderer",
-                "status": { "name": "In Review" },
+                "state": { "name": "In Review" },
                 "team": { "name": "Lumen", "key": "LUM" },
                 "labels": { "nodes": [{ "name": "UI" }, { "name": "Improvement" }] }
             }
@@ -773,7 +773,7 @@ mod tests {
                     "identifier": "TEST-1",
                     "title": "Test",
                     "description": "",
-                    "status": { "name": "Todo" },
+                    "state": { "name": "Todo" },
                     "team": { "name": "Eng", "key": "ENG" },
                     "labels": { "nodes": [] }
                 }
