@@ -4,9 +4,16 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Clear, Paragraph};
 use ratatui::Frame;
 
-pub fn render_confirm_kill(f: &mut Frame, session_name: &str, area: Rect) {
-    let popup_width = 50;
-    let popup_height = 7;
+pub fn render_confirm_kill(
+    f: &mut Frame,
+    session_name: &str,
+    branch: Option<&str>,
+    worktree_path: Option<&str>,
+    area: Rect,
+) {
+    let has_extra = branch.is_some() || worktree_path.is_some();
+    let popup_width = 60;
+    let popup_height = if has_extra { 9 } else { 7 };
 
     let popup_area = centered_rect(popup_width, popup_height, area);
 
@@ -16,31 +23,46 @@ pub fn render_confirm_kill(f: &mut Frame, session_name: &str, area: Rect) {
     let title_style = Style::default()
         .fg(Color::Red)
         .add_modifier(Modifier::BOLD);
+    let info_style = Style::default().fg(Color::Yellow);
 
-    let lines = vec![
+    let mut lines = vec![
         Line::from(""),
         Line::from(Span::styled(
             format!("  Kill session: {}", session_name),
             title_style,
         )),
-        Line::from(""),
-        Line::from(vec![
-            Span::styled("    ", Style::default()),
-            Span::styled(
-                " y/Enter: kill ",
-                Style::default()
-                    .fg(Color::Red)
-                    .add_modifier(Modifier::BOLD),
-            ),
-            Span::styled("   ", Style::default()),
-            Span::styled(
-                " n/Esc: cancel ",
-                Style::default()
-                    .fg(Color::Green)
-                    .add_modifier(Modifier::BOLD),
-            ),
-        ]),
     ];
+
+    if let Some(b) = branch {
+        lines.push(Line::from(Span::styled(
+            format!("  Branch: {}", b),
+            info_style,
+        )));
+    }
+    if let Some(wt) = worktree_path {
+        lines.push(Line::from(Span::styled(
+            format!("  Worktree: {}", wt),
+            info_style,
+        )));
+    }
+
+    lines.push(Line::from(""));
+    lines.push(Line::from(vec![
+        Span::styled("    ", Style::default()),
+        Span::styled(
+            " y/Enter: kill ",
+            Style::default()
+                .fg(Color::Red)
+                .add_modifier(Modifier::BOLD),
+        ),
+        Span::styled("   ", Style::default()),
+        Span::styled(
+            " n/Esc: cancel ",
+            Style::default()
+                .fg(Color::Green)
+                .add_modifier(Modifier::BOLD),
+        ),
+    ]));
 
     let dialog = Paragraph::new(lines).block(
         Block::default()

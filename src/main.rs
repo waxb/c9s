@@ -367,17 +367,27 @@ fn run_loop(
                     }
                     ViewMode::ConfirmKill => {
                         ui::render_session_list(f, app, area);
-                        let name = app
+                        let session_info = app
                             .confirm_kill_session_id
                             .as_ref()
                             .and_then(|id| {
                                 app.filtered_sessions()
                                     .iter()
                                     .find(|e| e.id() == id)
-                                    .map(|e| e.display_name().to_string())
-                            })
-                            .unwrap_or_else(|| "unknown".to_string());
-                        ui::render_confirm_kill(f, &name, area);
+                                    .map(|e| {
+                                        let name = e.display_name().to_string();
+                                        let branch = e.branch().map(|b| b.to_string());
+                                        let wt_path = match e {
+                                            SessionEntry::Local(s) => s.worktree_info.as_ref()
+                                                .map(|wt| wt.worktree_path.to_string_lossy().to_string()),
+                                            _ => None,
+                                        };
+                                        (name, branch, wt_path)
+                                    })
+                            });
+                        let (name, branch, wt_path) = session_info
+                            .unwrap_or_else(|| ("unknown".to_string(), None, None));
+                        ui::render_confirm_kill(f, &name, branch.as_deref(), wt_path.as_deref(), area);
                     }
                     ViewMode::ConfirmQuit => {
                         ui::render_session_list(f, app, area);
