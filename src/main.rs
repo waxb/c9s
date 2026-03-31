@@ -8,6 +8,7 @@ mod tervezo;
 mod ui;
 mod usage;
 mod worktree;
+mod linear;
 #[cfg(test)]
 mod worktree_integration_tests;
 
@@ -72,6 +73,22 @@ fn main() -> Result<()> {
         let _ = store.backfill_repo_roots();
     }
 
+    let linear_rx: Option<(std::sync::mpsc::Receiver<linear::LinearEvent>, String)> =
+        if let (Ok(api_key), Ok(secret)) = (
+            std::env::var("LINEAR_API_KEY"),
+            std::env::var("LINEAR_WEBHOOK_SECRET"),
+        ) {
+            let port: u16 = std::env::var("C9S_LINEAR_PORT")
+                .ok()
+                .and_then(|p| p.parse().ok())
+                .unwrap_or(9519);
+            let (tx, rx) = std::sync::mpsc::channel();
+            linear::start_http_listener(port, secret, tx);
+            Some((rx, api_key))
+        } else {
+            None
+        };
+
     // Install panic hook that logs to c9s.log before printing to stderr
     std::panic::set_hook(Box::new(|info| {
         let bt = std::backtrace::Backtrace::force_capture();
@@ -87,7 +104,7 @@ fn main() -> Result<()> {
     let backend = CrosstermBackend::new(stdout());
     let mut terminal = Terminal::new(backend)?;
 
-    let result = run_loop(&mut terminal, &mut app);
+    let result = run_loop(&mut terminal, &mut app, linear_rx);
 
     if let Err(ref e) = result {
         tlog!(error, "DIAG: run_loop returned error: {}", e);
@@ -103,6 +120,7 @@ fn main() -> Result<()> {
 fn run_loop(
     terminal: &mut Terminal<CrosstermBackend<std::io::Stdout>>,
     app: &mut App,
+    linear_rx: Option<(std::sync::mpsc::Receiver<linear::LinearEvent>, String)>,
 ) -> Result<()> {
     let refresh_interval = Duration::from_secs(5);
     let detail_refresh_interval = Duration::from_secs(10);
@@ -133,6 +151,15 @@ fn run_loop(
 
         if app.check_tervezo_dirty() {
             needs_draw = true;
+        }
+
+        if let Some((ref rx, ref api_key)) = linear_rx {
+            while let Ok(event) = rx.try_recv() {
+                if let Err(e) = process_linear_event(app, terminal, api_key, &event) {
+                    tlog!(error, "Linear event processing failed: {}", e);
+                }
+                needs_draw = true;
+            }
         }
 
         if app.drain_tervezo_detail_messages() {
@@ -1988,6 +2015,58 @@ fn submit_tervezo_create(app: &mut App) {
             }
         }
     });
+}
+
+fn process_linear_event(
+    app: &mut App,
+    terminal: &Terminal<CrosstermBackend<std::io::Stdout>>,
+    api_key: &str,
+    event: &linear::LinearEvent,
+) -> Result<()> {
+    let client = linear::LinearClient::new(api_key);
+    let issue = client.fetch_issue(&event.issue_id)?;
+
+    let default_repo = std::env::var("C9S_DEFAULT_REPO")
+        .map(std::path::PathBuf::from)
+        .or_else(|_| std::env::current_dir())
+        .unwrap_or_default();
+
+    let repo_root = worktree::resolve_repo_root(&default_repo)?;
+
+    let branch_name = issue
+        .git_branch_name
+        .as_deref()
+        .unwrap_or(&issue.identifier);
+    let sanitized = worktree::sanitize_branch_name(branch_name);
+    let branches = worktree::list_local_branches(&repo_root).unwrap_or_default();
+    let new_branch = !branches.contains(&branch_name.to_string());
+
+    let wt_path = worktree::create_worktree(&repo_root, branch_name, new_branch)?;
+
+    let prompt = linear::build_prompt(&issue, event);
+
+    let repo_name = repo_root
+        .file_name()
+        .map(|n| n.to_string_lossy().to_string())
+        .unwrap_or_default();
+    let tab_label = format!("{}:{}", repo_name, sanitized);
+
+    let area = terminal.size()?;
+    let rows = area.height.saturating_sub(1);
+    let cols = area.width;
+    app.terminal_manager_mut()
+        .attach_new_with_prompt(&wt_path, Some(&tab_label), Some(&prompt), rows, cols)?;
+
+    let _ = client.update_issue_status(&issue.identifier, "In Progress");
+
+    tlog!(
+        info,
+        "Linear issue {} -> worktree session started (branch: {})",
+        issue.identifier,
+        branch_name
+    );
+
+    Ok(())
 }
 
 fn attach_selected(
