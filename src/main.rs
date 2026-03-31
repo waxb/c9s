@@ -2032,7 +2032,7 @@ fn process_linear_event(
     config: &linear::LinearConfig,
     event: &linear::LinearEvent,
 ) -> Result<()> {
-    let client = linear::LinearClient::new(&config.api_key);
+    let mut client = linear::LinearClient::new(config);
     let issue = client.fetch_issue(&event.issue_id)?;
 
     let default_repo = config

@@ -10,6 +10,7 @@ type HmacSha256 = Hmac<Sha256>;
 #[derive(Debug, Clone)]
 pub struct LinearConfig {
     pub api_key: String,
+    pub refresh_token: Option<String>,
     pub webhook_secret: String,
     pub port: u16,
     pub default_repo: Option<PathBuf>,
@@ -84,8 +85,15 @@ impl LinearConfig {
             .and_then(|v| v.as_str())
             .map(|s| s.to_string());
 
+        let refresh_token = linear
+            .get("refresh_token")
+            .and_then(|v| v.as_str())
+            .filter(|s| !s.is_empty())
+            .map(|s| s.to_string());
+
         Some(LinearConfig {
             api_key,
+            refresh_token,
             webhook_secret,
             port,
             default_repo,
@@ -115,44 +123,108 @@ pub struct LinearEvent {
 
 pub struct LinearClient {
     api_key: String,
+    client_id: Option<String>,
+    client_secret: Option<String>,
+    refresh_token: Option<String>,
 }
 
 impl LinearClient {
-    pub fn new(api_key: &str) -> Self {
+    pub fn new(config: &LinearConfig) -> Self {
         Self {
-            api_key: api_key.to_string(),
+            api_key: config.api_key.clone(),
+            client_id: config.client_id.clone(),
+            client_secret: config.client_secret.clone(),
+            refresh_token: config.refresh_token.clone(),
         }
     }
 
-    pub fn fetch_issue(&self, identifier: &str) -> Result<LinearIssue> {
+    fn graphql_request(&mut self, query: &str) -> Result<String> {
+        let result = ureq::post("https://api.linear.app/graphql")
+            .header("Authorization", &format!("Bearer {}", self.api_key))
+            .header("Content-Type", "application/json")
+            .send(query.as_bytes());
+
+        match result {
+            Ok(response) => {
+                response.into_body().read_to_string()
+                    .context("failed to read Linear response")
+            }
+            Err(ureq::Error::StatusCode(401)) => {
+                crate::tlog!(info, "Linear: access token expired, attempting refresh...");
+                self.refresh_access_token()?;
+
+                let response = ureq::post("https://api.linear.app/graphql")
+                    .header("Authorization", &format!("Bearer {}", self.api_key))
+                    .header("Content-Type", "application/json")
+                    .send(query.as_bytes())
+                    .context("Linear API call failed after token refresh")?;
+
+                response.into_body().read_to_string()
+                    .context("failed to read Linear response")
+            }
+            Err(e) => Err(anyhow::anyhow!("Linear API call failed: {}", e)),
+        }
+    }
+
+    fn refresh_access_token(&mut self) -> Result<()> {
+        let refresh = self.refresh_token.as_ref()
+            .ok_or_else(|| anyhow::anyhow!("no refresh_token available, re-auth required"))?;
+        let client_id = self.client_id.as_ref()
+            .ok_or_else(|| anyhow::anyhow!("no client_id for token refresh"))?;
+        let client_secret = self.client_secret.as_ref()
+            .ok_or_else(|| anyhow::anyhow!("no client_secret for token refresh"))?;
+
+        let body = serde_json::json!({
+            "grant_type": "refresh_token",
+            "refresh_token": refresh,
+            "client_id": client_id,
+            "client_secret": client_secret,
+        });
+
+        let response = ureq::post("https://api.linear.app/oauth/token")
+            .header("Content-Type", "application/json")
+            .send(body.to_string().as_bytes())
+            .context("token refresh request failed")?;
+
+        let resp_body = response.into_body().read_to_string()
+            .context("failed to read refresh response")?;
+
+        let value: serde_json::Value = serde_json::from_str(&resp_body)
+            .context("failed to parse refresh response")?;
+
+        let new_access = value.get("access_token").and_then(|v| v.as_str())
+            .ok_or_else(|| anyhow::anyhow!("no access_token in refresh response"))?;
+
+        let new_refresh = value.get("refresh_token").and_then(|v| v.as_str());
+
+        self.api_key = new_access.to_string();
+        if let Some(rt) = new_refresh {
+            self.refresh_token = Some(rt.to_string());
+        }
+
+        save_tokens_to_config(&self.api_key, self.refresh_token.as_deref())?;
+        crate::tlog!(info, "Linear: token refreshed and saved");
+
+        Ok(())
+    }
+
+    pub fn fetch_issue(&mut self, identifier: &str) -> Result<LinearIssue> {
         let query = format!(
             r#"{{ "query": "query {{ issue(id: \"{}\") {{ identifier title description branchName status {{ name }} team {{ name }} labels {{ nodes {{ name }} }} }} }}" }}"#,
             identifier
         );
 
-        let response = ureq::post("https://api.linear.app/graphql")
-            .header("Authorization", &self.api_key)
-            .header("Content-Type", "application/json")
-            .send(query.as_bytes())
-            .context("failed to call Linear API")?;
-
-        let body = response.into_body().read_to_string()
-            .context("failed to read Linear response")?;
-
+        let body = self.graphql_request(&query)?;
         parse_issue_response(&body)
     }
 
-    pub fn update_issue_status(&self, identifier: &str, status_name: &str) -> Result<()> {
+    pub fn update_issue_status(&mut self, identifier: &str, status_name: &str) -> Result<()> {
         let query = format!(
             r#"{{ "query": "mutation {{ issueUpdate(id: \"{}\", input: {{ stateId: \"{}\" }}) {{ success }} }}" }}"#,
             identifier, status_name
         );
 
-        let _response = ureq::post("https://api.linear.app/graphql")
-            .header("Authorization", &self.api_key)
-            .header("Content-Type", "application/json")
-            .send(query.as_bytes())
-            .context("failed to update Linear issue status")?;
+        let _ = self.graphql_request(&query)?;
 
         Ok(())
     }
@@ -375,11 +447,11 @@ pub fn start_http_listener(port: u16, secret: String, client_id: Option<String>,
                         (Some(code), Some(cid), Some(csec)) => {
                             let redirect_uri = format!("http://localhost:{}/oauth/callback", port);
                             match exchange_oauth_token(&code, cid, csec, &redirect_uri) {
-                                Ok(token) => {
-                                    if let Err(e) = save_token_to_config(&token) {
-                                        crate::tlog!(error, "Failed to save Linear token: {}", e);
+                                Ok(tokens) => {
+                                    if let Err(e) = save_tokens_to_config(&tokens.access_token, tokens.refresh_token.as_deref()) {
+                                        crate::tlog!(error, "Failed to save Linear tokens: {}", e);
                                     } else {
-                                        crate::tlog!(info, "Linear OAuth token saved to config");
+                                        crate::tlog!(info, "Linear OAuth tokens saved to config (access + refresh)");
                                     }
                                     let html = "<html><body><h1>c9s connected to Linear</h1><p>You can close this tab. The API token has been saved to ~/.c9s/config.toml</p></body></html>";
                                     let resp = tiny_http::Response::from_string(html)
@@ -425,7 +497,12 @@ fn urlencoded(s: &str) -> String {
         .collect()
 }
 
-fn exchange_oauth_token(code: &str, client_id: &str, client_secret: &str, redirect_uri: &str) -> Result<String> {
+struct OAuthTokens {
+    access_token: String,
+    refresh_token: Option<String>,
+}
+
+fn exchange_oauth_token(code: &str, client_id: &str, client_secret: &str, redirect_uri: &str) -> Result<OAuthTokens> {
     let body = serde_json::json!({
         "grant_type": "authorization_code",
         "code": code,
@@ -445,14 +522,24 @@ fn exchange_oauth_token(code: &str, client_id: &str, client_secret: &str, redire
     let value: serde_json::Value = serde_json::from_str(&resp_body)
         .context("failed to parse token response")?;
 
-    value
+    let access_token = value
         .get("access_token")
         .and_then(|v| v.as_str())
         .map(|s| s.to_string())
-        .ok_or_else(|| anyhow::anyhow!("no access_token in OAuth response: {}", resp_body))
+        .ok_or_else(|| anyhow::anyhow!("no access_token in OAuth response: {}", resp_body))?;
+
+    let refresh_token = value
+        .get("refresh_token")
+        .and_then(|v| v.as_str())
+        .map(|s| s.to_string());
+
+    Ok(OAuthTokens {
+        access_token,
+        refresh_token,
+    })
 }
 
-fn save_token_to_config(token: &str) -> Result<()> {
+fn save_tokens_to_config(access_token: &str, refresh_token: Option<&str>) -> Result<()> {
     let config_path = dirs::home_dir()
         .ok_or_else(|| anyhow::anyhow!("cannot determine home directory"))?
         .join(".c9s")
@@ -466,7 +553,10 @@ fn save_token_to_config(token: &str) -> Result<()> {
         .or_insert_with(|| toml::Value::Table(toml::Table::new()));
 
     if let toml::Value::Table(ref mut t) = linear {
-        t.insert("api_key".to_string(), toml::Value::String(token.to_string()));
+        t.insert("api_key".to_string(), toml::Value::String(access_token.to_string()));
+        if let Some(rt) = refresh_token {
+            t.insert("refresh_token".to_string(), toml::Value::String(rt.to_string()));
+        }
     }
 
     std::fs::write(&config_path, table.to_string())
