@@ -408,6 +408,7 @@ fn submit_name(app: &mut App, terminal: &Term) -> Result<()> {
                 .attach_new(&input.root, &name, rows, cols)?;
             app.set_project_current(&input.root, &id);
             app.enter_terminal();
+            app.request_refresh();
         }
         NamePurpose::Fork => {
             let Some(source) = input.target else {
@@ -419,6 +420,7 @@ fn submit_name(app: &mut App, terminal: &Term) -> Result<()> {
                     .attach_fork(&input.root, &source, &name, rows, cols)?;
             app.set_project_current(&input.root, &id);
             app.enter_terminal();
+            app.request_refresh();
         }
         NamePurpose::Rename => {
             if let Some(target) = input.target {
@@ -643,6 +645,7 @@ fn attach_now(
         .attach(id, project_name, root, takeover_pid, rows, cols)?;
     app.set_project_current(root, id);
     app.enter_terminal();
+    app.request_refresh();
     log::take_dirty();
     Ok(())
 }
