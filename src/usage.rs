@@ -7,6 +7,13 @@ const INVALIDATED_TTL_SECS: u64 = 30;
 const BACKOFF_TTL_SECS: u64 = 120;
 const REQUEST_TIMEOUT_SECS: u64 = 5;
 
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct UsageWindow {
+    pub label: String,
+    pub pct: u8,
+    pub reset: Option<String>,
+}
+
 #[derive(Debug, Clone, Default)]
 pub struct UsageData {
     pub plan_name: Option<String>,
@@ -14,6 +21,7 @@ pub struct UsageData {
     pub five_hour_reset: Option<String>,
     pub seven_day: Option<u8>,
     pub seven_day_reset: Option<String>,
+    pub weekly_models: Vec<UsageWindow>,
     pub api_available: bool,
 }
 
@@ -41,16 +49,51 @@ struct OAuthData {
     expires_at: Option<u64>,
 }
 
-#[derive(Deserialize)]
+#[derive(Deserialize, Default)]
 struct ApiResponse {
     five_hour: Option<WindowData>,
     seven_day: Option<WindowData>,
+    seven_day_opus: Option<WindowData>,
+    seven_day_sonnet: Option<WindowData>,
+    #[serde(default)]
+    limits: Vec<ScopedLimit>,
 }
 
-#[derive(Deserialize)]
+#[derive(Deserialize, Default)]
 struct WindowData {
     utilization: Option<f64>,
     resets_at: Option<String>,
+}
+
+#[derive(Deserialize, Default)]
+struct ScopedLimit {
+    kind: Option<String>,
+    scope: Option<LimitScope>,
+    percent: Option<f64>,
+    resets_at: Option<String>,
+}
+
+#[derive(Deserialize, Default)]
+struct LimitScope {
+    model: Option<ScopeModel>,
+}
+
+#[derive(Deserialize, Default)]
+struct ScopeModel {
+    display_name: Option<String>,
+}
+
+impl ScopedLimit {
+    fn weekly_model_name(&self) -> Option<&str> {
+        if self.kind.as_deref() != Some("weekly_scoped") {
+            return None;
+        }
+        self.scope
+            .as_ref()
+            .and_then(|s| s.model.as_ref())
+            .and_then(|m| m.display_name.as_deref())
+            .filter(|n| !n.is_empty())
+    }
 }
 
 impl UsageFetcher {
@@ -127,27 +170,85 @@ fn fetch_usage() -> UsageData {
     }
 
     match call_api(&token) {
-        Some(resp) => UsageData {
-            plan_name,
-            five_hour: parse_utilization(resp.five_hour.as_ref().and_then(|w| w.utilization)),
-            five_hour_reset: resp
-                .five_hour
-                .as_ref()
-                .and_then(|w| w.resets_at.as_ref())
-                .and_then(|s| format_reset_time(s)),
-            seven_day: parse_utilization(resp.seven_day.as_ref().and_then(|w| w.utilization)),
-            seven_day_reset: resp
-                .seven_day
-                .as_ref()
-                .and_then(|w| w.resets_at.as_ref())
-                .and_then(|s| format_reset_time(s)),
-            api_available: true,
-        },
+        Some(resp) => build_usage(plan_name, &resp),
         None => UsageData {
             plan_name,
             api_available: false,
             ..UsageData::default()
         },
+    }
+}
+
+fn utilization_scale(values: &[f64]) -> f64 {
+    let finite: Vec<f64> = values.iter().copied().filter(|v| v.is_finite()).collect();
+    if !finite.is_empty() && finite.iter().all(|v| *v <= 1.0) {
+        100.0
+    } else {
+        1.0
+    }
+}
+
+fn window_pct(window: Option<&WindowData>, scale: f64) -> Option<u8> {
+    parse_utilization(window.and_then(|w| w.utilization).map(|v| v * scale))
+}
+
+fn window_reset(window: Option<&WindowData>) -> Option<String> {
+    window
+        .and_then(|w| w.resets_at.as_deref())
+        .and_then(format_reset_time)
+}
+
+fn build_usage(plan_name: Option<String>, resp: &ApiResponse) -> UsageData {
+    let raw: Vec<f64> = [
+        &resp.five_hour,
+        &resp.seven_day,
+        &resp.seven_day_opus,
+        &resp.seven_day_sonnet,
+    ]
+    .iter()
+    .filter_map(|w| w.as_ref().and_then(|w| w.utilization))
+    .chain(resp.limits.iter().filter_map(|l| l.percent))
+    .collect();
+    let scale = utilization_scale(&raw);
+
+    let mut weekly_models: Vec<UsageWindow> = resp
+        .limits
+        .iter()
+        .filter_map(|limit| {
+            let name = limit.weekly_model_name()?;
+            let pct = parse_utilization(limit.percent.map(|v| v * scale))?;
+            Some(UsageWindow {
+                label: format!("Current week ({})", name),
+                pct,
+                reset: limit.resets_at.as_deref().and_then(format_reset_time),
+            })
+        })
+        .collect();
+    for (window, name) in [
+        (&resp.seven_day_opus, "Opus"),
+        (&resp.seven_day_sonnet, "Sonnet"),
+    ] {
+        let label = format!("Current week ({})", name);
+        if weekly_models.iter().any(|w| w.label == label) {
+            continue;
+        }
+        if let Some(pct) = window_pct(window.as_ref(), scale) {
+            weekly_models.push(UsageWindow {
+                label,
+                pct,
+                reset: window_reset(window.as_ref()),
+            });
+        }
+    }
+
+    UsageData {
+        plan_name,
+        five_hour: window_pct(resp.five_hour.as_ref(), scale),
+        five_hour_reset: window_reset(resp.five_hour.as_ref()),
+        seven_day: window_pct(resp.seven_day.as_ref(), scale),
+        seven_day_reset: window_reset(resp.seven_day.as_ref()),
+        weekly_models,
+        api_available: true,
     }
 }
 
@@ -262,6 +363,62 @@ mod tests {
         );
         assert_eq!(plan_from_subscription(""), None);
         assert_eq!(plan_from_subscription("api_key"), None);
+    }
+
+    #[test]
+    fn test_build_usage_with_scoped_fable_limit_and_percent_scale() {
+        let body = r#"{
+            "five_hour": {"utilization": 27.0, "resets_at": "2026-09-08T15:00:00Z"},
+            "seven_day": {"utilization": 41.5, "resets_at": "2026-09-12T09:00:00Z"},
+            "seven_day_sonnet": {"utilization": 12.0, "resets_at": "2026-09-12T09:00:00Z"},
+            "seven_day_opus": null,
+            "limits": [
+                {"kind": "weekly_scoped", "group": "weekly", "percent": 63.2,
+                 "resets_at": "2026-09-12T09:00:00Z", "scope": {"model": {"display_name": "Fable"}}},
+                {"kind": "other", "percent": 5.0}
+            ]
+        }"#;
+        let resp: ApiResponse = serde_json::from_str(body).unwrap();
+        let usage = build_usage(Some("Max".into()), &resp);
+        assert!(usage.api_available);
+        assert_eq!(usage.five_hour, Some(27));
+        assert_eq!(usage.seven_day, Some(41));
+        let labels: Vec<&str> = usage
+            .weekly_models
+            .iter()
+            .map(|w| w.label.as_str())
+            .collect();
+        assert_eq!(
+            labels,
+            vec!["Current week (Fable)", "Current week (Sonnet)"]
+        );
+        assert_eq!(usage.weekly_models[0].pct, 63);
+        assert_eq!(usage.weekly_models[1].pct, 12);
+        assert!(usage.weekly_models[0].reset.is_some());
+    }
+
+    #[test]
+    fn test_build_usage_scales_fractions_to_percent() {
+        let body = r#"{
+            "five_hour": {"utilization": 0.27, "resets_at": null},
+            "seven_day": {"utilization": 0.9},
+            "limits": [{"kind": "weekly_scoped", "percent": 0.5, "scope": {"model": {"display_name": "Fable"}}}]
+        }"#;
+        let resp: ApiResponse = serde_json::from_str(body).unwrap();
+        let usage = build_usage(None, &resp);
+        assert_eq!(usage.five_hour, Some(27));
+        assert_eq!(usage.seven_day, Some(90));
+        assert_eq!(usage.weekly_models[0].pct, 50);
+    }
+
+    #[test]
+    fn test_build_usage_without_extras() {
+        let resp: ApiResponse =
+            serde_json::from_str(r#"{"five_hour": {"utilization": 3.0}}"#).unwrap();
+        let usage = build_usage(None, &resp);
+        assert_eq!(usage.five_hour, Some(3));
+        assert_eq!(usage.seven_day, None);
+        assert!(usage.weekly_models.is_empty());
     }
 
     #[test]

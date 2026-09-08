@@ -16,7 +16,7 @@ const TITLE_MAX: usize = 48;
 pub fn render_session_list(f: &mut Frame, app: &App, area: Rect) {
     let show_command_bar = app.is_filtering() || app.attached_session_id().is_some();
     let command_bar_height = if show_command_bar { 1 } else { 0 };
-    let usage_height = if app.usage().api_available { 12 } else { 6 };
+    let usage_height = crate::ui::usage_panel::usage_panel_height(app.usage());
 
     let chunks = Layout::vertical([
         Constraint::Length(3),

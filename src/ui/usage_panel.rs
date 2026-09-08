@@ -8,6 +8,21 @@ use crate::session::Session;
 use crate::ui::session_list::format_tokens;
 use crate::usage::UsageData;
 
+const PANEL_BORDER_ROWS: u16 = 2;
+const SESSION_SUMMARY_ROWS: u16 = 3;
+const ROWS_PER_BAR: u16 = 3;
+
+pub fn usage_panel_height(usage: &UsageData) -> u16 {
+    let bars = if usage.api_available {
+        usage.five_hour.is_some() as u16
+            + usage.seven_day.is_some() as u16
+            + usage.weekly_models.len() as u16
+    } else {
+        0
+    };
+    PANEL_BORDER_ROWS + SESSION_SUMMARY_ROWS + bars * ROWS_PER_BAR + 1
+}
+
 pub fn render_usage_panel(f: &mut Frame, usage: &UsageData, sessions: &[&Session], area: Rect) {
     let block = Block::default()
         .borders(Borders::ALL)
@@ -38,6 +53,14 @@ pub fn render_usage_panel(f: &mut Frame, usage: &UsageData, sessions: &[&Session
             lines.push(make_title("Current week (all models)"));
             lines.push(make_bar(pct, bar_width));
             if let Some(ref reset) = usage.seven_day_reset {
+                lines.push(make_reset(reset));
+            }
+        }
+
+        for window in &usage.weekly_models {
+            lines.push(make_title(&window.label));
+            lines.push(make_bar(window.pct, bar_width));
+            if let Some(ref reset) = window.reset {
                 lines.push(make_reset(reset));
             }
         }
