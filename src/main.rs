@@ -1,7 +1,9 @@
+mod actions;
 mod app;
 mod config;
 mod input;
 mod log;
+mod render;
 mod session;
 mod store;
 mod terminal;
@@ -9,7 +11,7 @@ mod ui;
 mod usage;
 
 use anyhow::Result;
-use app::{App, ViewMode};
+use app::App;
 use crossterm::event;
 use crossterm::event::{DisableMouseCapture, EnableMouseCapture};
 use crossterm::terminal::{
@@ -19,14 +21,15 @@ use crossterm::ExecutableCommand;
 use input::{handle_event, Action};
 use ratatui::layout::Rect;
 use ratatui::prelude::CrosstermBackend;
-use ratatui::{Frame, Terminal};
+use ratatui::Terminal;
 use session::SessionManager;
 use std::io::{stdout, IsTerminal};
-use std::path::PathBuf;
 use std::time::{Duration, Instant};
-use terminal::kill_process;
 
-type Term = Terminal<CrosstermBackend<std::io::Stdout>>;
+use actions::{process_action, resize_panes};
+use app::ViewMode;
+
+pub type Term = Terminal<CrosstermBackend<std::io::Stdout>>;
 
 const REFRESH_INTERVAL: Duration = Duration::from_secs(5);
 const POLL_INTERVAL: Duration = Duration::from_millis(16);
@@ -95,10 +98,6 @@ fn main() -> Result<()> {
     result
 }
 
-fn is_terminal_view(mode: &ViewMode) -> bool {
-    matches!(mode, ViewMode::Terminal | ViewMode::TerminalQSwitcher)
-}
-
 fn run_loop(terminal: &mut Term, app: &mut App) -> Result<()> {
     let mut last_refresh = Instant::now();
     let mut needs_draw = true;
@@ -108,7 +107,7 @@ fn run_loop(terminal: &mut Term, app: &mut App) -> Result<()> {
         needs_draw |= poll_background(app);
 
         if needs_draw {
-            terminal.draw(|f| draw_frame(f, app))?;
+            terminal.draw(|f| render::draw_frame(f, app))?;
             needs_draw = false;
         }
 
@@ -119,8 +118,7 @@ fn run_loop(terminal: &mut Term, app: &mut App) -> Result<()> {
             }
         }
 
-        let needs_native_mouse =
-            is_terminal_view(app.view_mode()) || *app.view_mode() == ViewMode::Log;
+        let needs_native_mouse = app.in_terminal_context() || *app.view_mode() == ViewMode::Log;
         if needs_native_mouse && mouse_captured {
             stdout().execute(DisableMouseCapture)?;
             mouse_captured = false;
@@ -129,7 +127,7 @@ fn run_loop(terminal: &mut Term, app: &mut App) -> Result<()> {
             mouse_captured = true;
         }
 
-        let viewing_active = is_terminal_view(app.view_mode());
+        let viewing_active = app.in_terminal_context();
         let notified = app
             .terminal_manager_mut()
             .check_and_forward_notifications(viewing_active)
@@ -159,7 +157,7 @@ fn run_loop(terminal: &mut Term, app: &mut App) -> Result<()> {
 fn poll_background(app: &mut App) -> bool {
     let mut dirty = false;
 
-    if is_terminal_view(app.view_mode()) {
+    if app.in_terminal_context() {
         if let Some(term) = app.terminal_manager().active_terminal() {
             dirty |= term.take_dirty();
         }
@@ -188,7 +186,7 @@ fn handle_events(terminal: &Term, app: &mut App) -> Result<bool> {
         let ev = event::read()?;
 
         if let event::Event::Resize(cols, rows) = ev {
-            handle_resize(app, cols, rows);
+            resize_panes(app, Rect::new(0, 0, cols, rows));
             needs_draw = true;
         }
 
@@ -218,443 +216,4 @@ fn handle_events(terminal: &Term, app: &mut App) -> Result<bool> {
         }
     }
     Ok(needs_draw)
-}
-
-fn handle_resize(app: &mut App, cols: u16, rows: u16) {
-    let area = Rect::new(0, 0, cols, rows);
-    resize_panes(app, area);
-}
-
-fn resize_panes(app: &App, area: Rect) {
-    let panes = app.panes();
-    if is_terminal_view(app.view_mode()) {
-        let (pty_rows, pty_cols) = ui::pty_size(area, panes);
-        let _ = app.terminal_manager().resize_active(pty_rows, pty_cols);
-    }
-    if app.is_side_panel_open() {
-        let (panel_rows, panel_cols) = ui::shell_pty_size(area, panes);
-        if let Some(st) = app.side_terminal() {
-            let _ = st.resize(panel_rows, panel_cols);
-        }
-    }
-}
-
-fn draw_frame(f: &mut Frame, app: &App) {
-    let full_area = f.area();
-    let areas = ui::split_areas(full_area, app.panes());
-    let area = areas.main;
-
-    match app.view_mode() {
-        ViewMode::List | ViewMode::Filter => ui::render_session_list(f, app, area),
-        ViewMode::Detail => render_detail_view(app, f, area),
-        ViewMode::SessionFilePicker => {
-            render_detail_view(app, f, area);
-            ui::render_session_file_picker(f, &app.session_files, app.session_file_cursor, area);
-        }
-        ViewMode::QSwitcher => {
-            ui::render_session_list(f, app, area);
-            ui::render_qswitcher(f, app, area);
-        }
-        ViewMode::Help => {
-            ui::render_session_list(f, app, area);
-            ui::render_help(f, area);
-        }
-        ViewMode::Terminal => render_terminal_view(app, f, area),
-        ViewMode::TerminalQSwitcher => {
-            render_terminal_view(app, f, area);
-            ui::render_qswitcher(f, app, area);
-        }
-        ViewMode::Command => {
-            ui::render_session_list(f, app, area);
-            ui::render_command_input(f, app.command_input(), area);
-        }
-        ViewMode::ConfirmKill => {
-            ui::render_session_list(f, app, area);
-            let name = app
-                .confirm_kill_session_id
-                .as_ref()
-                .and_then(|id| app.find_session(id))
-                .map(|s| s.project_name.clone())
-                .unwrap_or_else(|| "unknown".to_string());
-            ui::render_confirm_kill(f, &name, area);
-        }
-        ViewMode::ConfirmQuit => {
-            ui::render_session_list(f, app, area);
-            let active = app.active_attached_sessions();
-            ui::render_confirm_quit(f, &active, area);
-        }
-        ViewMode::Log => {
-            let entries = log::entries();
-            ui::render_log_panel(f, &entries, app.log_scroll(), area);
-        }
-    }
-
-    if let (Some(side_area), Some(st)) = (areas.shell_pane, app.side_terminal()) {
-        ui::render_side_panel(f, st, app.is_side_panel_focused(), side_area);
-    }
-}
-
-fn render_detail_view(app: &App, f: &mut Frame, area: Rect) {
-    if let Some(session) = app.selected_session() {
-        ui::render_session_detail(
-            f,
-            session,
-            app.detail_items(),
-            app.detail_cursor(),
-            app.detail_preview(),
-            app.detail_preview_scroll(),
-            area,
-        );
-    }
-}
-
-fn render_terminal_view(app: &App, f: &mut Frame, area: Rect) {
-    if let Some(term) = app.terminal_manager().active_terminal() {
-        let guard = term.lock_parser();
-        let screen = guard.screen();
-        let scrolled = screen.scrollback() > 0;
-        let exited = term.is_exited();
-        let tabs = app.terminal_manager().tab_info();
-        let pane_key = app.config.keys.session_pane.label();
-        let data = ui::TerminalViewData {
-            tabs: &tabs,
-            exited,
-            scrolled,
-            usage: app.usage(),
-            pane_key: &pane_key,
-        };
-        ui::render_terminal(f, screen, &data, area);
-    }
-}
-
-fn screen_area(terminal: &Term) -> Result<Rect> {
-    let size = terminal.size()?;
-    Ok(Rect::new(0, 0, size.width, size.height))
-}
-
-fn pty_dims(terminal: &Term, app: &App) -> Result<(u16, u16)> {
-    Ok(ui::pty_size(screen_area(terminal)?, app.panes()))
-}
-
-fn process_action(app: &mut App, action: Action, terminal: &Term) -> Result<()> {
-    match action {
-        Action::Quit => {
-            if app.active_attached_sessions().is_empty() {
-                app.quit();
-            } else {
-                app.set_view_mode(ViewMode::ConfirmQuit);
-            }
-        }
-        Action::ConfirmQuit => app.quit(),
-        Action::CancelQuit => app.set_view_mode(ViewMode::List),
-        Action::KillSession => {
-            if let Some(id) = app.selected_session().map(|s| s.id.clone()) {
-                app.confirm_kill_session_id = Some(id);
-                app.set_view_mode(ViewMode::ConfirmKill);
-            }
-        }
-        Action::ConfirmKill => {
-            if let Some(session_id) = app.confirm_kill_session_id.take() {
-                discard_session(app, &session_id);
-            }
-            app.set_view_mode(ViewMode::List);
-            app.request_refresh();
-        }
-        Action::ForkSession => fork_selected(app, terminal)?,
-        Action::CancelKill => {
-            app.confirm_kill_session_id = None;
-            app.set_view_mode(ViewMode::List);
-        }
-        Action::OpenSessionFiles => open_session_files(app),
-        Action::SessionFileUp => {
-            app.session_file_cursor = app.session_file_cursor.saturating_sub(1);
-        }
-        Action::SessionFileDown => {
-            if app.session_file_cursor + 1 < app.session_files.len() {
-                app.session_file_cursor += 1;
-            }
-        }
-        Action::SessionFileSelect => select_session_file(app, terminal)?,
-        Action::SessionFileClose => {
-            app.session_files.clear();
-            app.set_view_mode(ViewMode::Detail);
-        }
-        Action::UnfollowSession => {
-            if let Some(id) = app.selected_session().map(|s| s.id.clone()) {
-                app.hide_session(&id);
-            }
-        }
-        Action::ToggleExpand => app.toggle_expand_selected(),
-        Action::ExpandRow => match app.view_mode() {
-            ViewMode::QSwitcher | ViewMode::TerminalQSwitcher => app.quick_switch_expand(),
-            _ => app.expand_selected(),
-        },
-        Action::CollapseRow => match app.view_mode() {
-            ViewMode::QSwitcher | ViewMode::TerminalQSwitcher => app.quick_switch_collapse(),
-            _ => app.collapse_selected(),
-        },
-        Action::ToggleSessionPane => {}
-        Action::ResumeSessionPicker => {
-            if let Some(cwd) = app.selected_session().map(|s| s.cwd.clone()) {
-                let (rows, cols) = pty_dims(terminal, app)?;
-                let _ = app
-                    .terminal_manager_mut()
-                    .attach_resume_picker(&cwd, rows, cols);
-                app.set_view_mode(ViewMode::Terminal);
-            }
-        }
-        Action::MoveUp => app.move_up(),
-        Action::MoveDown => app.move_down(),
-        Action::MoveToTop => app.move_to_top(),
-        Action::MoveToBottom => app.move_to_bottom(),
-        Action::Select => match app.view_mode() {
-            ViewMode::List => attach_selected(app, terminal)?,
-            ViewMode::Detail => app.detail_open_preview(),
-            _ => {}
-        },
-        Action::AttachSession => attach_selected(app, terminal)?,
-        Action::AttachByIndex(idx) => attach_by_index(app, idx, terminal)?,
-        Action::ToggleQSwitcher => match app.view_mode() {
-            ViewMode::QSwitcher => app.set_view_mode(ViewMode::List),
-            _ => app.set_view_mode(ViewMode::QSwitcher),
-        },
-        Action::TerminalQSwitcher => app.set_view_mode(ViewMode::TerminalQSwitcher),
-        Action::Detach => {
-            if app.terminal_manager().active_is_exited() {
-                app.terminal_manager_mut().remove_active();
-            } else {
-                app.terminal_manager_mut().detach();
-            }
-            app.set_view_mode(ViewMode::List);
-        }
-        Action::TerminalInput(bytes) => {
-            let _ = app.terminal_manager_mut().write_to_active(&bytes);
-        }
-        Action::CycleNextSession => app.terminal_manager_mut().cycle_next(),
-        Action::CyclePrevSession => app.terminal_manager_mut().cycle_prev(),
-        Action::ScrollUp(n) => {
-            if let Some(term) = app.terminal_manager().active_terminal() {
-                term.scroll_up(n);
-            }
-        }
-        Action::ScrollDown(n) => {
-            if let Some(term) = app.terminal_manager().active_terminal() {
-                term.scroll_down(n);
-            }
-        }
-        Action::Back => handle_back(app),
-        Action::ShowDetail => {
-            if app.selected_session().is_some() {
-                app.set_view_mode(ViewMode::Detail);
-            }
-        }
-        Action::ShowHelp => {
-            if *app.view_mode() == ViewMode::Help {
-                app.set_view_mode(ViewMode::List);
-            } else {
-                app.set_view_mode(ViewMode::Help);
-            }
-        }
-        Action::ToggleFilter => app.set_view_mode(ViewMode::Filter),
-        Action::FilterInput(c) => app.filter_push(c),
-        Action::FilterBackspace => app.filter_pop(),
-        Action::FilterSubmit => app.set_view_mode(ViewMode::List),
-        Action::CycleSort => app.cycle_sort(),
-        Action::Refresh => app.request_refresh(),
-        Action::LaunchNew => app.set_view_mode(ViewMode::Command),
-        Action::CommandInput(c) => app.command_push(c),
-        Action::CommandBackspace => app.command_pop(),
-        Action::CommandSubmit => submit_new_session(app, terminal)?,
-        Action::CommandTab => app.command_tab_complete(),
-        Action::CommandCancel => {
-            app.command_take();
-            app.set_view_mode(ViewMode::List);
-        }
-        Action::ToggleLog => {
-            if *app.view_mode() == ViewMode::Log {
-                app.set_view_mode(ViewMode::List);
-            } else {
-                app.log_scroll_to_bottom();
-                app.set_view_mode(ViewMode::Log);
-            }
-        }
-        Action::ClearLog => app.clear_log(),
-        Action::ToggleSideTerminal => {
-            let area = screen_area(terminal)?;
-            if app.is_side_panel_open() {
-                app.close_side_panel();
-            } else {
-                let (panel_rows, panel_cols) = ui::shell_pty_size(area, app.panes());
-                app.open_side_panel(panel_rows, panel_cols);
-            }
-            resize_panes(app, area);
-        }
-        Action::SideTerminalInput(bytes) => {
-            if let Some(st) = app.side_terminal_mut() {
-                let _ = st.write_input(&bytes);
-            }
-        }
-        Action::None => {}
-    }
-    Ok(())
-}
-
-fn handle_back(app: &mut App) {
-    match app.view_mode() {
-        ViewMode::Detail => {
-            if app.detail_preview().is_some() {
-                app.detail_close_preview();
-            } else {
-                app.set_view_mode(ViewMode::List);
-            }
-        }
-        ViewMode::Log | ViewMode::Help | ViewMode::QSwitcher | ViewMode::Filter => {
-            app.set_view_mode(ViewMode::List)
-        }
-        ViewMode::TerminalQSwitcher => app.set_view_mode(ViewMode::Terminal),
-        ViewMode::List if app.has_active_filter() => app.clear_filter(),
-        _ => {}
-    }
-}
-
-fn open_session_files(app: &mut App) {
-    if *app.view_mode() != ViewMode::Detail {
-        return;
-    }
-    let Some((cwd, id)) = app
-        .selected_session()
-        .map(|s| (s.cwd.clone(), s.id.clone()))
-    else {
-        return;
-    };
-    let files = session::list_session_files(&cwd, &id);
-    if files.is_empty() {
-        return;
-    }
-    let current_idx = files.iter().position(|f| f.is_current).unwrap_or(0);
-    app.session_files = files;
-    app.session_file_cursor = current_idx;
-    app.set_view_mode(ViewMode::SessionFilePicker);
-}
-
-fn select_session_file(app: &mut App, terminal: &Term) -> Result<()> {
-    let picked = app
-        .session_files
-        .get(app.session_file_cursor)
-        .map(|f| f.session_id.clone());
-    let selected = app.selected_session().map(|s| {
-        (
-            s.id.clone(),
-            s.project_name.clone(),
-            s.cwd.clone(),
-            s.takeover_pid(),
-        )
-    });
-    if let (Some(session_id), Some((selected_id, name, cwd, pid))) = (picked, selected) {
-        let takeover = pid.filter(|_| selected_id == session_id);
-        let (rows, cols) = pty_dims(terminal, app)?;
-        app.terminal_manager_mut()
-            .attach(&session_id, &name, &cwd, takeover, rows, cols)?;
-        app.set_view_mode(ViewMode::Terminal);
-    }
-    app.session_files.clear();
-    Ok(())
-}
-
-fn submit_new_session(app: &mut App, terminal: &Term) -> Result<()> {
-    let input = app.command_take();
-    let path = input.trim().to_string();
-    if path.is_empty() {
-        app.set_view_mode(ViewMode::List);
-        return Ok(());
-    }
-    let expanded = app::expand_home(&path);
-    let cwd = std::fs::canonicalize(&expanded).unwrap_or_else(|_| PathBuf::from(&expanded));
-    if cwd.is_dir() {
-        let (rows, cols) = pty_dims(terminal, app)?;
-        let name = app.generate_session_name();
-        let _ = app
-            .terminal_manager_mut()
-            .attach_new(&cwd, &name, rows, cols);
-        app.set_view_mode(ViewMode::Terminal);
-    } else {
-        tlog!(warn, "new session: not a directory: {}", cwd.display());
-        app.set_view_mode(ViewMode::List);
-    }
-    Ok(())
-}
-
-fn discard_session(app: &mut App, session_id: &str) {
-    let discarded = app.terminal_manager_mut().discard(session_id);
-    if !discarded {
-        if let Some(pid) = app.find_session(session_id).and_then(|s| s.takeover_pid()) {
-            kill_process(pid);
-        }
-    }
-    app.hide_session(session_id);
-}
-
-fn fork_selected(app: &mut App, terminal: &Term) -> Result<()> {
-    let Some((source_id, cwd)) = app
-        .selected_session()
-        .map(|s| (s.id.clone(), s.cwd.clone()))
-    else {
-        return Ok(());
-    };
-    let (rows, cols) = pty_dims(terminal, app)?;
-    let name = app.generate_session_name();
-    app.terminal_manager_mut()
-        .attach_fork(&cwd, &source_id, &name, rows, cols)?;
-    app.set_view_mode(ViewMode::Terminal);
-    Ok(())
-}
-
-fn target_of(session: &session::Session) -> (String, String, PathBuf, Option<u32>) {
-    (
-        session.id.clone(),
-        session.project_name.clone(),
-        session.cwd.clone(),
-        session.takeover_pid(),
-    )
-}
-
-fn in_quick_switch(app: &App) -> bool {
-    matches!(
-        app.view_mode(),
-        ViewMode::QSwitcher | ViewMode::TerminalQSwitcher
-    )
-}
-
-fn attach_selected(app: &mut App, terminal: &Term) -> Result<()> {
-    let target = if in_quick_switch(app) {
-        app.quick_switch_selected_session().map(target_of)
-    } else {
-        app.selected_session().map(target_of)
-    };
-    attach_target(app, target, terminal)
-}
-
-fn attach_by_index(app: &mut App, idx: usize, terminal: &Term) -> Result<()> {
-    let target = if in_quick_switch(app) {
-        app.quick_switch_nth_project_session(idx).map(target_of)
-    } else {
-        app.nth_project_session(idx).map(target_of)
-    };
-    attach_target(app, target, terminal)
-}
-
-fn attach_target(
-    app: &mut App,
-    target: Option<(String, String, PathBuf, Option<u32>)>,
-    terminal: &Term,
-) -> Result<()> {
-    let Some((id, name, cwd, pid)) = target else {
-        return Ok(());
-    };
-    let (rows, cols) = pty_dims(terminal, app)?;
-    app.terminal_manager_mut()
-        .attach(&id, &name, &cwd, pid, rows, cols)?;
-    app.set_project_current(&cwd, &id);
-    app.set_view_mode(ViewMode::Terminal);
-    Ok(())
 }

@@ -54,6 +54,23 @@ pub enum Action {
     SideTerminalInput(Vec<u8>),
     ToggleSessionPane,
     ForkSession,
+    RenameSession,
+    MessageSession,
+    CoordinateSession,
+    OpenUnhideDialog,
+    UnhideSelect,
+    UnhideClose,
+    NameChar(char),
+    NameBackspace,
+    NameSubmit,
+    NameCancel,
+    MessageChar(char),
+    MessageBackspace,
+    MessageSubmit,
+    MessageCancel,
+    TakeoverConfirm,
+    TakeoverFork,
+    TakeoverCancel,
     ToggleExpand,
     ExpandRow,
     CollapseRow,
@@ -76,6 +93,7 @@ fn handle_mouse(kind: MouseEventKind, mode: &ViewMode) -> Action {
             | ViewMode::Filter
             | ViewMode::QSwitcher
             | ViewMode::Detail
+            | ViewMode::SessionPane
             | ViewMode::Log => Action::MoveUp,
             _ => Action::None,
         },
@@ -85,6 +103,7 @@ fn handle_mouse(kind: MouseEventKind, mode: &ViewMode) -> Action {
             | ViewMode::Filter
             | ViewMode::QSwitcher
             | ViewMode::Detail
+            | ViewMode::SessionPane
             | ViewMode::Log => Action::MoveDown,
             _ => Action::None,
         },
@@ -108,7 +127,10 @@ fn handle_key(key: &KeyEvent, mode: &ViewMode, side_focused: bool, keys: &Keys) 
         return Action::SideTerminalInput(key_event_to_bytes(key));
     }
 
-    let in_terminal = matches!(mode, ViewMode::Terminal | ViewMode::TerminalQSwitcher);
+    let in_terminal = matches!(
+        mode,
+        ViewMode::Terminal | ViewMode::TerminalQSwitcher | ViewMode::SessionPane
+    );
     if !in_terminal {
         if is_ctrl(key, 'c') {
             return Action::Quit;
@@ -131,7 +153,80 @@ fn handle_key(key: &KeyEvent, mode: &ViewMode, side_focused: bool, keys: &Keys) 
         ViewMode::ConfirmKill => handle_confirm_kill_key(key),
         ViewMode::SessionFilePicker => handle_session_file_picker_key(key),
         ViewMode::Log => handle_log_key(key),
+        ViewMode::SessionPane => handle_session_pane_key(key),
+        ViewMode::NameInput => handle_name_input_key(key),
+        ViewMode::MessageInput => handle_message_input_key(key),
+        ViewMode::ConfirmTakeover => handle_takeover_key(key),
+        ViewMode::UnhideDialog => handle_unhide_key(key),
         ViewMode::List | ViewMode::Detail | ViewMode::Help => handle_normal_key(key),
+    }
+}
+
+fn handle_session_pane_key(key: &KeyEvent) -> Action {
+    if key.modifiers.contains(KeyModifiers::CONTROL) {
+        match key.code {
+            KeyCode::Char('d') => return Action::Detach,
+            KeyCode::Char(' ') => return Action::TerminalQSwitcher,
+            KeyCode::Char('n') => return Action::CycleNextSession,
+            KeyCode::Char('p') => return Action::CyclePrevSession,
+            _ => return Action::None,
+        }
+    }
+    match key.code {
+        KeyCode::Char('j') | KeyCode::Down => Action::MoveDown,
+        KeyCode::Char('k') | KeyCode::Up => Action::MoveUp,
+        KeyCode::Enter => Action::Select,
+        KeyCode::Char(c @ '1'..='9') => Action::AttachByIndex(digit_index(c)),
+        KeyCode::Char('n') => Action::LaunchNew,
+        KeyCode::Char('f') => Action::ForkSession,
+        KeyCode::Char('x') => Action::KillSession,
+        KeyCode::Char('u') => Action::UnfollowSession,
+        KeyCode::Char('r') => Action::RenameSession,
+        KeyCode::Char('m') => Action::MessageSession,
+        KeyCode::Char('M') => Action::CoordinateSession,
+        KeyCode::Esc | KeyCode::Char('q') => Action::Back,
+        _ => Action::None,
+    }
+}
+
+fn handle_name_input_key(key: &KeyEvent) -> Action {
+    match key.code {
+        KeyCode::Esc => Action::NameCancel,
+        KeyCode::Enter => Action::NameSubmit,
+        KeyCode::Backspace => Action::NameBackspace,
+        KeyCode::Char(c) if !key.modifiers.contains(KeyModifiers::CONTROL) => Action::NameChar(c),
+        _ => Action::None,
+    }
+}
+
+fn handle_message_input_key(key: &KeyEvent) -> Action {
+    match key.code {
+        KeyCode::Esc => Action::MessageCancel,
+        KeyCode::Enter => Action::MessageSubmit,
+        KeyCode::Backspace => Action::MessageBackspace,
+        KeyCode::Char(c) if !key.modifiers.contains(KeyModifiers::CONTROL) => {
+            Action::MessageChar(c)
+        }
+        _ => Action::None,
+    }
+}
+
+fn handle_takeover_key(key: &KeyEvent) -> Action {
+    match key.code {
+        KeyCode::Char('t') => Action::TakeoverConfirm,
+        KeyCode::Char('f') => Action::TakeoverFork,
+        KeyCode::Esc | KeyCode::Char('n') | KeyCode::Char('q') => Action::TakeoverCancel,
+        _ => Action::None,
+    }
+}
+
+fn handle_unhide_key(key: &KeyEvent) -> Action {
+    match key.code {
+        KeyCode::Char('j') | KeyCode::Down => Action::MoveDown,
+        KeyCode::Char('k') | KeyCode::Up => Action::MoveUp,
+        KeyCode::Enter => Action::UnhideSelect,
+        KeyCode::Esc | KeyCode::Char('q') => Action::UnhideClose,
+        _ => Action::None,
     }
 }
 
@@ -156,6 +251,7 @@ fn handle_normal_key(key: &KeyEvent) -> Action {
         KeyCode::Char('x') => Action::KillSession,
         KeyCode::Char('L') => Action::ToggleLog,
         KeyCode::Char('F') => Action::ForkSession,
+        KeyCode::Char('U') => Action::OpenUnhideDialog,
         KeyCode::Char(' ') => Action::ToggleExpand,
         KeyCode::Char('l') | KeyCode::Right => Action::ExpandRow,
         KeyCode::Char('h') | KeyCode::Left => Action::CollapseRow,
@@ -389,6 +485,104 @@ mod tests {
         assert_eq!(
             handle_key(&ev, &ViewMode::Terminal, false, &Keys::default()),
             Action::TerminalQSwitcher
+        );
+    }
+
+    #[test]
+    fn test_session_pane_keys() {
+        let keys = Keys::default();
+        let pane = ViewMode::SessionPane;
+        assert_eq!(
+            handle_key(&key(KeyCode::Char('n')), &pane, false, &keys),
+            Action::LaunchNew
+        );
+        assert_eq!(
+            handle_key(&key(KeyCode::Char('f')), &pane, false, &keys),
+            Action::ForkSession
+        );
+        assert_eq!(
+            handle_key(&key(KeyCode::Char('x')), &pane, false, &keys),
+            Action::KillSession
+        );
+        assert_eq!(
+            handle_key(&key(KeyCode::Char('r')), &pane, false, &keys),
+            Action::RenameSession
+        );
+        assert_eq!(
+            handle_key(&key(KeyCode::Char('m')), &pane, false, &keys),
+            Action::MessageSession
+        );
+        assert_eq!(
+            handle_key(&key(KeyCode::Char('M')), &pane, false, &keys),
+            Action::CoordinateSession
+        );
+        assert_eq!(
+            handle_key(&key(KeyCode::Char('3')), &pane, false, &keys),
+            Action::AttachByIndex(2)
+        );
+        assert_eq!(
+            handle_key(&key(KeyCode::Esc), &pane, false, &keys),
+            Action::Back
+        );
+        let ctrl_c = key_with_mod(KeyCode::Char('c'), KeyModifiers::CONTROL);
+        assert_eq!(
+            handle_key(&ctrl_c, &pane, false, &keys),
+            Action::None,
+            "no quit from pane"
+        );
+        let ctrl_d = key_with_mod(KeyCode::Char('d'), KeyModifiers::CONTROL);
+        assert_eq!(handle_key(&ctrl_d, &pane, false, &keys), Action::Detach);
+    }
+
+    #[test]
+    fn test_dialog_keys() {
+        let keys = Keys::default();
+        assert_eq!(
+            handle_key(&key(KeyCode::Char('a')), &ViewMode::NameInput, false, &keys),
+            Action::NameChar('a')
+        );
+        assert_eq!(
+            handle_key(&key(KeyCode::Enter), &ViewMode::NameInput, false, &keys),
+            Action::NameSubmit
+        );
+        assert_eq!(
+            handle_key(
+                &key(KeyCode::Backspace),
+                &ViewMode::MessageInput,
+                false,
+                &keys
+            ),
+            Action::MessageBackspace
+        );
+        assert_eq!(
+            handle_key(
+                &key(KeyCode::Char('t')),
+                &ViewMode::ConfirmTakeover,
+                false,
+                &keys
+            ),
+            Action::TakeoverConfirm
+        );
+        assert_eq!(
+            handle_key(
+                &key(KeyCode::Char('f')),
+                &ViewMode::ConfirmTakeover,
+                false,
+                &keys
+            ),
+            Action::TakeoverFork
+        );
+        assert_eq!(
+            handle_key(&key(KeyCode::Esc), &ViewMode::ConfirmTakeover, false, &keys),
+            Action::TakeoverCancel
+        );
+        assert_eq!(
+            handle_key(&key(KeyCode::Enter), &ViewMode::UnhideDialog, false, &keys),
+            Action::UnhideSelect
+        );
+        assert_eq!(
+            handle_normal_key(&key(KeyCode::Char('U'))),
+            Action::OpenUnhideDialog
         );
     }
 

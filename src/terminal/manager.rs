@@ -278,6 +278,14 @@ impl TerminalManager {
         Ok(())
     }
 
+    pub fn write_to_session(&mut self, session_id: &str, bytes: &[u8]) -> Result<bool> {
+        let Some((ti, si)) = self.locate(session_id) else {
+            return Ok(false);
+        };
+        self.tabs[ti].terminals[si].write_input(bytes)?;
+        Ok(true)
+    }
+
     pub fn resize_active(&self, rows: u16, cols: u16) -> Result<()> {
         if let Some(term) = self.active_terminal() {
             term.resize(rows, cols)?;

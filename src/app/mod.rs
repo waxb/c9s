@@ -1,7 +1,14 @@
+mod dialogs;
 mod list;
+mod pane;
+mod panels;
 mod support;
 
 pub use list::{QuickSwitch, Row};
+pub use pane::{
+    coordinate_prompt, message_payload, rename_payload, MessageInput, NameInput, NamePurpose,
+    PaneRow, TakeoverPrompt, UnhideDialog,
+};
 
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
@@ -11,15 +18,14 @@ use std::time::{Duration, Instant};
 use crate::config::Config;
 use crate::session::config::{build_config_items, scan_session_config, ConfigItem};
 use crate::session::registry::{RegistryStatus, SessionRegistry};
-use crate::session::{
-    group_projects, names, DiscoveryWorker, Project, Session, SessionFile, SessionStatus,
-};
+use crate::session::{group_projects, names, DiscoveryWorker, Project, Session, SessionFile};
 use crate::store::Store;
-use crate::terminal::{EmbeddedTerminal, TerminalManager};
+use crate::terminal::TerminalManager;
 use crate::ui::Panes;
 use crate::usage::{UsageData, UsageFetcher};
 use anyhow::Result;
 use list::ListState;
+use pane::PaneState;
 
 const CI_CHECK_INTERVAL: Duration = Duration::from_secs(120);
 const REGISTRY_POLL_INTERVAL: Duration = Duration::from_secs(1);
@@ -40,6 +46,24 @@ pub enum ViewMode {
     ConfirmKill,
     SessionFilePicker,
     Log,
+    SessionPane,
+    NameInput,
+    MessageInput,
+    ConfirmTakeover,
+    UnhideDialog,
+}
+
+impl ViewMode {
+    pub fn is_dialog(&self) -> bool {
+        matches!(
+            self,
+            ViewMode::ConfirmKill
+                | ViewMode::NameInput
+                | ViewMode::MessageInput
+                | ViewMode::ConfirmTakeover
+                | ViewMode::UnhideDialog
+        )
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -80,6 +104,12 @@ pub struct App {
     pub confirm_kill_session_id: Option<String>,
     pub session_files: Vec<SessionFile>,
     pub session_file_cursor: usize,
+    pane: PaneState,
+    name_input: Option<NameInput>,
+    message_input: Option<MessageInput>,
+    takeover: Option<TakeoverPrompt>,
+    unhide: Option<UnhideDialog>,
+    dialog_return: ViewMode,
 }
 
 impl App {
@@ -120,6 +150,12 @@ impl App {
             confirm_kill_session_id: None,
             session_files: Vec::new(),
             session_file_cursor: 0,
+            pane: PaneState::default(),
+            name_input: None,
+            message_input: None,
+            takeover: None,
+            unhide: None,
+            dialog_return: ViewMode::List,
         };
 
         if let Some(sessions) = app.discovery.wait_first(INITIAL_SCAN_TIMEOUT) {
@@ -350,6 +386,12 @@ impl App {
     }
 
     pub fn set_view_mode(&mut self, mode: ViewMode) {
+        if mode != ViewMode::UnhideDialog {
+            self.unhide = None;
+        }
+        if mode == ViewMode::SessionPane {
+            self.sync_pane_cursor();
+        }
         if matches!(mode, ViewMode::QSwitcher | ViewMode::TerminalQSwitcher)
             && !matches!(
                 self.view_mode,
@@ -373,42 +415,6 @@ impl App {
         self.view_mode = mode;
     }
 
-    pub fn detail_items(&self) -> &[ConfigItem] {
-        &self.detail_items
-    }
-
-    pub fn detail_cursor(&self) -> usize {
-        self.detail_cursor
-    }
-
-    pub fn detail_preview(&self) -> Option<&(String, String)> {
-        self.detail_preview.as_ref()
-    }
-
-    pub fn detail_preview_scroll(&self) -> usize {
-        self.detail_preview_scroll
-    }
-
-    pub fn detail_open_preview(&mut self) {
-        if let Some(item) = self.detail_items.get(self.detail_cursor) {
-            if let Some(ref path) = item.path {
-                let name = path
-                    .file_name()
-                    .map(|n| n.to_string_lossy().to_string())
-                    .unwrap_or_default();
-                let content = std::fs::read_to_string(path)
-                    .unwrap_or_else(|e| format!("(error reading file: {})", e));
-                self.detail_preview = Some((name, content));
-                self.detail_preview_scroll = 0;
-            }
-        }
-    }
-
-    pub fn detail_close_preview(&mut self) {
-        self.detail_preview = None;
-        self.detail_preview_scroll = 0;
-    }
-
     pub fn sort_label(&self) -> &str {
         self.list.sort_column.label()
     }
@@ -429,6 +435,12 @@ impl App {
             }
             ViewMode::Log => self.log_scroll_up(),
             ViewMode::QSwitcher | ViewMode::TerminalQSwitcher => self.qswitch.move_up(),
+            ViewMode::SessionPane => self.pane.move_up(),
+            ViewMode::UnhideDialog => {
+                if let Some(dialog) = self.unhide.as_mut() {
+                    dialog.cursor = dialog.cursor.saturating_sub(1);
+                }
+            }
             _ => self.list.move_up(),
         }
     }
@@ -445,6 +457,22 @@ impl App {
             ViewMode::Log => self.log_scroll_down(),
             ViewMode::QSwitcher | ViewMode::TerminalQSwitcher => {
                 self.qswitch.move_down(&self.list, &self.projects)
+            }
+            ViewMode::SessionPane => {
+                let len = self.pane_rows().len();
+                self.pane.move_down(len);
+            }
+            ViewMode::UnhideDialog => {
+                let len = self
+                    .unhide
+                    .as_ref()
+                    .map(|d| self.hidden_sessions(&d.root).len())
+                    .unwrap_or(0);
+                if let Some(dialog) = self.unhide.as_mut() {
+                    if dialog.cursor + 1 < len {
+                        dialog.cursor += 1;
+                    }
+                }
             }
             _ => self.list.move_down(),
         }
@@ -532,7 +560,7 @@ impl App {
 
     pub fn panes(&self) -> Panes {
         Panes {
-            session: false,
+            session: self.pane.open && self.in_terminal_context(),
             shell: self.is_side_panel_open(),
         }
     }
@@ -584,105 +612,6 @@ impl App {
     pub fn command_tab_complete(&mut self) {
         if let Some(completed) = support::complete_directory(&self.command_input) {
             self.command_input = completed;
-        }
-    }
-
-    pub fn log_scroll(&self) -> usize {
-        self.log_scroll
-    }
-
-    pub fn log_scroll_up(&mut self) {
-        self.log_scroll = self.log_scroll.saturating_sub(1);
-    }
-
-    pub fn log_scroll_down(&mut self) {
-        self.log_scroll += 1;
-    }
-
-    pub fn log_scroll_to_top(&mut self) {
-        self.log_scroll = 0;
-    }
-
-    pub fn log_scroll_to_bottom(&mut self) {
-        let count = crate::log::entry_count();
-        self.log_scroll = count.saturating_sub(1);
-    }
-
-    pub fn clear_log(&mut self) {
-        crate::log::clear();
-        self.log_scroll = 0;
-    }
-
-    pub fn side_terminal(&self) -> Option<&EmbeddedTerminal> {
-        self.terminal_manager.active_side_terminal()
-    }
-
-    pub fn side_terminal_mut(&mut self) -> Option<&mut EmbeddedTerminal> {
-        self.terminal_manager.active_side_terminal_mut()
-    }
-
-    pub fn is_side_panel_open(&self) -> bool {
-        self.side_panel_open && self.terminal_manager.has_active_side_terminal()
-    }
-
-    pub fn is_side_panel_focused(&self) -> bool {
-        self.side_panel_focused
-    }
-
-    pub fn open_side_panel(&mut self, rows: u16, cols: u16) {
-        let cwd = self
-            .terminal_manager
-            .active_root()
-            .map(Path::to_path_buf)
-            .unwrap_or_else(|| std::env::current_dir().unwrap_or_else(|_| PathBuf::from("/")));
-        if !self.terminal_manager.open_side_terminal(&cwd, rows, cols) {
-            return;
-        }
-        self.side_panel_open = true;
-        self.side_panel_focused = true;
-    }
-
-    pub fn close_side_panel(&mut self) {
-        self.terminal_manager.close_side_terminal();
-        self.side_panel_open = false;
-        self.side_panel_focused = false;
-    }
-
-    pub fn drain_ci_statuses(&mut self) {
-        while let Ok((id, status)) = self.ci_rx.try_recv() {
-            self.ci_statuses.insert(id, status);
-        }
-    }
-
-    pub fn check_ci_statuses(&mut self) {
-        if self
-            .ci_last_check
-            .is_some_and(|t| t.elapsed() < CI_CHECK_INTERVAL)
-        {
-            return;
-        }
-        self.ci_last_check = Some(Instant::now());
-
-        let targets: Vec<(String, Option<String>, PathBuf)> = self
-            .filtered_sessions()
-            .iter()
-            .filter(|s| s.status != SessionStatus::Dead)
-            .map(|s| (s.id.clone(), s.git_branch.clone(), s.cwd.clone()))
-            .collect();
-
-        for (id, branch, cwd) in targets {
-            let tx = self.ci_tx.clone();
-            match branch {
-                None => {
-                    let _ = tx.send((id, CiStatus::NoBranch));
-                }
-                Some(branch) => {
-                    std::thread::spawn(move || {
-                        let status = support::check_ci_for_local(&cwd, &branch);
-                        let _ = tx.send((id, status));
-                    });
-                }
-            }
         }
     }
 }

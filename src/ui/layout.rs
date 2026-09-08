@@ -15,6 +15,7 @@ pub struct Panes {
 }
 
 pub struct Areas {
+    pub session_pane: Option<Rect>,
     pub main: Rect,
     pub shell_pane: Option<Rect>,
 }
@@ -37,12 +38,14 @@ pub fn split_areas(area: Rect, panes: Panes) -> Areas {
     }
     let chunks = Layout::horizontal(constraints).split(area);
     let mut iter = chunks.iter().copied();
-    if panes.session {
-        iter.next();
-    }
+    let session_pane = panes.session.then(|| iter.next()).flatten();
     let main = iter.next().unwrap_or(area);
     let shell_pane = panes.shell.then(|| iter.next()).flatten();
-    Areas { main, shell_pane }
+    Areas {
+        session_pane,
+        main,
+        shell_pane,
+    }
 }
 
 pub fn pty_size(area: Rect, panes: Panes) -> (u16, u16) {
@@ -102,6 +105,9 @@ mod tests {
         };
         let areas = split_areas(area, panes);
         let shell = areas.shell_pane.unwrap();
+        let pane = areas.session_pane.unwrap();
+        assert_eq!(pane.x, 0);
+        assert_eq!(pane.width, 34);
         assert_eq!(areas.main.x, 34);
         assert_eq!(shell.x, areas.main.x + areas.main.width);
         assert_eq!(pty_size(area, panes).1, areas.main.width);
