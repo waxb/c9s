@@ -3,6 +3,8 @@ use std::thread::JoinHandle;
 use std::time::Duration;
 
 use super::{Session, SessionDiscovery};
+use crate::store::Store;
+use crate::tlog;
 
 pub struct DiscoveryWorker {
     request_tx: mpsc::Sender<()>,
@@ -12,23 +14,40 @@ pub struct DiscoveryWorker {
 
 impl DiscoveryWorker {
     pub fn spawn(interval: Duration) -> Self {
-        Self::spawn_with(SessionDiscovery::new(), interval)
+        Self::spawn_with(SessionDiscovery::new(), interval, true)
     }
 
-    fn spawn_with(mut discovery: SessionDiscovery, interval: Duration) -> Self {
+    fn spawn_with(mut discovery: SessionDiscovery, interval: Duration, checkpoint: bool) -> Self {
         let (request_tx, request_rx) = mpsc::channel::<()>();
         let (result_tx, result_rx) = mpsc::channel::<Vec<Session>>();
 
-        let handle = std::thread::spawn(move || loop {
-            let sessions = discovery.discover_all().unwrap_or_default();
-            if result_tx.send(sessions).is_err() {
-                break;
+        let handle = std::thread::spawn(move || {
+            let store = checkpoint.then(open_checkpoint_store).flatten();
+            if let Some(store) = &store {
+                match store.load_transcript_stats() {
+                    Ok(entries) => discovery.seed_cache(entries),
+                    Err(e) => tlog!(warn, "transcript checkpoint load failed: {}", e),
+                }
             }
-            match request_rx.recv_timeout(interval) {
-                Ok(()) | Err(RecvTimeoutError::Timeout) => {}
-                Err(RecvTimeoutError::Disconnected) => break,
+            loop {
+                let sessions = discovery.discover_all().unwrap_or_default();
+                if let Some(store) = &store {
+                    let dirty = discovery.take_dirty_cache();
+                    if !dirty.is_empty() {
+                        if let Err(e) = store.save_transcript_stats(&dirty) {
+                            tlog!(warn, "transcript checkpoint save failed: {}", e);
+                        }
+                    }
+                }
+                if result_tx.send(sessions).is_err() {
+                    break;
+                }
+                match request_rx.recv_timeout(interval) {
+                    Ok(()) | Err(RecvTimeoutError::Timeout) => {}
+                    Err(RecvTimeoutError::Disconnected) => break,
+                }
+                while request_rx.try_recv().is_ok() {}
             }
-            while request_rx.try_recv().is_ok() {}
         });
 
         Self {
@@ -55,6 +74,16 @@ impl DiscoveryWorker {
     }
 }
 
+fn open_checkpoint_store() -> Option<Store> {
+    match Store::open() {
+        Ok(store) => Some(store),
+        Err(e) => {
+            tlog!(warn, "transcript checkpoint unavailable: {}", e);
+            None
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -68,7 +97,7 @@ mod tests {
         std::fs::create_dir_all(&sessions_dir).unwrap();
 
         let discovery = SessionDiscovery::with_dirs(home.path(), &sessions_dir);
-        let worker = DiscoveryWorker::spawn_with(discovery, Duration::from_secs(3600));
+        let worker = DiscoveryWorker::spawn_with(discovery, Duration::from_secs(3600), false);
 
         let first = worker
             .wait_first(Duration::from_secs(10))
@@ -77,7 +106,7 @@ mod tests {
 
         std::fs::write(
             project_dir.join("w1.jsonl"),
-            r#"{"sessionId":"w1","cwd":"/tmp/w","type":"user","timestamp":"2026-01-01T00:00:00Z"}"#,
+            "{\"sessionId\":\"w1\",\"cwd\":\"/tmp/w\",\"type\":\"user\",\"timestamp\":\"2026-01-01T00:00:00Z\"}\n",
         )
         .unwrap();
         worker.request_refresh();

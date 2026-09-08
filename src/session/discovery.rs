@@ -5,20 +5,18 @@ use chrono::{DateTime, Utc};
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::process::Command;
-use std::time::SystemTime;
 
-use super::jsonl::{parse_jsonl, JsonlStats};
+use super::cache::{CachedTranscript, TranscriptCache};
+use super::jsonl::JsonlStats;
 use super::registry::{RegistryEntry, RegistryStatus, SessionRegistry};
 use super::{Session, SessionStatus};
 
 const HUNG_THRESHOLD_MINUTES: i64 = 5;
-const CACHE_LARGE_FILE: u64 = 2 * 1024 * 1024;
-const CACHE_GROWTH_TOLERANCE: u64 = 64 * 1024;
 
 pub struct SessionDiscovery {
     claude_dir: PathBuf,
     registry: SessionRegistry,
-    stats_cache: HashMap<PathBuf, (SystemTime, u64, JsonlStats)>,
+    cache: TranscriptCache,
 }
 
 struct LiveIndex {
@@ -40,7 +38,7 @@ impl SessionDiscovery {
         Self {
             claude_dir,
             registry: SessionRegistry::new(),
-            stats_cache: HashMap::new(),
+            cache: TranscriptCache::default(),
         }
     }
 
@@ -49,7 +47,7 @@ impl SessionDiscovery {
         Self {
             claude_dir: claude_dir.to_path_buf(),
             registry: SessionRegistry::with_dir(sessions_dir),
-            stats_cache: HashMap::new(),
+            cache: TranscriptCache::default(),
         }
     }
 
@@ -82,7 +80,9 @@ impl SessionDiscovery {
                 .and_then(|p| p.file_name())
                 .map(|n| decode_project_path(&n.to_string_lossy()))
                 .unwrap_or_default();
-            let stats = self.parse_jsonl_cached(&jf_path);
+            let Some(stats) = self.cache.stats_for(&jf_path) else {
+                continue;
+            };
             if stats.session_id.is_none() && stats.message_count == 0 {
                 continue;
             }
@@ -155,32 +155,12 @@ impl SessionDiscovery {
         Ok(Vec::new())
     }
 
-    fn parse_jsonl_cached(&mut self, path: &Path) -> JsonlStats {
-        let meta = std::fs::metadata(path).ok();
-        let mtime = meta.as_ref().and_then(|m| m.modified().ok());
-        let file_size = meta.as_ref().map(|m| m.len()).unwrap_or(0);
+    pub fn seed_cache(&mut self, entries: Vec<(PathBuf, CachedTranscript)>) {
+        self.cache.seed(entries);
+    }
 
-        if let Some(mtime) = mtime {
-            if let Some((cached_mtime, cached_size, cached_stats)) = self.stats_cache.get(path) {
-                if *cached_mtime == mtime {
-                    return cached_stats.clone();
-                }
-                if file_size > CACHE_LARGE_FILE
-                    && file_size.saturating_sub(*cached_size) < CACHE_GROWTH_TOLERANCE
-                {
-                    return cached_stats.clone();
-                }
-            }
-        }
-
-        let stats = parse_jsonl(path);
-
-        if let Some(mtime) = mtime {
-            self.stats_cache
-                .insert(path.to_path_buf(), (mtime, file_size, stats.clone()));
-        }
-
-        stats
+    pub fn take_dirty_cache(&mut self) -> Vec<(PathBuf, CachedTranscript)> {
+        self.cache.take_dirty()
     }
 }
 
@@ -571,7 +551,8 @@ mod tests {
             project_dir.join("s1.jsonl"),
             r#"{"sessionId":"s1","cwd":"/tmp/proj","type":"user","timestamp":"2026-01-01T00:00:00Z"}
 {"type":"assistant","message":{"model":"claude-opus-4-6","usage":{"input_tokens":10,"output_tokens":5}},"timestamp":"2026-01-01T00:01:00Z"}
-{"type":"ai-title","aiTitle":"Fix bug","sessionId":"s1"}"#,
+{"type":"ai-title","aiTitle":"Fix bug","sessionId":"s1"}
+"#,
         )
         .unwrap();
         let sessions_dir = home.path().join("sessions");
@@ -586,7 +567,7 @@ mod tests {
         .unwrap();
         std::fs::write(
             project_dir.join("s2.jsonl"),
-            r#"{"sessionId":"s2","cwd":"/tmp/proj","type":"user","timestamp":"2025-12-01T00:00:00Z"}"#,
+            "{\"sessionId\":\"s2\",\"cwd\":\"/tmp/proj\",\"type\":\"user\",\"timestamp\":\"2025-12-01T00:00:00Z\"}\n",
         )
         .unwrap();
         std::fs::write(

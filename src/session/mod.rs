@@ -1,3 +1,4 @@
+mod cache;
 pub mod config;
 mod discovery;
 mod jsonl;
@@ -8,6 +9,7 @@ pub mod project;
 pub mod registry;
 mod worker;
 
+pub use cache::CachedTranscript;
 pub use discovery::{list_session_files, SessionDiscovery, SessionFile};
 pub use manager::SessionManager;
 pub use project::{group_projects, Project};
@@ -151,6 +153,15 @@ impl Session {
             || contains(self.title.as_deref().unwrap_or(""))
             || contains(self.session_name.as_deref().unwrap_or(""))
             || contains(self.status.label())
+    }
+}
+
+#[cfg(test)]
+pub(crate) fn jsonl_stats_for_test(session_id: &str, message_count: u32) -> jsonl::JsonlStats {
+    jsonl::JsonlStats {
+        session_id: Some(session_id.to_string()),
+        message_count,
+        ..Default::default()
     }
 }
 

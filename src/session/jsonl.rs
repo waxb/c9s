@@ -1,12 +1,11 @@
 use chrono::{DateTime, Utc};
-use serde_json::Value;
+use serde::de::{IgnoredAny, SeqAccess, Visitor};
+use serde::{Deserialize, Deserializer, Serialize};
+use std::borrow::Cow;
+use std::io::{BufRead, BufReader, Seek, SeekFrom};
 use std::path::Path;
 
-const TAIL_SIZE: u64 = 512 * 1024;
-const HEAD_LIMIT: u64 = 64 * 1024;
-const LARGE_FILE_THRESHOLD: u64 = 2 * 1024 * 1024;
-
-#[derive(Debug, Default, Clone)]
+#[derive(Debug, Default, Clone, Serialize, Deserialize, PartialEq)]
 pub struct JsonlStats {
     pub session_id: Option<String>,
     pub cwd: Option<String>,
@@ -42,146 +41,190 @@ impl JsonlStats {
     }
 }
 
-pub fn parse_jsonl(path: &Path) -> JsonlStats {
-    let mut stats = JsonlStats::default();
-    let file_size = std::fs::metadata(path).map(|m| m.len()).unwrap_or(0);
-
-    if file_size > LARGE_FILE_THRESHOLD {
-        parse_jsonl_fast(path, file_size, &mut stats);
-    } else if let Ok(content) = std::fs::read_to_string(path) {
-        parse_jsonl_lines(&content, &mut stats, true);
-    }
-
-    stats
+#[derive(Deserialize)]
+struct RawLine<'a> {
+    #[serde(rename = "type", borrow)]
+    kind: Option<Cow<'a, str>>,
+    #[serde(rename = "sessionId", borrow)]
+    session_id: Option<Cow<'a, str>>,
+    #[serde(borrow)]
+    cwd: Option<Cow<'a, str>>,
+    #[serde(rename = "gitBranch", borrow)]
+    git_branch: Option<Cow<'a, str>>,
+    #[serde(borrow)]
+    version: Option<Cow<'a, str>>,
+    #[serde(rename = "permissionMode", borrow)]
+    permission_mode: Option<Cow<'a, str>>,
+    #[serde(borrow)]
+    slug: Option<Cow<'a, str>>,
+    #[serde(rename = "hookCount")]
+    hook_count: Option<u64>,
+    #[serde(rename = "hookErrors")]
+    hook_errors: Option<Vec<IgnoredAny>>,
+    #[serde(borrow)]
+    timestamp: Option<Cow<'a, str>>,
+    #[serde(borrow)]
+    subtype: Option<Cow<'a, str>>,
+    #[serde(rename = "isSidechain")]
+    is_sidechain: Option<bool>,
+    #[serde(rename = "aiTitle", borrow)]
+    ai_title: Option<Cow<'a, str>>,
+    #[serde(rename = "customTitle", borrow)]
+    custom_title: Option<Cow<'a, str>>,
+    #[serde(rename = "lastPrompt", borrow)]
+    last_prompt: Option<Cow<'a, str>>,
+    #[serde(borrow)]
+    message: Option<RawMessage<'a>>,
 }
 
-fn parse_jsonl_fast(path: &Path, file_size: u64, stats: &mut JsonlStats) {
-    use std::io::{BufRead, BufReader, Read, Seek, SeekFrom};
+#[derive(Deserialize)]
+struct RawMessage<'a> {
+    #[serde(borrow)]
+    model: Option<Cow<'a, str>>,
+    #[serde(borrow)]
+    stop_reason: Option<Cow<'a, str>>,
+    usage: Option<RawUsage>,
+    #[serde(default, deserialize_with = "tool_use_count")]
+    content: u32,
+}
 
-    let Ok(file) = std::fs::File::open(path) else {
+#[derive(Deserialize, Default)]
+struct RawUsage {
+    #[serde(default)]
+    input_tokens: u64,
+    #[serde(default)]
+    output_tokens: u64,
+    #[serde(default)]
+    cache_read_input_tokens: u64,
+    #[serde(default)]
+    cache_creation_input_tokens: u64,
+    cache_creation: Option<RawCacheCreation>,
+}
+
+#[derive(Deserialize, Default)]
+struct RawCacheCreation {
+    #[serde(default)]
+    ephemeral_5m_input_tokens: u64,
+    #[serde(default)]
+    ephemeral_1h_input_tokens: u64,
+}
+
+#[derive(Deserialize)]
+struct RawBlock<'a> {
+    #[serde(rename = "type", borrow)]
+    kind: Option<Cow<'a, str>>,
+}
+
+fn tool_use_count<'de, D: Deserializer<'de>>(deserializer: D) -> Result<u32, D::Error> {
+    struct ContentVisitor;
+
+    impl<'de> Visitor<'de> for ContentVisitor {
+        type Value = u32;
+
+        fn expecting(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+            f.write_str("a content string or an array of content blocks")
+        }
+
+        fn visit_str<E: serde::de::Error>(self, _: &str) -> Result<u32, E> {
+            Ok(0)
+        }
+
+        fn visit_borrowed_str<E: serde::de::Error>(self, _: &'de str) -> Result<u32, E> {
+            Ok(0)
+        }
+
+        fn visit_string<E: serde::de::Error>(self, _: String) -> Result<u32, E> {
+            Ok(0)
+        }
+
+        fn visit_none<E: serde::de::Error>(self) -> Result<u32, E> {
+            Ok(0)
+        }
+
+        fn visit_unit<E: serde::de::Error>(self) -> Result<u32, E> {
+            Ok(0)
+        }
+
+        fn visit_seq<A: SeqAccess<'de>>(self, mut seq: A) -> Result<u32, A::Error> {
+            let mut count = 0;
+            while let Some(block) = seq.next_element::<RawBlock<'de>>()? {
+                if block.kind.as_deref() == Some("tool_use") {
+                    count += 1;
+                }
+            }
+            Ok(count)
+        }
+    }
+
+    deserializer.deserialize_any(ContentVisitor)
+}
+
+fn owned(value: &Option<Cow<'_, str>>) -> Option<String> {
+    value.as_deref().map(str::to_string)
+}
+
+fn apply_line(line: &[u8], stats: &mut JsonlStats) {
+    let Ok(raw) = serde_json::from_slice::<RawLine>(line) else {
         return;
     };
-    let mut reader = BufReader::new(file);
+    apply_common_fields(&raw, stats);
 
-    let mut head = String::new();
-    let mut head_bytes = 0u64;
-    loop {
-        let mut line = String::new();
-        match reader.read_line(&mut line) {
-            Ok(0) | Err(_) => break,
-            Ok(n) => {
-                head_bytes += n as u64;
-                head.push_str(&line);
-                if head_bytes >= HEAD_LIMIT {
-                    break;
-                }
+    match raw.kind.as_deref().unwrap_or("") {
+        "user" => {
+            stats.message_count += 1;
+            stats.last_message_type = Some("user".to_string());
+        }
+        "assistant" => {
+            stats.message_count += 1;
+            stats.last_message_type = Some("assistant".to_string());
+            if let Some(message) = &raw.message {
+                apply_assistant_message(message, raw.is_sidechain.unwrap_or(false), stats);
             }
         }
-    }
-    parse_jsonl_lines(&head, stats, false);
-
-    let tail_start = file_size.saturating_sub(TAIL_SIZE);
-    if tail_start <= head_bytes {
-        return;
-    }
-    if reader.seek(SeekFrom::Start(tail_start)).is_err() {
-        return;
-    }
-    let mut tail = String::new();
-    if reader.read_to_string(&mut tail).is_err() {
-        return;
-    }
-    if let Some(first_nl) = tail.find('\n') {
-        parse_jsonl_lines(&tail[first_nl + 1..], stats, false);
-    }
-}
-
-fn str_field<'a>(value: &'a Value, key: &str) -> Option<&'a str> {
-    value.get(key).and_then(|v| v.as_str())
-}
-
-fn u64_field(value: &Value, key: &str) -> u64 {
-    value.get(key).and_then(|v| v.as_u64()).unwrap_or(0)
-}
-
-pub fn parse_jsonl_lines(content: &str, stats: &mut JsonlStats, count_messages: bool) {
-    for line in content.lines() {
-        let Ok(value) = serde_json::from_str::<Value>(line) else {
-            continue;
-        };
-        apply_common_fields(&value, stats);
-
-        match str_field(&value, "type").unwrap_or("") {
-            "user" => {
-                if count_messages {
-                    stats.message_count += 1;
-                }
-                stats.last_message_type = Some("user".to_string());
-            }
-            "assistant" => {
-                if count_messages {
-                    stats.message_count += 1;
-                }
-                stats.last_message_type = Some("assistant".to_string());
-                if let Some(message) = value.get("message") {
-                    let is_sidechain = value
-                        .get("isSidechain")
-                        .and_then(|v| v.as_bool())
-                        .unwrap_or(false);
-                    apply_assistant_message(message, is_sidechain, stats);
-                }
-            }
-            "system" => match str_field(&value, "subtype") {
-                Some("compact_boundary") => stats.compaction_count += 1,
-                Some("api_error") => stats.api_error_count += 1,
-                _ => {}
-            },
-            "ai-title" => {
-                stats.ai_title = str_field(&value, "aiTitle").map(str::to_string);
-            }
-            "custom-title" => {
-                stats.custom_title = str_field(&value, "customTitle").map(str::to_string);
-            }
-            "last-prompt" => {
-                stats.last_prompt = str_field(&value, "lastPrompt").map(str::to_string);
-            }
+        "system" => match raw.subtype.as_deref() {
+            Some("compact_boundary") => stats.compaction_count += 1,
+            Some("api_error") => stats.api_error_count += 1,
             _ => {}
-        }
+        },
+        "ai-title" => stats.ai_title = owned(&raw.ai_title),
+        "custom-title" => stats.custom_title = owned(&raw.custom_title),
+        "last-prompt" => stats.last_prompt = owned(&raw.last_prompt),
+        _ => {}
     }
 }
 
-fn apply_common_fields(value: &Value, stats: &mut JsonlStats) {
-    if let Some(sid) = str_field(value, "sessionId") {
-        stats.session_id = Some(sid.to_string());
+fn apply_common_fields(raw: &RawLine, stats: &mut JsonlStats) {
+    if let Some(sid) = owned(&raw.session_id) {
+        stats.session_id = Some(sid);
     }
     if stats.cwd.is_none() {
-        if let Some(cwd) = str_field(value, "cwd") {
-            stats.cwd = Some(cwd.to_string());
-        }
+        stats.cwd = owned(&raw.cwd);
     }
-    if let Some(branch) = str_field(value, "gitBranch") {
-        stats.git_branch = Some(branch.to_string());
+    if let Some(branch) = owned(&raw.git_branch) {
+        stats.git_branch = Some(branch);
     }
-    if let Some(version) = str_field(value, "version") {
-        stats.claude_version = Some(version.to_string());
+    if let Some(version) = owned(&raw.version) {
+        stats.claude_version = Some(version);
     }
     if stats.permission_mode.is_none() {
-        if let Some(pm) = str_field(value, "permissionMode") {
-            stats.permission_mode = Some(pm.to_string());
-        }
+        stats.permission_mode = owned(&raw.permission_mode);
     }
-    if let Some(slug) = str_field(value, "slug") {
+    if let Some(slug) = raw.slug.as_deref() {
         if !stats.plan_slugs.iter().any(|s| s == slug) {
             stats.plan_slugs.push(slug.to_string());
         }
     }
-    if let Some(hc) = value.get("hookCount").and_then(|v| v.as_u64()) {
+    if let Some(hc) = raw.hook_count {
         stats.hook_run_count += hc as u32;
     }
-    if let Some(errs) = value.get("hookErrors").and_then(|v| v.as_array()) {
+    if let Some(errs) = &raw.hook_errors {
         stats.hook_error_count += errs.len() as u32;
     }
-    if let Some(ts) = str_field(value, "timestamp").and_then(|s| s.parse::<DateTime<Utc>>().ok()) {
+    if let Some(ts) = raw
+        .timestamp
+        .as_deref()
+        .and_then(|s| s.parse::<DateTime<Utc>>().ok())
+    {
         if stats.first_timestamp.is_none() {
             stats.first_timestamp = Some(ts);
         }
@@ -189,63 +232,81 @@ fn apply_common_fields(value: &Value, stats: &mut JsonlStats) {
     }
 }
 
-fn apply_assistant_message(message: &Value, is_sidechain: bool, stats: &mut JsonlStats) {
-    if let Some(sr) = str_field(message, "stop_reason") {
-        stats.last_stop_reason = Some(sr.to_string());
+fn apply_assistant_message(message: &RawMessage, is_sidechain: bool, stats: &mut JsonlStats) {
+    if let Some(sr) = owned(&message.stop_reason) {
+        stats.last_stop_reason = Some(sr);
     }
-    if let Some(model) = str_field(message, "model") {
-        stats.model = Some(model.to_string());
+    if let Some(model) = owned(&message.model) {
+        stats.model = Some(model);
     }
-    if let Some(blocks) = message.get("content").and_then(|v| v.as_array()) {
-        let tool_uses = blocks
-            .iter()
-            .filter(|b| str_field(b, "type") == Some("tool_use"))
-            .count();
-        stats.tool_call_count += tool_uses as u32;
-    }
-    let Some(usage) = message.get("usage") else {
+    stats.tool_call_count += message.content;
+
+    let Some(usage) = &message.usage else {
         return;
     };
-
-    let input = u64_field(usage, "input_tokens");
-    let output = u64_field(usage, "output_tokens");
-    let cache_read = u64_field(usage, "cache_read_input_tokens");
-    let cache_creation = u64_field(usage, "cache_creation_input_tokens");
-    let (write_5m, write_1h) = split_cache_creation(usage, cache_creation);
-
-    stats.input_tokens += input;
-    stats.output_tokens += output;
-    stats.cache_read_tokens += cache_read;
+    let (write_5m, write_1h) = split_cache_creation(usage);
+    stats.input_tokens += usage.input_tokens;
+    stats.output_tokens += usage.output_tokens;
+    stats.cache_read_tokens += usage.cache_read_input_tokens;
     stats.cache_write_5m_tokens += write_5m;
     stats.cache_write_1h_tokens += write_1h;
 
     if !is_sidechain {
-        stats.context_tokens = input + cache_read + cache_creation;
+        stats.context_tokens =
+            usage.input_tokens + usage.cache_read_input_tokens + usage.cache_creation_input_tokens;
     }
 }
 
-fn split_cache_creation(usage: &Value, total: u64) -> (u64, u64) {
-    let breakdown = usage.get("cache_creation");
-    let w5 = breakdown
-        .map(|b| u64_field(b, "ephemeral_5m_input_tokens"))
-        .unwrap_or(0);
-    let w1h = breakdown
-        .map(|b| u64_field(b, "ephemeral_1h_input_tokens"))
-        .unwrap_or(0);
-    if w5 + w1h == 0 {
-        (total, 0)
-    } else {
-        (w5, w1h)
+fn split_cache_creation(usage: &RawUsage) -> (u64, u64) {
+    match &usage.cache_creation {
+        Some(b) if b.ephemeral_5m_input_tokens + b.ephemeral_1h_input_tokens > 0 => {
+            (b.ephemeral_5m_input_tokens, b.ephemeral_1h_input_tokens)
+        }
+        _ => (usage.cache_creation_input_tokens, 0),
     }
+}
+
+#[cfg(test)]
+pub fn parse_jsonl_lines(content: &str, stats: &mut JsonlStats) {
+    for line in content.lines() {
+        if !line.trim().is_empty() {
+            apply_line(line.as_bytes(), stats);
+        }
+    }
+}
+
+pub fn scan_transcript(path: &Path, from: u64, stats: &mut JsonlStats) -> u64 {
+    let Ok(mut file) = std::fs::File::open(path) else {
+        return from;
+    };
+    if file.seek(SeekFrom::Start(from)).is_err() {
+        return from;
+    }
+    let mut reader = BufReader::with_capacity(256 * 1024, file);
+    let mut buf = Vec::new();
+    let mut offset = from;
+    loop {
+        buf.clear();
+        let Ok(n) = reader.read_until(b'\n', &mut buf) else {
+            break;
+        };
+        if n == 0 || buf.last() != Some(&b'\n') {
+            break;
+        }
+        apply_line(&buf[..n - 1], stats);
+        offset += n as u64;
+    }
+    offset
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::io::Write;
 
     fn stats_for(lines: &[&str]) -> JsonlStats {
         let mut stats = JsonlStats::default();
-        parse_jsonl_lines(&lines.join("\n"), &mut stats, true);
+        parse_jsonl_lines(&lines.join("\n"), &mut stats);
         stats
     }
 
@@ -262,6 +323,8 @@ mod tests {
         assert_eq!(stats.message_count, 2);
         assert!(stats.model.as_deref().unwrap().contains("sonnet"));
         assert_eq!(stats.context_tokens, 100);
+        assert_eq!(stats.last_stop_reason.as_deref(), Some("end_turn"));
+        assert!(stats.first_timestamp.is_some());
     }
 
     #[test]
@@ -280,20 +343,22 @@ mod tests {
     fn test_counts_tool_use_blocks_not_progress_lines() {
         let stats = stats_for(&[
             r#"{"type":"progress","data":{"type":"hook_progress"}}"#,
-            r#"{"type":"assistant","message":{"content":[{"type":"text","text":"hi"},{"type":"tool_use","id":"1","name":"Bash","input":{}},{"type":"tool_use","id":"2","name":"Read","input":{}}]}}"#,
+            r#"{"type":"assistant","message":{"content":[{"type":"text","text":"hi"},{"type":"tool_use","id":"1","name":"Bash","input":{"cmd":"x"}},{"type":"tool_use","id":"2","name":"Read","input":{}}]}}"#,
             r#"{"type":"assistant","message":{"content":[{"type":"tool_use","id":"3","name":"Edit","input":{}}]}}"#,
+            r#"{"type":"user","message":{"role":"user","content":"plain string content"}}"#,
         ]);
         assert_eq!(stats.tool_call_count, 3);
+        assert_eq!(stats.message_count, 3);
     }
 
     #[test]
-    fn test_titles_and_last_prompt() {
+    fn test_titles_and_last_prompt_with_escapes() {
         let stats = stats_for(&[
             r#"{"type":"ai-title","aiTitle":"First title","sessionId":"s"}"#,
-            r#"{"type":"ai-title","aiTitle":"Second title","sessionId":"s"}"#,
+            r#"{"type":"ai-title","aiTitle":"Second \"quoted\" title","sessionId":"s"}"#,
             r#"{"type":"last-prompt","lastPrompt":"do the thing","sessionId":"s"}"#,
         ]);
-        assert_eq!(stats.title().as_deref(), Some("Second title"));
+        assert_eq!(stats.title().as_deref(), Some("Second \"quoted\" title"));
         assert_eq!(stats.last_prompt.as_deref(), Some("do the thing"));
 
         let custom = stats_for(&[
@@ -325,18 +390,68 @@ mod tests {
     }
 
     #[test]
-    fn test_parse_jsonl_reads_file() {
+    fn test_hooks_slugs_and_malformed_lines() {
+        let stats = stats_for(&[
+            r#"{"type":"system","subtype":"stop_hook_summary","hookCount":2,"hookErrors":[{"x":1}],"slug":"vivid-frog"}"#,
+            "not json at all",
+            r#"{"type":"system","subtype":"turn_duration","slug":"vivid-frog","hookCount":1,"hookErrors":[]}"#,
+            r#"{"type":"user","message":"unexpected shape"}"#,
+        ]);
+        assert_eq!(stats.hook_run_count, 3);
+        assert_eq!(stats.hook_error_count, 1);
+        assert_eq!(stats.plan_slugs, vec!["vivid-frog".to_string()]);
+        assert_eq!(stats.message_count, 0);
+    }
+
+    #[test]
+    fn test_scan_transcript_is_incremental_and_skips_partial_lines() {
         let dir = tempfile::tempdir().unwrap();
-        let file = dir.path().join("test.jsonl");
-        std::fs::write(
-            &file,
-            r#"{"sessionId":"x","type":"user","cwd":"/p","timestamp":"2026-01-01T00:00:00Z","gitBranch":"main","version":"2.1.0"}"#,
+        let file = dir.path().join("t.jsonl");
+        let mut f = std::fs::File::create(&file).unwrap();
+        writeln!(
+            f,
+            r#"{{"sessionId":"x","type":"user","cwd":"/p","timestamp":"2026-01-01T00:00:00Z","gitBranch":"main","version":"2.1.0"}}"#
         )
         .unwrap();
-        let stats = parse_jsonl(&file);
-        assert_eq!(stats.session_id.as_deref(), Some("x"));
+        write!(
+            f,
+            r#"{{"type":"assistant","message":{{"usage":{{"input_tokens":7,"output_tokens":3}}}}}}"#
+        )
+        .unwrap();
+
+        let mut stats = JsonlStats::default();
+        let offset = scan_transcript(&file, 0, &mut stats);
+        assert_eq!(stats.message_count, 1);
+        assert_eq!(stats.input_tokens, 0);
+        assert!(offset > 0);
+        assert!(offset < std::fs::metadata(&file).unwrap().len());
+
+        writeln!(f).unwrap();
+        writeln!(
+            f,
+            r#"{{"type":"assistant","message":{{"usage":{{"input_tokens":5,"output_tokens":1}}}}}}"#
+        )
+        .unwrap();
+        let end = scan_transcript(&file, offset, &mut stats);
+        assert_eq!(end, std::fs::metadata(&file).unwrap().len());
+        assert_eq!(stats.message_count, 3);
+        assert_eq!(stats.input_tokens, 12);
+        assert_eq!(stats.output_tokens, 4);
         assert_eq!(stats.git_branch.as_deref(), Some("main"));
         assert_eq!(stats.claude_version.as_deref(), Some("2.1.0"));
-        assert_eq!(stats.message_count, 1);
+
+        let again = scan_transcript(&file, end, &mut stats);
+        assert_eq!(again, end);
+        assert_eq!(stats.message_count, 3);
+    }
+
+    #[test]
+    fn test_stats_round_trip_json() {
+        let stats = stats_for(&[
+            r#"{"sessionId":"x","type":"user","cwd":"/p","timestamp":"2026-01-01T00:00:00Z"}"#,
+        ]);
+        let text = serde_json::to_string(&stats).unwrap();
+        let back: JsonlStats = serde_json::from_str(&text).unwrap();
+        assert_eq!(back, stats);
     }
 }

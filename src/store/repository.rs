@@ -3,9 +3,9 @@ use rusqlite::Connection;
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 
-use crate::session::Session;
+use crate::session::{CachedTranscript, Session};
 
-const SCHEMA_VERSION: i64 = 2;
+const SCHEMA_VERSION: i64 = 3;
 
 const V2_COLUMNS: &[(&str, &str)] = &[
     ("title", "TEXT"),
@@ -70,6 +70,14 @@ impl Store {
 
             CREATE TABLE IF NOT EXISTS schema_version (
                 version INTEGER NOT NULL
+            );
+
+            CREATE TABLE IF NOT EXISTS transcript_stats (
+                path TEXT PRIMARY KEY,
+                scanned_len INTEGER NOT NULL,
+                file_len INTEGER NOT NULL,
+                mtime_ms INTEGER NOT NULL,
+                stats TEXT NOT NULL
             );
 
             CREATE INDEX IF NOT EXISTS idx_sessions_project ON sessions(project_name);
@@ -178,6 +186,63 @@ impl Store {
         Ok(())
     }
 
+    pub fn load_transcript_stats(&self) -> Result<Vec<(PathBuf, CachedTranscript)>> {
+        let mut stmt = self
+            .conn
+            .prepare("SELECT path, scanned_len, file_len, mtime_ms, stats FROM transcript_stats")?;
+        let rows = stmt.query_map([], |row| {
+            Ok((
+                row.get::<_, String>(0)?,
+                row.get::<_, i64>(1)?,
+                row.get::<_, i64>(2)?,
+                row.get::<_, i64>(3)?,
+                row.get::<_, String>(4)?,
+            ))
+        })?;
+        let mut entries = Vec::new();
+        for row in rows {
+            let (path, scanned_len, file_len, mtime_ms, stats) = row?;
+            let Ok(stats) = serde_json::from_str(&stats) else {
+                continue;
+            };
+            entries.push((
+                PathBuf::from(path),
+                CachedTranscript {
+                    scanned_len: scanned_len.max(0) as u64,
+                    file_len: file_len.max(0) as u64,
+                    mtime_ms,
+                    stats,
+                },
+            ));
+        }
+        Ok(entries)
+    }
+
+    pub fn save_transcript_stats(&self, entries: &[(PathBuf, CachedTranscript)]) -> Result<()> {
+        let tx = self.conn.unchecked_transaction()?;
+        for (path, entry) in entries {
+            let stats = serde_json::to_string(&entry.stats)?;
+            tx.execute(
+                "INSERT INTO transcript_stats (path, scanned_len, file_len, mtime_ms, stats)
+                VALUES (?1, ?2, ?3, ?4, ?5)
+                ON CONFLICT(path) DO UPDATE SET
+                    scanned_len = excluded.scanned_len,
+                    file_len = excluded.file_len,
+                    mtime_ms = excluded.mtime_ms,
+                    stats = excluded.stats",
+                rusqlite::params![
+                    path.to_string_lossy(),
+                    entry.scanned_len as i64,
+                    entry.file_len as i64,
+                    entry.mtime_ms,
+                    stats,
+                ],
+            )?;
+        }
+        tx.commit()?;
+        Ok(())
+    }
+
     pub fn hidden_ids(&self) -> Result<HashSet<String>> {
         let mut stmt = self
             .conn
@@ -262,6 +327,33 @@ mod tests {
             })
             .unwrap();
         assert_eq!(title, "Fix bug");
+    }
+
+    #[test]
+    fn test_transcript_stats_round_trip() {
+        let (_dir, store) = temp_store();
+        let entry = CachedTranscript {
+            scanned_len: 10,
+            file_len: 12,
+            mtime_ms: 1_700_000_000_000,
+            stats: crate::session::jsonl_stats_for_test("s1", 5),
+        };
+        let path = PathBuf::from("/tmp/x.jsonl");
+        store
+            .save_transcript_stats(&[(path.clone(), entry.clone())])
+            .unwrap();
+        let loaded = store.load_transcript_stats().unwrap();
+        assert_eq!(loaded, vec![(path.clone(), entry.clone())]);
+
+        let updated = CachedTranscript {
+            scanned_len: 20,
+            ..entry
+        };
+        store
+            .save_transcript_stats(&[(path.clone(), updated.clone())])
+            .unwrap();
+        let loaded = store.load_transcript_stats().unwrap();
+        assert_eq!(loaded, vec![(path, updated)]);
     }
 
     #[test]
