@@ -337,7 +337,7 @@ fn process_action(app: &mut App, action: Action, terminal: &Term) -> Result<()> 
         Action::CancelQuit => app.set_view_mode(ViewMode::List),
         Action::KillSession => {
             if let Some(session) = app.selected_session() {
-                if session.pid.is_some() {
+                if session.takeover_pid().is_some() {
                     app.confirm_kill_session_id = Some(session.id.clone());
                     app.set_view_mode(ViewMode::ConfirmKill);
                 }
@@ -349,7 +349,7 @@ fn process_action(app: &mut App, action: Action, terminal: &Term) -> Result<()> 
                     .all_sessions()
                     .iter()
                     .find(|s| s.id == session_id)
-                    .and_then(|s| s.pid)
+                    .and_then(|s| s.takeover_pid())
                 {
                     unsafe {
                         libc::kill(pid as i32, libc::SIGTERM);

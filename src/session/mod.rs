@@ -14,6 +14,8 @@ use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 
+const MAX_CONTEXT_PERCENT: u64 = 999;
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum SessionStatus {
     Active,
@@ -101,9 +103,9 @@ impl Session {
         pricing::context_window(self.model.as_deref().unwrap_or(""))
     }
 
-    pub fn context_percent(&self) -> u8 {
+    pub fn context_percent(&self) -> u16 {
         let window = self.context_window().max(1);
-        ((self.context_tokens.saturating_mul(100)) / window).min(999) as u8
+        ((self.context_tokens.saturating_mul(100)) / window).min(MAX_CONTEXT_PERCENT) as u16
     }
 
     pub fn duration_display(&self) -> String {
@@ -241,6 +243,11 @@ mod tests {
         let mut h = make_session("t", "claude-haiku-4-5");
         h.context_tokens = 150_000;
         assert_eq!(h.context_percent(), 75);
+        let mut over = make_session("t", "claude-haiku-4-5");
+        over.context_tokens = 600_000;
+        assert_eq!(over.context_percent(), 300);
+        over.context_tokens = 5_000_000;
+        assert_eq!(over.context_percent(), 999);
     }
 
     #[test]

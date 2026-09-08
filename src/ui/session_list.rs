@@ -240,11 +240,14 @@ fn project_label(session: &Session) -> String {
     }
 }
 
+const CONTEXT_YELLOW_PERCENT: u16 = 70;
+const CONTEXT_RED_PERCENT: u16 = 85;
+
 fn context_style(session: &Session) -> Style {
     let pct = session.context_percent();
-    let color = if pct >= 80 {
+    let color = if pct >= CONTEXT_RED_PERCENT {
         Color::Red
-    } else if pct >= 50 {
+    } else if pct >= CONTEXT_YELLOW_PERCENT {
         Color::Yellow
     } else {
         Color::DarkGray
