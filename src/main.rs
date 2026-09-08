@@ -26,8 +26,9 @@ use session::SessionManager;
 use std::io::{stdout, IsTerminal};
 use std::time::{Duration, Instant};
 
-use actions::{process_action, resize_panes};
+use actions::{process_action, resize_panes, screen_area};
 use app::ViewMode;
+use ui::Panes;
 
 pub type Term = Terminal<CrosstermBackend<std::io::Stdout>>;
 
@@ -102,9 +103,11 @@ fn run_loop(terminal: &mut Term, app: &mut App) -> Result<()> {
     let mut last_refresh = Instant::now();
     let mut needs_draw = true;
     let mut mouse_captured = true;
+    let mut layout: Option<LayoutKey> = None;
 
     loop {
         needs_draw |= poll_background(app);
+        needs_draw |= sync_pty_layout(terminal, app, &mut layout)?;
 
         if needs_draw {
             terminal.draw(|f| render::draw_frame(f, app))?;
@@ -152,6 +155,19 @@ fn run_loop(terminal: &mut Term, app: &mut App) -> Result<()> {
     }
 
     Ok(())
+}
+
+type LayoutKey = (Panes, Option<String>);
+
+fn sync_pty_layout(terminal: &Term, app: &App, layout: &mut Option<LayoutKey>) -> Result<bool> {
+    let key = (app.panes(), app.attached_session_id().map(str::to_string));
+    let changed = layout.as_ref() != Some(&key);
+    *layout = Some(key);
+    if changed && app.in_terminal_context() {
+        resize_panes(app, screen_area(terminal)?);
+        return Ok(true);
+    }
+    Ok(false)
 }
 
 fn poll_background(app: &mut App) -> bool {

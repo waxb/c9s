@@ -12,7 +12,7 @@ use crate::terminal::kill_process;
 use crate::ui;
 use crate::{log, tlog, Term};
 
-fn screen_area(terminal: &Term) -> Result<Rect> {
+pub fn screen_area(terminal: &Term) -> Result<Rect> {
     let size = terminal.size()?;
     Ok(Rect::new(0, 0, size.width, size.height))
 }
