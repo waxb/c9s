@@ -64,7 +64,7 @@ Projects are collapsed rows by default; expand them to see their sessions.
 | `Ctrl+Space` | Quick switcher |
 | `Ctrl+n` / `Ctrl+p` | Next / previous project tab |
 | `Ctrl+]` | Toggle the session pane |
-| `Ctrl+q` | Toggle keep-warm pings for the current session (red `X` marker everywhere; pings a minimal prompt after 55 minutes idle, for 12 hours) |
+| `Ctrl+q` | Toggle keep-warm pings for the current session (red `X` marker everywhere; pings a minimal prompt after 50 minutes idle, for 12 hours) |
 | `Ctrl+k` / `Ctrl+j` | Scroll history up / down |
 | `Ctrl+t` | Toggle side shell pane |
 

@@ -36,7 +36,7 @@ const CI_CHECK_INTERVAL: Duration = Duration::from_secs(120);
 const REGISTRY_POLL_INTERVAL: Duration = Duration::from_secs(1);
 const DISCOVERY_INTERVAL: Duration = Duration::from_secs(5);
 const INITIAL_SCAN_TIMEOUT: Duration = Duration::from_secs(15);
-const KEEP_WARM_INTERVAL: Duration = Duration::from_secs(55 * 60);
+const KEEP_WARM_INTERVAL: Duration = Duration::from_secs(50 * 60);
 const KEEP_WARM_MAX_AGE: Duration = Duration::from_secs(12 * 3600);
 const KEEP_WARM_POLL: Duration = Duration::from_secs(5);
 

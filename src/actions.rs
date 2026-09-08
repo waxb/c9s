@@ -363,7 +363,7 @@ fn toggle_keep_warm(app: &mut App) {
             ""
         };
         app.set_pane_status(&format!(
-            "keep-warm on for {} (12h, pings at 55m idle{})",
+            "keep-warm on for {} (12h, pings at 50m idle{})",
             label, note
         ));
         tlog!(info, "keep-warm enabled for {}", id);
