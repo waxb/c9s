@@ -33,6 +33,7 @@ pub struct RegistryEntry {
     pub messaging_socket_path: Option<String>,
     pub started_at: Option<u64>,
     pub waiting_for: Option<String>,
+    pub name_is_custom: bool,
 }
 
 #[derive(Deserialize)]
@@ -50,6 +51,8 @@ struct RawEntry {
     started_at: Option<u64>,
     #[serde(rename = "waitingFor")]
     waiting_for: Option<String>,
+    #[serde(rename = "nameSource")]
+    name_source: Option<String>,
 }
 
 pub fn parse_entry(text: &str) -> Option<RegistryEntry> {
@@ -64,6 +67,7 @@ pub fn parse_entry(text: &str) -> Option<RegistryEntry> {
         messaging_socket_path: raw.messaging_socket_path,
         started_at: raw.started_at,
         waiting_for: raw.waiting_for.filter(|w| !w.is_empty()),
+        name_is_custom: matches!(raw.name_source.as_deref(), Some("user" | "collision")),
     })
 }
 
@@ -131,6 +135,21 @@ mod tests {
         );
         assert_eq!(e.started_at, Some(1788857550258));
         assert_eq!(e.waiting_for, None);
+        assert!(!e.name_is_custom);
+    }
+
+    #[test]
+    fn test_parse_entry_user_name_is_custom() {
+        let e = parse_entry(
+            r#"{"pid":1,"sessionId":"a","kind":"interactive","status":"idle","name":"brave-otter","nameSource":"user"}"#,
+        )
+        .unwrap();
+        assert!(e.name_is_custom);
+        let c = parse_entry(
+            r#"{"pid":1,"sessionId":"a","kind":"interactive","name":"x-graceful-unicorn","nameSource":"collision"}"#,
+        )
+        .unwrap();
+        assert!(c.name_is_custom);
     }
 
     #[test]

@@ -75,8 +75,18 @@ fn row_lines(
                 .waiting_for
                 .as_deref()
                 .map(|w| format!(" needs {}", w))
-                .or_else(|| s.session_name.as_deref().map(|n| format!(" {}", n)))
+                .or_else(|| {
+                    s.session_name
+                        .as_deref()
+                        .filter(|n| *n != title)
+                        .map(|n| format!(" {}", n))
+                })
                 .unwrap_or_default();
+            let dim = if selected {
+                base
+            } else {
+                base.patch(Theme::footer())
+            };
             Line::from(vec![
                 Span::styled("   ", base),
                 Span::styled(format!("{:<7}", s.status.label()), base.patch(status)),
@@ -84,8 +94,8 @@ fn row_lines(
                     format!("{:>4}%", s.context_percent()),
                     base.patch(context_style(s)),
                 ),
-                Span::styled(detail, base.patch(Theme::footer())),
-                Span::styled(name, base.patch(Theme::footer())),
+                Span::styled(detail, dim),
+                Span::styled(name, dim),
             ])
         }
         None => Line::from(Span::styled("   starting", base.patch(Theme::footer()))),

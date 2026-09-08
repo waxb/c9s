@@ -669,6 +669,7 @@ mod tests {
             name: None,
             status: RegistryStatus::Busy,
             kind: "interactive".into(),
+            name_is_custom: false,
             cwd: None,
             messaging_socket_path: None,
             started_at: None,

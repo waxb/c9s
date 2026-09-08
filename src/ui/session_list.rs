@@ -308,12 +308,19 @@ fn render_footer(f: &mut Frame, app: &App, area: Rect) {
     f.render_widget(Paragraph::new(footer), area);
 }
 
+fn non_empty(text: Option<&str>) -> Option<&str> {
+    text.filter(|t| !t.trim().is_empty())
+}
+
 pub fn session_title(session: &Session) -> String {
-    let raw = session
-        .title
-        .as_deref()
-        .filter(|t| !t.is_empty())
-        .or(session.last_prompt.as_deref().filter(|t| !t.is_empty()))
+    let custom_name = session
+        .session_name_is_custom
+        .then(|| non_empty(session.session_name.as_deref()))
+        .flatten();
+    let raw = non_empty(session.title.as_deref())
+        .or(custom_name)
+        .or(non_empty(session.last_prompt.as_deref()))
+        .or(non_empty(session.session_name.as_deref()))
         .map(|t| t.lines().next().unwrap_or("").to_string())
         .unwrap_or_else(|| session.id[..8.min(session.id.len())].to_string());
     truncate_chars(&raw, TITLE_MAX)
@@ -398,5 +405,19 @@ mod tests {
         assert_eq!(session_title(&s), "Fix login");
         s.title = Some("x".repeat(60));
         assert_eq!(session_title(&s).chars().count(), TITLE_MAX);
+    }
+
+    #[test]
+    fn test_session_title_uses_custom_name_before_prompt_and_derived_name_last() {
+        let mut s = make_session("abcdef12-0000", "claude-opus-5");
+        s.session_name = Some("c9s-c5".into());
+        assert_eq!(session_title(&s), "c9s-c5");
+        s.last_prompt = Some("fix the login bug".into());
+        assert_eq!(session_title(&s), "fix the login bug");
+        s.session_name = Some("brave-otter".into());
+        s.session_name_is_custom = true;
+        assert_eq!(session_title(&s), "brave-otter");
+        s.title = Some("Login fix".into());
+        assert_eq!(session_title(&s), "Login fix");
     }
 }
