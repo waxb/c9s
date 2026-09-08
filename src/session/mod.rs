@@ -2,7 +2,6 @@ pub mod config;
 mod discovery;
 mod manager;
 
-pub use config::SessionConfig;
 pub use discovery::{list_session_files, SessionDiscovery, SessionFile};
 pub use manager::SessionManager;
 
@@ -102,6 +101,28 @@ impl Session {
         } else {
             format!("{}d ago", secs / 86400)
         }
+    }
+
+    pub fn matches_filter(&self, query: &str) -> bool {
+        if query.is_empty() {
+            return true;
+        }
+        let q = query.to_lowercase();
+        self.project_name.to_lowercase().contains(&q)
+            || self.cwd.to_string_lossy().to_lowercase().contains(&q)
+            || self
+                .git_branch
+                .as_deref()
+                .unwrap_or("")
+                .to_lowercase()
+                .contains(&q)
+            || self
+                .model
+                .as_deref()
+                .unwrap_or("")
+                .to_lowercase()
+                .contains(&q)
+            || self.status.label().to_lowercase().contains(&q)
     }
 }
 

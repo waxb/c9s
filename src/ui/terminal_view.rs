@@ -173,13 +173,11 @@ fn render_tab_bar(f: &mut Frame, tabs: &[TabEntry], area: Rect) {
             format!("{}: {}", i + 1, tab.name)
         };
 
-        if tab.is_active {
-            if col < max_col {
-                let cell = &mut buf[(col, area.y)];
-                cell.set_style(Style::default().fg(Color::Cyan).bg(bg));
-                cell.set_symbol("[");
-                col += 1;
-            }
+        if tab.is_active && col < max_col {
+            let cell = &mut buf[(col, area.y)];
+            cell.set_style(Style::default().fg(Color::Cyan).bg(bg));
+            cell.set_symbol("[");
+            col += 1;
         }
 
         for ch in text.chars() {
@@ -226,21 +224,27 @@ fn render_usage_bar_right(f: &mut Frame, usage: &UsageData, pct: u8, area: Rect)
 
     let mut col = start_col;
     for _ in 0..filled {
-        if col >= max_col { break; }
+        if col >= max_col {
+            break;
+        }
         let cell = &mut buf[(col, row)];
         cell.set_symbol("\u{2588}");
         cell.set_style(Style::default().fg(color));
         col += 1;
     }
     for _ in 0..empty {
-        if col >= max_col { break; }
+        if col >= max_col {
+            break;
+        }
         let cell = &mut buf[(col, row)];
         cell.set_symbol("\u{2591}");
         cell.set_style(Style::default().fg(Color::Indexed(238)));
         col += 1;
     }
     for ch in label.chars() {
-        if col >= max_col { break; }
+        if col >= max_col {
+            break;
+        }
         let cell = &mut buf[(col, row)];
         cell.set_symbol(&ch.to_string());
         cell.set_style(Style::default().fg(Color::White));

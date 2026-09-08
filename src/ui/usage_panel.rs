@@ -4,15 +4,11 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Paragraph};
 use ratatui::Frame;
 
-use crate::app::SessionEntry;
+use crate::session::Session;
+use crate::ui::session_list::format_tokens;
 use crate::usage::UsageData;
 
-pub fn render_usage_panel(
-    f: &mut Frame,
-    usage: &UsageData,
-    sessions: &[&SessionEntry],
-    area: Rect,
-) {
+pub fn render_usage_panel(f: &mut Frame, usage: &UsageData, sessions: &[&Session], area: Rect) {
     let block = Block::default()
         .borders(Borders::ALL)
         .border_style(Style::default().fg(Color::DarkGray))
@@ -47,57 +43,23 @@ pub fn render_usage_panel(
         }
     }
 
-    let local_sessions: Vec<_> = sessions.iter().filter_map(|e| e.as_local()).collect();
-
-    let today_cost: f64 = local_sessions.iter().map(|s| s.estimated_cost_usd()).sum();
-    let today_tokens: u64 = local_sessions.iter().map(|s| s.total_tokens()).sum();
-    let live_count = local_sessions.iter().filter(|s| s.pid.is_some()).count();
-    let total_count = local_sessions.len();
-
-    let mut model_tokens: [(&str, u64); 4] =
-        [("opus", 0), ("sonnet", 0), ("haiku", 0), ("other", 0)];
-    for s in &local_sessions {
-        let idx = match s.model.as_deref() {
-            Some(m) if m.contains("opus") => 0,
-            Some(m) if m.contains("sonnet") => 1,
-            Some(m) if m.contains("haiku") => 2,
-            _ => 3,
-        };
-        model_tokens[idx].1 += s.total_tokens();
-    }
-
-    let remote_count = sessions.iter().filter(|e| e.is_remote()).count();
+    let total_cost: f64 = sessions.iter().map(|s| s.estimated_cost_usd()).sum();
+    let total_tokens: u64 = sessions.iter().map(|s| s.total_tokens()).sum();
+    let live_count = sessions.iter().filter(|s| s.pid.is_some()).count();
 
     lines.push(make_title("Sessions"));
-
-    let stats = if remote_count > 0 {
-        format!(
-            " ${:.2} | {} tokens | {} live / {} local + {}T remote",
-            today_cost,
-            format_tokens(today_tokens),
-            live_count,
-            total_count,
-            remote_count,
-        )
-    } else {
+    lines.push(Line::from(Span::styled(
         format!(
             " ${:.2} | {} tokens | {} live / {} total",
-            today_cost,
-            format_tokens(today_tokens),
+            total_cost,
+            format_tokens(total_tokens),
             live_count,
-            total_count,
-        )
-    };
-    lines.push(Line::from(Span::styled(
-        stats,
+            sessions.len(),
+        ),
         Style::default().fg(Color::White),
     )));
 
-    let model_parts: Vec<String> = model_tokens
-        .iter()
-        .filter(|(_, t)| *t > 0)
-        .map(|(name, t)| format!("{} {}", name, format_tokens(*t)))
-        .collect();
+    let model_parts = model_breakdown(sessions);
     if !model_parts.is_empty() {
         lines.push(Line::from(Span::styled(
             format!(" Models: {}", model_parts.join(" | ")),
@@ -105,8 +67,26 @@ pub fn render_usage_panel(
         )));
     }
 
-    let paragraph = Paragraph::new(lines);
-    f.render_widget(paragraph, inner);
+    f.render_widget(Paragraph::new(lines), inner);
+}
+
+fn model_breakdown(sessions: &[&Session]) -> Vec<String> {
+    let families = ["fable", "opus", "sonnet", "haiku"];
+    let mut totals: Vec<(&str, u64)> = families.iter().map(|f| (*f, 0)).collect();
+    let mut other: u64 = 0;
+    for s in sessions {
+        let model = s.model.as_deref().unwrap_or("");
+        match totals.iter_mut().find(|(f, _)| model.contains(f)) {
+            Some(entry) => entry.1 += s.total_tokens(),
+            None => other += s.total_tokens(),
+        }
+    }
+    totals.push(("other", other));
+    totals
+        .iter()
+        .filter(|(_, t)| *t > 0)
+        .map(|(name, t)| format!("{} {}", name, format_tokens(*t)))
+        .collect()
 }
 
 fn make_title(text: &str) -> Line<'static> {
@@ -152,15 +132,5 @@ fn bar_color(pct: u8) -> Color {
         Color::Yellow
     } else {
         Color::Indexed(75)
-    }
-}
-
-fn format_tokens(n: u64) -> String {
-    if n >= 1_000_000 {
-        format!("{:.1}M", n as f64 / 1_000_000.0)
-    } else if n >= 1_000 {
-        format!("{:.1}K", n as f64 / 1_000.0)
-    } else {
-        n.to_string()
     }
 }

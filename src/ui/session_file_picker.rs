@@ -6,12 +6,7 @@ use ratatui::Frame;
 
 use crate::session::SessionFile;
 
-pub fn render_session_file_picker(
-    f: &mut Frame,
-    files: &[SessionFile],
-    cursor: usize,
-    area: Rect,
-) {
+pub fn render_session_file_picker(f: &mut Frame, files: &[SessionFile], cursor: usize, area: Rect) {
     let popup_height = (files.len() as u16 + 4).min(area.height.saturating_sub(4));
     let popup_width = 72.min(area.width.saturating_sub(4));
 

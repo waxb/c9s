@@ -13,9 +13,7 @@ pub fn render_confirm_kill(f: &mut Frame, session_name: &str, area: Rect) {
     f.render_widget(Clear, popup_area);
 
     let border_style = Style::default().fg(Color::Red);
-    let title_style = Style::default()
-        .fg(Color::Red)
-        .add_modifier(Modifier::BOLD);
+    let title_style = Style::default().fg(Color::Red).add_modifier(Modifier::BOLD);
 
     let lines = vec![
         Line::from(""),
@@ -28,9 +26,7 @@ pub fn render_confirm_kill(f: &mut Frame, session_name: &str, area: Rect) {
             Span::styled("    ", Style::default()),
             Span::styled(
                 " y/Enter: kill ",
-                Style::default()
-                    .fg(Color::Red)
-                    .add_modifier(Modifier::BOLD),
+                Style::default().fg(Color::Red).add_modifier(Modifier::BOLD),
             ),
             Span::styled("   ", Style::default()),
             Span::styled(

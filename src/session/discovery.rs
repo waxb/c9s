@@ -193,7 +193,7 @@ impl SessionDiscovery {
         }
 
         sessions.extend(seen_sessions.into_values());
-        sessions.sort_by(|a, b| b.last_activity.cmp(&a.last_activity));
+        sessions.sort_by_key(|s| std::cmp::Reverse(s.last_activity));
 
         Ok(sessions)
     }
@@ -319,7 +319,7 @@ impl SessionDiscovery {
     }
 
     fn parse_jsonl_fast(path: &Path, file_size: u64, tail_size: u64, stats: &mut JsonlStats) {
-        use std::io::{Read, Seek, SeekFrom, BufRead, BufReader};
+        use std::io::{BufRead, BufReader, Read, Seek, SeekFrom};
 
         let file = match std::fs::File::open(path) {
             Ok(f) => f,
@@ -347,7 +347,7 @@ impl SessionDiscovery {
         }
         Self::parse_jsonl_lines(&head, stats, false);
 
-        let tail_start = if file_size > tail_size { file_size - tail_size } else { 0 };
+        let tail_start = file_size.saturating_sub(tail_size);
         if tail_start > head_bytes {
             let file2 = match std::fs::File::open(path) {
                 Ok(f) => f,
@@ -465,10 +465,8 @@ impl SessionDiscovery {
                         }
                     }
                 }
-                "progress" => {
-                    if value.get("data").is_some() {
-                        stats.tool_call_count += 1;
-                    }
+                "progress" if value.get("data").is_some() => {
+                    stats.tool_call_count += 1;
                 }
                 _ => {}
             }
@@ -479,7 +477,6 @@ impl SessionDiscovery {
 #[derive(Debug, Clone)]
 pub struct SessionFile {
     pub session_id: String,
-    pub path: PathBuf,
     pub size_bytes: u64,
     pub last_modified: Option<DateTime<Utc>>,
     pub message_count: u32,
@@ -522,7 +519,7 @@ pub fn list_session_files(cwd: &Path, current_session_id: &str) -> Vec<SessionFi
             }
             let last_modified = meta
                 .and_then(|m| m.modified().ok())
-                .map(|t| DateTime::<Utc>::from(t));
+                .map(DateTime::<Utc>::from);
 
             let msg_count = count_messages(&path);
             if msg_count == 0 && session_id != current_session_id {
@@ -532,7 +529,6 @@ pub fn list_session_files(cwd: &Path, current_session_id: &str) -> Vec<SessionFi
             files.push(SessionFile {
                 is_current: session_id == current_session_id,
                 session_id,
-                path,
                 size_bytes,
                 last_modified,
                 message_count: msg_count,
@@ -540,7 +536,7 @@ pub fn list_session_files(cwd: &Path, current_session_id: &str) -> Vec<SessionFi
         }
     }
 
-    files.sort_by(|a, b| b.last_modified.cmp(&a.last_modified));
+    files.sort_by_key(|f| std::cmp::Reverse(f.last_modified));
     files
 }
 
@@ -551,9 +547,7 @@ fn count_messages(path: &Path) -> u32 {
     };
     content
         .lines()
-        .filter(|l| {
-            l.contains("\"type\":\"user\"") || l.contains("\"type\":\"assistant\"")
-        })
+        .filter(|l| l.contains("\"type\":\"user\"") || l.contains("\"type\":\"assistant\""))
         .count() as u32
 }
 

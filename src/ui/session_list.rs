@@ -4,36 +4,24 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Cell, Paragraph, Row, Table, TableState};
 use ratatui::Frame;
 
-use crate::app::{App, SessionEntry, ViewMode};
-use crate::session::SessionStatus;
-use crate::tervezo::ImplementationStatus;
+use crate::app::{App, CiStatus, ViewMode};
+use crate::session::{Session, SessionStatus};
 use crate::ui::theme::Theme;
 use crate::ui::usage_panel::render_usage_panel;
 
 pub fn render_session_list(f: &mut Frame, app: &App, area: Rect) {
     let show_command_bar = app.is_filtering() || app.attached_session_id().is_some();
-
+    let command_bar_height = if show_command_bar { 1 } else { 0 };
     let usage_height = if app.usage().api_available { 12 } else { 6 };
 
-    let chunks = if show_command_bar {
-        Layout::vertical([
-            Constraint::Length(3),
-            Constraint::Length(1),
-            Constraint::Min(5),
-            Constraint::Length(usage_height),
-            Constraint::Length(1),
-        ])
-        .split(area)
-    } else {
-        Layout::vertical([
-            Constraint::Length(3),
-            Constraint::Length(0),
-            Constraint::Min(5),
-            Constraint::Length(usage_height),
-            Constraint::Length(1),
-        ])
-        .split(area)
-    };
+    let chunks = Layout::vertical([
+        Constraint::Length(3),
+        Constraint::Length(command_bar_height),
+        Constraint::Min(5),
+        Constraint::Length(usage_height),
+        Constraint::Length(1),
+    ])
+    .split(area);
 
     render_header(f, app, chunks[0]);
     if show_command_bar {
@@ -49,27 +37,14 @@ fn render_header(f: &mut Frame, app: &App, area: Rect) {
     let sessions = app.filtered_sessions();
     let live_count = sessions
         .iter()
-        .filter(|e| match e {
-            SessionEntry::Local(s) => s.status != SessionStatus::Dead,
-            SessionEntry::Remote(i) => i.status.is_running(),
-        })
+        .filter(|s| s.status != SessionStatus::Dead)
         .count();
-    let total_count = sessions.len();
 
-    let title = if app.has_tervezo() {
-        let remote_count = app.remote_count();
-        let local_total = sessions.iter().filter(|e| !e.is_remote()).count();
-        format!(
-            " c9s - Claude Code Sessions [{}/{} + {}T]",
-            live_count, local_total, remote_count,
-        )
-    } else {
-        format!(
-            " c9s - Claude Code Sessions [{}/{}]",
-            live_count, total_count,
-        )
-    };
-
+    let title = format!(
+        " c9s - Claude Code Sessions [{}/{}]",
+        live_count,
+        sessions.len()
+    );
     let sort_info = format!(" Sort: {} ", app.sort_label());
 
     let header = Line::from(vec![
@@ -81,8 +56,7 @@ fn render_header(f: &mut Frame, app: &App, area: Rect) {
     let block = Block::default()
         .borders(Borders::ALL)
         .style(Theme::border());
-    let paragraph = Paragraph::new(header).block(block);
-    f.render_widget(paragraph, area);
+    f.render_widget(Paragraph::new(header).block(block), area);
 }
 
 fn render_command_bar(f: &mut Frame, app: &App, area: Rect) {
@@ -102,16 +76,10 @@ fn render_command_bar(f: &mut Frame, app: &App, area: Rect) {
 
     if let Some(sid) = app.attached_session_id() {
         let attached_name = app
-            .filtered_sessions()
+            .all_sessions()
             .iter()
-            .find(|e| e.id() == sid)
-            .map(|e| e.display_name().to_string())
-            .or_else(|| {
-                app.all_sessions()
-                    .iter()
-                    .find(|s| s.id == sid)
-                    .map(|s| s.project_name.clone())
-            })
+            .find(|s| s.id == sid)
+            .map(|s| s.project_name.clone())
             .unwrap_or_else(|| sid[..8.min(sid.len())].to_string());
 
         spans.push(Span::styled(" >> ", Theme::attached_marker()));
@@ -121,9 +89,70 @@ fn render_command_bar(f: &mut Frame, app: &App, area: Rect) {
         ));
     }
 
-    let line = Line::from(spans);
-    let paragraph = Paragraph::new(line);
-    f.render_widget(paragraph, area);
+    f.render_widget(Paragraph::new(Line::from(spans)), area);
+}
+
+fn ci_cell(status: Option<&CiStatus>) -> Cell<'static> {
+    let (symbol, style) = match status {
+        Some(CiStatus::Passing) => ("v", Style::default().fg(Color::Green)),
+        Some(CiStatus::Failing) => (
+            "x",
+            Style::default().fg(Color::Red).add_modifier(Modifier::BOLD),
+        ),
+        Some(CiStatus::Running) => ("~", Style::default().fg(Color::Yellow)),
+        _ => ("-", Style::default().fg(Color::DarkGray)),
+    };
+    Cell::from(symbol).style(style)
+}
+
+fn session_row<'a>(app: &App, session: &'a Session) -> Row<'a> {
+    let is_attached = app.attached_session_id() == Some(session.id.as_str());
+    let has_bell = app.has_bell(&session.id);
+
+    let marker = match (is_attached, has_bell) {
+        (true, true) => ">>*",
+        (true, false) => ">>",
+        (false, true) => " *",
+        (false, false) => "",
+    };
+    let marker_style = if has_bell {
+        Theme::bell()
+    } else {
+        Theme::attached_marker()
+    };
+    let name_style = if has_bell {
+        Theme::bell()
+    } else {
+        Style::default()
+    };
+
+    let model_short = session
+        .model
+        .as_deref()
+        .map(shorten_model)
+        .unwrap_or_else(|| "-".to_string());
+
+    let cells = vec![
+        Cell::from(marker).style(marker_style),
+        ci_cell(app.ci_statuses.get(&session.id)),
+        Cell::from(session.project_name.clone()).style(name_style),
+        Cell::from(
+            session
+                .git_branch
+                .clone()
+                .unwrap_or_else(|| "-".to_string()),
+        ),
+        Cell::from(model_short),
+        Cell::from(session.status.label()).style(Theme::status(&session.status)),
+        Cell::from(format_count(session.message_count as u64)),
+        Cell::from(format_tokens(
+            session.input_tokens + session.cache_read_tokens,
+        )),
+        Cell::from(format_tokens(session.output_tokens)),
+        Cell::from(format!("${:.2}", session.estimated_cost_usd())).style(Theme::cost()),
+        Cell::from(session.last_activity_display()),
+    ];
+    Row::new(cells)
 }
 
 fn render_table(f: &mut Frame, app: &App, area: Rect) {
@@ -145,122 +174,10 @@ fn render_table(f: &mut Frame, app: &App, area: Rect) {
 
     let header = Row::new(header_cells).height(1);
 
-    let bell_style = Style::default()
-        .fg(Color::Yellow)
-        .add_modifier(Modifier::BOLD);
-
-    let sessions = app.filtered_sessions();
-    let rows: Vec<Row> = sessions
-        .iter()
-        .map(|entry| {
-            let entry_id = entry.id().to_string();
-            let is_attached = app.attached_session_id() == Some(entry_id.as_str());
-            let has_bell = app.has_bell(&entry_id);
-
-            let status_style = match entry {
-                SessionEntry::Local(s) => match s.status {
-                    SessionStatus::Active => Theme::status_active(),
-                    SessionStatus::Idle => Theme::status_idle(),
-                    SessionStatus::Thinking => Theme::status_thinking(),
-                    SessionStatus::Dead => Theme::status_dead(),
-                },
-                SessionEntry::Remote(i) => match i.status {
-                    ImplementationStatus::Running => Theme::status_active(),
-                    ImplementationStatus::Pending | ImplementationStatus::Queued => {
-                        Theme::status_idle()
-                    }
-                    ImplementationStatus::Completed | ImplementationStatus::Merged => {
-                        Theme::tzv_status_done()
-                    }
-                    ImplementationStatus::Failed => Theme::tzv_status_failed(),
-                    ImplementationStatus::Stopped | ImplementationStatus::Cancelled => {
-                        Theme::status_dead()
-                    }
-                },
-            };
-
-            let model_short = match entry {
-                SessionEntry::Local(s) => s
-                    .model
-                    .as_deref()
-                    .map(shorten_model)
-                    .unwrap_or("-".to_string()),
-                SessionEntry::Remote(_) => "tervezo".to_string(),
-            };
-
-            let (marker, marker_style) = if entry.is_remote() {
-                (
-                    "[T]",
-                    Style::default()
-                        .fg(Color::Magenta)
-                        .add_modifier(Modifier::BOLD),
-                )
-            } else {
-                let m = match (is_attached, has_bell) {
-                    (true, true) => ">>*",
-                    (true, false) => ">>",
-                    (false, true) => " *",
-                    (false, false) => "",
-                };
-                let s = if has_bell {
-                    bell_style
-                } else {
-                    Theme::attached_marker()
-                };
-                (m, s)
-            };
-
-            let name_style = if has_bell {
-                bell_style
-            } else {
-                Style::default()
-            };
-
-            let (tokens_in, tokens_out) = match entry {
-                SessionEntry::Local(s) => (
-                    format_tokens(s.input_tokens + s.cache_read_tokens),
-                    format_tokens(s.output_tokens),
-                ),
-                SessionEntry::Remote(_) => ("-".to_string(), "-".to_string()),
-            };
-
-            let cost_str = match entry.estimated_cost() {
-                Some(c) => format!("${:.2}", c),
-                None => "-".to_string(),
-            };
-
-            let msg_str = match entry.message_count() {
-                Some(m) => format_count(m as u64),
-                None => "-".to_string(),
-            };
-
-            let ci_status = app.ci_statuses.get(&entry_id);
-            let (ci_symbol, ci_style) = match ci_status {
-                Some(crate::app::CiStatus::Passing) => ("v", Style::default().fg(Color::Green)),
-                Some(crate::app::CiStatus::Failing) => (
-                    "x",
-                    Style::default().fg(Color::Red).add_modifier(Modifier::BOLD),
-                ),
-                Some(crate::app::CiStatus::Fixing) => ("o", Style::default().fg(Color::Blue)),
-                Some(crate::app::CiStatus::Running) => ("~", Style::default().fg(Color::Yellow)),
-                _ => ("-", Style::default().fg(Color::DarkGray)),
-            };
-
-            let cells = vec![
-                Cell::from(marker).style(marker_style),
-                Cell::from(ci_symbol).style(ci_style),
-                Cell::from(entry.display_name().to_string()).style(name_style),
-                Cell::from(entry.branch().unwrap_or("-").to_string()),
-                Cell::from(model_short),
-                Cell::from(entry.status_label()).style(status_style),
-                Cell::from(msg_str),
-                Cell::from(tokens_in),
-                Cell::from(tokens_out),
-                Cell::from(cost_str).style(Theme::cost()),
-                Cell::from(entry.last_activity_display()),
-            ];
-            Row::new(cells)
-        })
+    let rows: Vec<Row> = app
+        .filtered_sessions()
+        .into_iter()
+        .map(|s| session_row(app, s))
         .collect();
 
     let widths = [
@@ -294,46 +211,35 @@ fn render_table(f: &mut Frame, app: &App, area: Rect) {
 
 fn render_footer(f: &mut Frame, app: &App, area: Rect) {
     let sessions = app.filtered_sessions();
-    let total_cost: f64 = sessions.iter().filter_map(|e| e.estimated_cost()).sum();
-    let total_tokens: u64 = sessions.iter().filter_map(|e| e.total_tokens()).sum();
-
-    let version = env!("CARGO_PKG_VERSION");
+    let total_cost: f64 = sessions.iter().map(|s| s.estimated_cost_usd()).sum();
+    let total_tokens: u64 = sessions.iter().map(|s| s.total_tokens()).sum();
 
     let stats = format!(
         " c9s {} | ${:.2} | {} tokens",
-        version,
+        env!("CARGO_PKG_VERSION"),
         total_cost,
         format_tokens(total_tokens)
     );
-
-    let keys = if app.has_tervezo() {
-        "  a:attach  C-b:resume  d:detail  x:kill  u:unfollow  n:new  c:fix-ci  /:filter  s:sort  ?:help"
-    } else {
-        "  a:attach  C-b:resume  d:detail  x:kill  u:unfollow  n:new  /:filter  s:sort  ?:help"
-    };
+    let keys =
+        "  a:attach  C-b:resume  d:detail  x:kill  u:unfollow  n:new  /:filter  s:sort  ?:help";
 
     let footer = Line::from(vec![
         Span::styled(stats, Theme::cost()),
         Span::styled(keys, Theme::footer()),
     ]);
-
-    let paragraph = Paragraph::new(footer);
-    f.render_widget(paragraph, area);
+    f.render_widget(Paragraph::new(footer), area);
 }
 
 fn shorten_model(model: &str) -> String {
-    if model.contains("opus") {
-        "opus".to_string()
-    } else if model.contains("sonnet") {
-        "sonnet".to_string()
-    } else if model.contains("haiku") {
-        "haiku".to_string()
-    } else {
-        model.split('-').next_back().unwrap_or(model).to_string()
+    for family in ["fable", "mythos", "opus", "sonnet", "haiku"] {
+        if model.contains(family) {
+            return family.to_string();
+        }
     }
+    model.split('-').next_back().unwrap_or(model).to_string()
 }
 
-fn format_tokens(n: u64) -> String {
+pub(crate) fn format_tokens(n: u64) -> String {
     if n >= 1_000_000 {
         format!("{:.1}M", n as f64 / 1_000_000.0)
     } else if n >= 1_000 {
@@ -348,5 +254,25 @@ fn format_count(n: u64) -> String {
         format!("{:.1}K", n as f64 / 1_000.0)
     } else {
         n.to_string()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_shorten_model() {
+        assert_eq!(shorten_model("claude-opus-4-6"), "opus");
+        assert_eq!(shorten_model("claude-fable-5-1"), "fable");
+        assert_eq!(shorten_model("claude-sonnet-5"), "sonnet");
+        assert_eq!(shorten_model("something-else"), "else");
+    }
+
+    #[test]
+    fn test_format_tokens() {
+        assert_eq!(format_tokens(999), "999");
+        assert_eq!(format_tokens(1_500), "1.5K");
+        assert_eq!(format_tokens(2_000_000), "2.0M");
     }
 }

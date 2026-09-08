@@ -1,17 +1,17 @@
 use std::collections::{HashMap, HashSet};
+use std::path::{Path, PathBuf};
 use std::sync::mpsc;
+use std::time::{Duration, Instant};
 
 use crate::session::config::{build_config_items, scan_session_config, ConfigItem};
-use crate::session::{Session, SessionConfig, SessionDiscovery, SessionStatus};
+use crate::session::{Session, SessionDiscovery, SessionFile, SessionStatus};
 use crate::store::Store;
 use crate::terminal::{EmbeddedTerminal, TerminalManager};
-use crate::tervezo::models::TestReport;
-use crate::tervezo::{
-    FileChange, Implementation, ImplementationStatus, PrDetails, SseMessage, SseStream,
-    SshCredentials, StatusResponse, TervezoConfig, TervezoFetcher, TimelineMessage, Workspace,
-};
 use crate::usage::{UsageData, UsageFetcher};
 use anyhow::Result;
+
+const CI_CHECK_INTERVAL: Duration = Duration::from_secs(120);
+const QSWITCHER_MAX: usize = 9;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ViewMode {
@@ -24,13 +24,6 @@ pub enum ViewMode {
     TerminalQSwitcher,
     Command,
     ConfirmQuit,
-    TervezoDetail,
-    TervezoActionMenu,
-    TervezoConfirm,
-    TervezoPromptInput,
-    TervezoQSwitcher,
-    TervezoCreateDialog,
-    NewSessionMenu,
     ConfirmKill,
     SessionFilePicker,
     Log,
@@ -38,44 +31,11 @@ pub enum ViewMode {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum CiStatus {
-    #[allow(dead_code)]
-    Unknown,
     NoBranch,
     None,
     Passing,
     Failing,
-    Fixing,
     Running,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum NewSessionOption {
-    Local,
-    Tervezo,
-}
-
-impl NewSessionOption {
-    pub fn label(self) -> &'static str {
-        match self {
-            Self::Local => "Local session",
-            Self::Tervezo => "Tervezo session",
-        }
-    }
-}
-
-pub struct NewSessionMenuState {
-    pub items: Vec<NewSessionOption>,
-    pub cursor: usize,
-}
-
-impl NewSessionMenuState {
-    pub fn new(has_tervezo: bool) -> Self {
-        let mut items = vec![NewSessionOption::Local];
-        if has_tervezo {
-            items.push(NewSessionOption::Tervezo);
-        }
-        Self { items, cursor: 0 }
-    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -109,577 +69,17 @@ impl SortColumn {
     }
 }
 
-#[derive(Debug, Clone)]
-pub enum SessionEntry {
-    Local(Session),
-    Remote(Implementation),
-}
-
-impl SessionEntry {
-    pub fn id(&self) -> &str {
-        match self {
-            Self::Local(s) => &s.id,
-            Self::Remote(i) => &i.id,
-        }
-    }
-
-    pub fn display_name(&self) -> &str {
-        match self {
-            Self::Local(s) => &s.project_name,
-            Self::Remote(i) => i.display_name(),
-        }
-    }
-
-    pub fn status_label(&self) -> &str {
-        match self {
-            Self::Local(s) => s.status.label(),
-            Self::Remote(i) => i.status.label(),
-        }
-    }
-
-    pub fn last_activity_display(&self) -> String {
-        match self {
-            Self::Local(s) => s.last_activity_display(),
-            Self::Remote(i) => i.last_activity_display(),
-        }
-    }
-
-    pub fn is_remote(&self) -> bool {
-        matches!(self, Self::Remote(_))
-    }
-
-    pub fn matches_filter(&self, query: &str) -> bool {
-        if query.is_empty() {
-            return true;
-        }
-        let q = query.to_lowercase();
-        match self {
-            Self::Local(s) => {
-                s.project_name.to_lowercase().contains(&q)
-                    || s.cwd.to_string_lossy().to_lowercase().contains(&q)
-                    || s.git_branch
-                        .as_deref()
-                        .unwrap_or("")
-                        .to_lowercase()
-                        .contains(&q)
-                    || s.model.as_deref().unwrap_or("").to_lowercase().contains(&q)
-                    || s.status.label().to_lowercase().contains(&q)
-            }
-            Self::Remote(i) => {
-                i.display_name().to_lowercase().contains(&q)
-                    || i.branch
-                        .as_deref()
-                        .unwrap_or("")
-                        .to_lowercase()
-                        .contains(&q)
-                    || i.repo_url
-                        .as_deref()
-                        .unwrap_or("")
-                        .to_lowercase()
-                        .contains(&q)
-                    || i.status.label().to_lowercase().contains(&q)
-                    || "tervezo".contains(&q)
-            }
-        }
-    }
-
-    pub fn branch(&self) -> Option<&str> {
-        match self {
-            Self::Local(s) => s.git_branch.as_deref(),
-            Self::Remote(i) => i.branch.as_deref(),
-        }
-    }
-
-    pub fn estimated_cost(&self) -> Option<f64> {
-        match self {
-            Self::Local(s) => Some(s.estimated_cost_usd()),
-            Self::Remote(i) => i.estimated_cost_usd,
-        }
-    }
-
-    pub fn total_tokens(&self) -> Option<u64> {
-        match self {
-            Self::Local(s) => Some(s.total_tokens()),
-            Self::Remote(i) => i.total_tokens,
-        }
-    }
-
-    pub fn message_count(&self) -> Option<u32> {
-        match self {
-            Self::Local(s) => Some(s.message_count),
-            Self::Remote(i) => i.message_count,
-        }
-    }
-
-    pub fn as_local(&self) -> Option<&Session> {
-        match self {
-            Self::Local(s) => Some(s),
-            Self::Remote(_) => None,
-        }
-    }
-
-    pub fn as_remote(&self) -> Option<&Implementation> {
-        match self {
-            Self::Local(_) => None,
-            Self::Remote(i) => Some(i),
-        }
-    }
-
-    fn sort_key_last_activity(&self) -> chrono::DateTime<chrono::Utc> {
-        match self {
-            Self::Local(s) => s.last_activity,
-            Self::Remote(i) => i.updated_at.or(i.created_at).unwrap_or_default(),
-        }
-    }
-
-    fn sort_key_project(&self) -> &str {
-        self.display_name()
-    }
-
-    fn sort_key_cost(&self) -> f64 {
-        self.estimated_cost().unwrap_or(0.0)
-    }
-
-    fn sort_key_status(&self) -> u8 {
-        match self {
-            Self::Local(s) => match s.status {
-                SessionStatus::Thinking => 0,
-                SessionStatus::Active => 1,
-                SessionStatus::Idle => 2,
-                SessionStatus::Dead => 3,
-            },
-            Self::Remote(i) => match i.status {
-                ImplementationStatus::Running => 1,
-                ImplementationStatus::Pending | ImplementationStatus::Queued => 2,
-                ImplementationStatus::Completed | ImplementationStatus::Merged => 3,
-                ImplementationStatus::Failed => 4,
-                ImplementationStatus::Stopped | ImplementationStatus::Cancelled => 5,
-            },
-        }
-    }
-
-    fn sort_key_tokens(&self) -> u64 {
-        self.total_tokens().unwrap_or(0)
-    }
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub enum TervezoTab {
-    Plan,
-    Changes,
-    TestOutput,
-    Analysis,
-}
-
-impl TervezoTab {
-    pub fn label(self) -> &'static str {
-        match self {
-            Self::Plan => "Plan",
-            Self::Changes => "Changes",
-            Self::TestOutput => "Tests",
-            Self::Analysis => "Analysis",
-        }
-    }
-
-    pub fn all() -> &'static [TervezoTab] {
-        &[Self::Plan, Self::Changes, Self::TestOutput, Self::Analysis]
-    }
-
-    pub fn next(self) -> Self {
-        match self {
-            Self::Plan => Self::Changes,
-            Self::Changes => Self::TestOutput,
-            Self::TestOutput => Self::Analysis,
-            Self::Analysis => Self::Plan,
-        }
-    }
-
-    pub fn prev(self) -> Self {
-        match self {
-            Self::Plan => Self::Analysis,
-            Self::Changes => Self::Plan,
-            Self::TestOutput => Self::Changes,
-            Self::Analysis => Self::TestOutput,
-        }
-    }
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum TervezoAction {
-    CreatePr,
-    MergePr,
-    ClosePr,
-    ReopenPr,
-    Restart,
-    SendPrompt,
-    ViewPrInBrowser,
-}
-
-impl TervezoAction {
-    pub fn label(self) -> &'static str {
-        match self {
-            Self::CreatePr => "Create PR",
-            Self::MergePr => "Merge PR",
-            Self::ClosePr => "Close PR",
-            Self::ReopenPr => "Reopen PR",
-            Self::Restart => "Restart",
-            Self::SendPrompt => "Send prompt",
-            Self::ViewPrInBrowser => "View PR",
-        }
-    }
-
-    pub fn is_destructive(self) -> bool {
-        matches!(self, Self::MergePr | Self::ClosePr | Self::Restart)
-    }
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum TervezoCreateField {
-    Workspace,
-    Prompt,
-    Mode,
-    RepoUrl,
-    BaseBranch,
-}
-
-impl TervezoCreateField {
-    pub fn next(self) -> Self {
-        match self {
-            Self::Workspace => Self::Prompt,
-            Self::Prompt => Self::Mode,
-            Self::Mode => Self::RepoUrl,
-            Self::RepoUrl => Self::BaseBranch,
-            Self::BaseBranch => Self::Workspace,
-        }
-    }
-
-    pub fn prev(self) -> Self {
-        match self {
-            Self::Workspace => Self::BaseBranch,
-            Self::Prompt => Self::Workspace,
-            Self::Mode => Self::Prompt,
-            Self::RepoUrl => Self::Mode,
-            Self::BaseBranch => Self::RepoUrl,
-        }
-    }
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum TervezoCreateMode {
-    Feature,
-    BugFix,
-}
-
-impl TervezoCreateMode {
-    pub fn label(self) -> &'static str {
-        match self {
-            Self::Feature => "Feature",
-            Self::BugFix => "Bug Fix",
-        }
-    }
-
-    pub fn toggle(self) -> Self {
-        match self {
-            Self::Feature => Self::BugFix,
-            Self::BugFix => Self::Feature,
-        }
-    }
-
-    pub fn api_value(self) -> &'static str {
-        match self {
-            Self::Feature => "feature",
-            Self::BugFix => "bugfix",
-        }
-    }
-}
-
-pub struct TervezoCreateState {
-    pub active_field: TervezoCreateField,
-    pub prompt: String,
-    pub mode: TervezoCreateMode,
-    pub repo_url: String,
-    pub base_branch: String,
-    pub submitting: bool,
-    pub error: Option<String>,
-    pub workspaces: Vec<Workspace>,
-    pub selected_workspace: usize,
-    pub workspaces_loading: bool,
-    pub workspaces_error: Option<String>,
-}
-
-impl TervezoCreateState {
-    pub fn new() -> Self {
-        Self {
-            active_field: TervezoCreateField::Workspace,
-            prompt: String::new(),
-            mode: TervezoCreateMode::Feature,
-            repo_url: String::new(),
-            base_branch: "main".to_string(),
-            submitting: false,
-            error: None,
-            workspaces: Vec::new(),
-            selected_workspace: 0,
-            workspaces_loading: true,
-            workspaces_error: None,
-        }
-    }
-}
-
-pub enum WorkspaceMsg {
-    Loaded(Vec<Workspace>),
-    Error(String),
-}
-
-#[allow(clippy::large_enum_variant)]
-pub enum TervezoCreateMsg {
-    Success(Implementation),
-    Error(String),
-}
-
-#[allow(clippy::large_enum_variant)]
-pub enum TervezoDetailMsg {
-    Timeline(Vec<TimelineMessage>),
-    #[allow(dead_code)]
-    TimelineAppend(TimelineMessage),
-    TimelineError(String),
-    Plan(String),
-    Analysis(String),
-    Changes(Vec<FileChange>),
-    TestOutput(Vec<TestReport>),
-    SshCreds(SshCredentials),
-    Status(StatusResponse),
-    PrDetails(PrDetails),
-    ActionSuccess(String),
-    ActionError(String),
-    PromptSent(String),
-    PromptError(String),
-    Error(TervezoTab, String),
-}
-
-pub struct TervezoDetailState {
-    pub implementation_id: String,
-    pub implementation: Implementation,
-    pub active_tab: TervezoTab,
-    pub timeline: Vec<TimelineMessage>,
-    pub timeline_error: Option<String>,
-    pub timeline_scroll: usize,
-    pub plan_content: Option<String>,
-    pub analysis_content: Option<String>,
-    pub changes: Option<Vec<FileChange>>,
-    pub changes_selected_file: usize,
-    pub changes_expanded: HashSet<usize>,
-    pub changes_diff_scroll: usize,
-    pub test_output: Option<Vec<TestReport>>,
-    pub ssh_creds: Option<SshCredentials>,
-    pub loading: HashSet<TervezoTab>,
-    pub timeline_visible_height: std::cell::Cell<usize>,
-    /// Tracks the last effective scroll offset used during rendering.
-    /// Needed to sync `timeline_scroll` when leaving autoscroll mode.
-    pub timeline_rendered_scroll: std::cell::Cell<usize>,
-    pub plan_scroll: usize,
-    pub changes_scroll: usize,
-    pub test_scroll: usize,
-    pub analysis_scroll: usize,
-    pub timeline_at_bottom: bool,
-    pub raw_markdown: bool,
-    // Steps
-    pub status_info: Option<StatusResponse>,
-    pub steps_expanded: bool,
-    // Action menu
-    pub pr_details: Option<PrDetails>,
-    pub action_menu_items: Vec<TervezoAction>,
-    pub action_menu_cursor: usize,
-    pub confirm_action: Option<TervezoAction>,
-    pub action_loading: bool,
-    pub action_result: Option<Result<String, String>>,
-    // Prompt input
-    pub prompt_input: String,
-    pub prompt_sending: bool,
-}
-
-impl TervezoDetailState {
-    pub fn new(implementation: Implementation) -> Self {
-        let id = implementation.id.clone();
-        Self {
-            implementation_id: id,
-            implementation,
-            active_tab: TervezoTab::Plan,
-            timeline: Vec::new(),
-            timeline_error: None,
-            timeline_scroll: 0,
-            plan_content: None,
-            analysis_content: None,
-            changes: None,
-            changes_selected_file: 0,
-            changes_expanded: HashSet::new(),
-            changes_diff_scroll: 0,
-            test_output: None,
-            ssh_creds: None,
-            loading: HashSet::new(),
-            timeline_visible_height: std::cell::Cell::new(20),
-            timeline_rendered_scroll: std::cell::Cell::new(0),
-            plan_scroll: 0,
-            changes_scroll: 0,
-            test_scroll: 0,
-            analysis_scroll: 0,
-            timeline_at_bottom: true,
-            raw_markdown: false,
-            status_info: None,
-            steps_expanded: false,
-            pr_details: None,
-            action_menu_items: Vec::new(),
-            action_menu_cursor: 0,
-            confirm_action: None,
-            action_loading: false,
-            action_result: None,
-            prompt_input: String::new(),
-            prompt_sending: false,
-        }
-    }
-
-    #[allow(dead_code)]
-    pub fn active_tab_scroll(&self) -> usize {
-        match self.active_tab {
-            TervezoTab::Plan => self.plan_scroll,
-            TervezoTab::Changes => self.changes_scroll,
-            TervezoTab::TestOutput => self.test_scroll,
-            TervezoTab::Analysis => self.analysis_scroll,
-        }
-    }
-
-    pub fn scroll_active_tab_up(&mut self) {
-        match self.active_tab {
-            TervezoTab::Plan => {
-                self.plan_scroll = self.plan_scroll.saturating_sub(1);
-            }
-            TervezoTab::Changes => {
-                if self.changes_expanded.contains(&self.changes_selected_file) {
-                    // Scroll diff content
-                    self.changes_diff_scroll = self.changes_diff_scroll.saturating_sub(1);
-                } else {
-                    // Navigate file list
-                    self.changes_selected_file = self.changes_selected_file.saturating_sub(1);
-                    self.changes_diff_scroll = 0;
-                }
-            }
-            TervezoTab::TestOutput => {
-                self.test_scroll = self.test_scroll.saturating_sub(1);
-            }
-            TervezoTab::Analysis => {
-                self.analysis_scroll = self.analysis_scroll.saturating_sub(1);
-            }
-        }
-    }
-
-    pub fn scroll_active_tab_down(&mut self) {
-        match self.active_tab {
-            TervezoTab::Plan => self.plan_scroll += 1,
-            TervezoTab::Changes => {
-                if self.changes_expanded.contains(&self.changes_selected_file) {
-                    // Scroll diff content
-                    self.changes_diff_scroll += 1;
-                } else {
-                    // Navigate file list
-                    let max = self
-                        .changes
-                        .as_ref()
-                        .map(|c| c.len().saturating_sub(1))
-                        .unwrap_or(0);
-                    if self.changes_selected_file < max {
-                        self.changes_selected_file += 1;
-                        self.changes_diff_scroll = 0;
-                    }
-                }
-            }
-            TervezoTab::TestOutput => self.test_scroll += 1,
-            TervezoTab::Analysis => self.analysis_scroll += 1,
-        }
-    }
-
-    pub fn compute_available_actions(&self) -> Vec<TervezoAction> {
-        let mut actions = Vec::new();
-        let status = &self.implementation.status;
-        let has_pr = self.pr_details.is_some() || self.implementation.pr_url.is_some();
-        let pr_open = self
-            .pr_details
-            .as_ref()
-            .map(|pr| pr.is_open())
-            .unwrap_or(false);
-        let pr_closed = self
-            .pr_details
-            .as_ref()
-            .map(|pr| pr.is_closed())
-            .unwrap_or(false);
-        let pr_merged = self
-            .pr_details
-            .as_ref()
-            .map(|pr| pr.merged)
-            .unwrap_or(false);
-
-        // Create PR: completed and no PR
-        if *status == ImplementationStatus::Completed && !has_pr {
-            actions.push(TervezoAction::CreatePr);
-        }
-
-        // Merge PR: PR is open and not merged
-        if pr_open && !pr_merged {
-            actions.push(TervezoAction::MergePr);
-        }
-
-        // Close PR: PR is open and not merged
-        if pr_open && !pr_merged {
-            actions.push(TervezoAction::ClosePr);
-        }
-
-        // Reopen PR: PR is closed and not merged
-        if pr_closed && !pr_merged {
-            actions.push(TervezoAction::ReopenPr);
-        }
-
-        // View PR in browser: PR exists and has a URL
-        let pr_url_available = self
-            .pr_details
-            .as_ref()
-            .and_then(|pr| pr.url.as_ref())
-            .or(self.implementation.pr_url.as_ref())
-            .is_some();
-        if has_pr && pr_url_available {
-            actions.push(TervezoAction::ViewPrInBrowser);
-        }
-
-        // Restart: terminal status
-        if status.is_terminal() {
-            actions.push(TervezoAction::Restart);
-        }
-
-        // Send prompt: waiting for input or terminal status
-        let waiting = self
-            .status_info
-            .as_ref()
-            .map(|s| s.waiting_for_input)
-            .unwrap_or(false);
-        if waiting || status.is_terminal() {
-            actions.push(TervezoAction::SendPrompt);
-        }
-
-        actions
-    }
-
-    pub fn toggle_changes_expand(&mut self) {
-        let idx = self.changes_selected_file;
-        if self.changes_expanded.contains(&idx) {
-            self.changes_expanded.remove(&idx);
-            self.changes_diff_scroll = 0;
-        } else {
-            self.changes_expanded.insert(idx);
-            self.changes_diff_scroll = 0;
-        }
+fn status_rank(status: &SessionStatus) -> u8 {
+    match status {
+        SessionStatus::Thinking => 0,
+        SessionStatus::Active => 1,
+        SessionStatus::Idle => 2,
+        SessionStatus::Dead => 3,
     }
 }
 
 pub struct App {
-    local_sessions: Vec<Session>,
-    entries: Vec<SessionEntry>,
+    sessions: Vec<Session>,
     filtered: Vec<usize>,
     selected: usize,
     view_mode: ViewMode,
@@ -690,90 +90,54 @@ pub struct App {
     store: Option<Store>,
     should_quit: bool,
     terminal_manager: TerminalManager,
-    detail_config: Option<SessionConfig>,
     detail_items: Vec<ConfigItem>,
     detail_cursor: usize,
     detail_preview: Option<(String, String)>,
     detail_preview_scroll: usize,
     usage_fetcher: UsageFetcher,
     usage: UsageData,
-    tervezo_config: Option<TervezoConfig>,
-    tervezo_fetcher: Option<TervezoFetcher>,
-    pub tervezo_detail: Option<TervezoDetailState>,
-    pub tervezo_detail_tx: Option<mpsc::Sender<TervezoDetailMsg>>,
-    tervezo_detail_rx: Option<mpsc::Receiver<TervezoDetailMsg>>,
-    ssh_cache: HashMap<String, SshCredentials>,
-    sse_stream: Option<SseStream>,
-    sse_rx: Option<mpsc::Receiver<SseMessage>>,
-    pub tervezo_create: Option<TervezoCreateState>,
-    tervezo_create_tx: Option<mpsc::Sender<TervezoCreateMsg>>,
-    tervezo_create_rx: Option<mpsc::Receiver<TervezoCreateMsg>>,
-    workspace_rx: Option<mpsc::Receiver<WorkspaceMsg>>,
-    pub new_session_menu: Option<NewSessionMenuState>,
     log_scroll: usize,
     side_panel_open: bool,
     side_panel_focused: bool,
     pub ci_statuses: HashMap<String, CiStatus>,
     ci_tx: mpsc::Sender<(String, CiStatus)>,
     ci_rx: mpsc::Receiver<(String, CiStatus)>,
-    ci_last_check: std::time::Instant,
+    ci_last_check: Option<Instant>,
     pub confirm_kill_session_id: Option<String>,
     unfollowed: HashSet<String>,
-    pub session_files: Vec<crate::session::SessionFile>,
+    pub session_files: Vec<SessionFile>,
     pub session_file_cursor: usize,
 }
 
 impl App {
     pub fn new() -> Result<Self> {
-        let discovery = SessionDiscovery::new();
-        let store = Store::open().ok();
-
-        let tervezo_config = TervezoConfig::load();
-        let tervezo_fetcher = tervezo_config.as_ref().map(TervezoFetcher::spawn);
         let (ci_tx, ci_rx) = mpsc::channel();
 
         let mut app = Self {
-            local_sessions: Vec::new(),
-            entries: Vec::new(),
+            sessions: Vec::new(),
             filtered: Vec::new(),
             selected: 0,
             view_mode: ViewMode::List,
             sort_column: SortColumn::LastActive,
             filter_query: String::new(),
             command_input: String::new(),
-            discovery,
-            store,
+            discovery: SessionDiscovery::new(),
+            store: Store::open().ok(),
             should_quit: false,
             terminal_manager: TerminalManager::new(),
-            detail_config: None,
             detail_items: Vec::new(),
             detail_cursor: 0,
             detail_preview: None,
             detail_preview_scroll: 0,
             usage_fetcher: UsageFetcher::new(),
             usage: UsageData::default(),
-            tervezo_config,
-            tervezo_fetcher,
-            tervezo_detail: None,
-            tervezo_detail_tx: None,
-            tervezo_detail_rx: None,
-            ssh_cache: HashMap::new(),
-            sse_stream: None,
-            sse_rx: None,
-            tervezo_create: None,
-            tervezo_create_tx: None,
-            tervezo_create_rx: None,
-            workspace_rx: None,
-            new_session_menu: None,
             log_scroll: 0,
             side_panel_open: false,
             side_panel_focused: false,
             ci_statuses: HashMap::new(),
             ci_tx,
             ci_rx,
-            ci_last_check: std::time::Instant::now()
-                .checked_sub(std::time::Duration::from_secs(300))
-                .unwrap_or_else(std::time::Instant::now),
+            ci_last_check: None,
             confirm_kill_session_id: None,
             unfollowed: HashSet::new(),
             session_files: Vec::new(),
@@ -785,24 +149,17 @@ impl App {
     }
 
     pub fn refresh(&mut self) -> Result<()> {
-        self.local_sessions = self.discovery.discover_all().unwrap_or_default();
+        self.sessions = self.discovery.discover_all().unwrap_or_default();
 
         if let Some(ref store) = self.store {
-            for session in &self.local_sessions {
+            for session in &self.sessions {
                 let _ = store.upsert_session(session);
             }
         }
 
-        self.merge_entries();
         self.apply_sort();
         self.apply_filter();
-
-        if self.selected >= self.filtered.len() && !self.filtered.is_empty() {
-            self.selected = self.filtered.len() - 1;
-        }
-
         self.usage = self.usage_fetcher.get().clone();
-
         Ok(())
     }
 
@@ -814,306 +171,68 @@ impl App {
         self.usage_fetcher.invalidate();
     }
 
-    pub fn check_tervezo_dirty(&mut self) -> bool {
-        if let Some(ref fetcher) = self.tervezo_fetcher {
-            if fetcher.take_dirty() {
-                self.merge_entries();
-                self.apply_sort();
-                self.apply_filter();
-                if self.selected >= self.filtered.len() && !self.filtered.is_empty() {
-                    self.selected = self.filtered.len() - 1;
-                }
-                return true;
-            }
-        }
-        false
-    }
-
-    pub fn drain_tervezo_detail_messages(&mut self) -> bool {
-        let rx = match self.tervezo_detail_rx.as_ref() {
-            Some(rx) => rx,
-            None => return false,
-        };
-
-        let mut changed = false;
-        while let Ok(msg) = rx.try_recv() {
-            if let Some(ref mut state) = self.tervezo_detail {
-                match msg {
-                    TervezoDetailMsg::Timeline(msgs) => {
-                        state.timeline = msgs;
-                        state.timeline_error = None;
-                        changed = true;
-                    }
-                    TervezoDetailMsg::TimelineError(err) => {
-                        state.timeline_error = Some(err);
-                        changed = true;
-                    }
-                    TervezoDetailMsg::TimelineAppend(msg) => {
-                        state.timeline.push(msg);
-                        if state.timeline.len() > 1000 {
-                            state.timeline.drain(..state.timeline.len() - 1000);
-                        }
-                        changed = true;
-                    }
-                    TervezoDetailMsg::Plan(content) => {
-                        state.plan_content = Some(content);
-                        state.loading.remove(&TervezoTab::Plan);
-                        changed = true;
-                    }
-                    TervezoDetailMsg::Analysis(content) => {
-                        state.analysis_content = Some(content);
-                        state.loading.remove(&TervezoTab::Analysis);
-                        changed = true;
-                    }
-                    TervezoDetailMsg::Changes(changes) => {
-                        state.changes = Some(changes);
-                        state.loading.remove(&TervezoTab::Changes);
-                        changed = true;
-                    }
-                    TervezoDetailMsg::TestOutput(reports) => {
-                        state.test_output = Some(reports);
-                        state.loading.remove(&TervezoTab::TestOutput);
-                        changed = true;
-                    }
-                    TervezoDetailMsg::SshCreds(creds) => {
-                        let id = state.implementation_id.clone();
-                        state.ssh_creds = Some(creds.clone());
-                        self.ssh_cache.insert(id, creds);
-                        changed = true;
-                    }
-                    TervezoDetailMsg::Status(status) => {
-                        state.status_info = Some(status);
-                        changed = true;
-                    }
-                    TervezoDetailMsg::PrDetails(pr) => {
-                        state.pr_details = Some(pr);
-                        changed = true;
-                    }
-                    TervezoDetailMsg::ActionSuccess(msg) => {
-                        state.action_loading = false;
-                        state.action_result = Some(Ok(msg));
-                        changed = true;
-                    }
-                    TervezoDetailMsg::ActionError(msg) => {
-                        state.action_loading = false;
-                        state.action_result = Some(Err(msg));
-                        changed = true;
-                    }
-                    TervezoDetailMsg::PromptSent(msg) => {
-                        state.prompt_sending = false;
-                        state.prompt_input.clear();
-                        state.action_result = Some(Ok(msg));
-                        changed = true;
-                    }
-                    TervezoDetailMsg::PromptError(msg) => {
-                        state.prompt_sending = false;
-                        state.action_result = Some(Err(msg));
-                        changed = true;
-                    }
-                    TervezoDetailMsg::Error(tab, _err) => {
-                        state.loading.remove(&tab);
-                        changed = true;
-                    }
-                }
-            }
-        }
-        changed
-    }
-
-    pub fn drain_sse_messages(&mut self) -> bool {
-        let rx = match self.sse_rx.as_ref() {
-            Some(rx) => rx,
-            None => return false,
-        };
-
-        let mut changed = false;
-        while let Ok(msg) = rx.try_recv() {
-            if let Some(ref mut state) = self.tervezo_detail {
-                match msg {
-                    SseMessage::Event(timeline_msg) => {
-                        state.timeline.push(*timeline_msg);
-                        if state.timeline.len() > 1000 {
-                            let excess = state.timeline.len() - 1000;
-                            state.timeline.drain(..excess);
-                            // Adjust scroll position so it stays on the same content
-                            state.timeline_scroll = state.timeline_scroll.saturating_sub(excess);
-                        }
-                        changed = true;
-                    }
-                    SseMessage::WaitingForInput(waiting) => {
-                        if let Some(ref mut status) = state.status_info {
-                            status.waiting_for_input = waiting;
-                        } else {
-                            // Create minimal status info to hold the waiting flag
-                            state.status_info = Some(StatusResponse {
-                                status: state.implementation.status.label().to_string(),
-                                waiting_for_input: waiting,
-                                current_step_name: None,
-                                started_at: None,
-                                completed_at: None,
-                                duration: None,
-                                steps: Vec::new(),
-                            });
-                        }
-                        changed = true;
-                    }
-                    SseMessage::Error(_) => {
-                        // SSE errors are handled by reconnection logic in the stream itself
-                    }
-                }
-            }
-        }
-        changed
-    }
-
-    pub fn drain_tervezo_create_messages(&mut self) -> Option<TervezoCreateMsg> {
-        let rx = self.tervezo_create_rx.as_ref()?;
-        rx.try_recv().ok()
-    }
-
-    pub fn tervezo_create_tx(&self) -> Option<mpsc::Sender<TervezoCreateMsg>> {
-        self.tervezo_create_tx.clone()
-    }
-
-    pub fn drain_workspace_messages(&mut self) -> Option<WorkspaceMsg> {
-        let rx = self.workspace_rx.as_ref()?;
-        rx.try_recv().ok()
-    }
-
-    fn spawn_workspace_fetch(&mut self) {
-        let config = match self.tervezo_config.as_ref() {
-            Some(c) => c.clone(),
-            None => return,
-        };
-        let (tx, rx) = mpsc::channel();
-        self.workspace_rx = Some(rx);
-        std::thread::spawn(move || {
-            let client = crate::tervezo::TervezoClient::new(&config);
-            match client.list_workspaces() {
-                Ok(workspaces) => {
-                    let _ = tx.send(WorkspaceMsg::Loaded(workspaces));
-                }
-                Err(e) => {
-                    let _ = tx.send(WorkspaceMsg::Error(e));
-                }
-            }
-        });
-    }
-
-    pub fn start_sse_stream(&mut self, implementation_id: &str) {
-        self.stop_sse_stream();
-
-        let config = match self.tervezo_config.as_ref() {
-            Some(c) => c.clone(),
-            None => return,
-        };
-
-        let (tx, rx) = mpsc::channel();
-        let stream = SseStream::connect(&config, implementation_id, None, tx);
-        self.sse_stream = Some(stream);
-        self.sse_rx = Some(rx);
-    }
-
-    pub fn stop_sse_stream(&mut self) {
-        self.sse_stream = None;
-        self.sse_rx = None;
-    }
-
-    fn merge_entries(&mut self) {
-        let mut entries: Vec<SessionEntry> = self
-            .local_sessions
-            .iter()
-            .filter(|s| !self.unfollowed.contains(&s.id))
-            .cloned()
-            .map(SessionEntry::Local)
-            .collect();
-
-        if let Some(ref fetcher) = self.tervezo_fetcher {
-            let remote = fetcher.implementations();
-            for imp in remote {
-                if !self.unfollowed.contains(&imp.id) {
-                    entries.push(SessionEntry::Remote(imp));
-                }
-            }
-        }
-
-        self.entries = entries;
-    }
-
-    pub fn unfollow_session(&mut self, id: &str) {
-        self.unfollowed.insert(id.to_string());
-    }
-
-    pub fn merge_and_refilter(&mut self) {
-        self.merge_entries();
-        self.apply_sort();
-        self.apply_filter();
-        if self.selected >= self.filtered.len() && !self.filtered.is_empty() {
-            self.selected = self.filtered.len() - 1;
-        }
-    }
-
     pub fn usage(&self) -> &UsageData {
         &self.usage
     }
 
+    pub fn unfollow_session(&mut self, id: &str) {
+        self.unfollowed.insert(id.to_string());
+        self.apply_filter();
+    }
+
     fn apply_sort(&mut self) {
         match self.sort_column {
-            SortColumn::LastActive => {
-                self.entries
-                    .sort_by_key(|e| std::cmp::Reverse(e.sort_key_last_activity()));
-            }
-            SortColumn::Project => {
-                self.entries
-                    .sort_by(|a, b| a.sort_key_project().cmp(b.sort_key_project()));
-            }
-            SortColumn::Cost => {
-                self.entries.sort_by(|a, b| {
-                    b.sort_key_cost()
-                        .partial_cmp(&a.sort_key_cost())
-                        .unwrap_or(std::cmp::Ordering::Equal)
-                });
-            }
-            SortColumn::Status => {
-                self.entries.sort_by_key(|e| e.sort_key_status());
-            }
-            SortColumn::Tokens => {
-                self.entries
-                    .sort_by_key(|e| std::cmp::Reverse(e.sort_key_tokens()));
-            }
+            SortColumn::LastActive => self
+                .sessions
+                .sort_by_key(|s| std::cmp::Reverse(s.last_activity)),
+            SortColumn::Project => self
+                .sessions
+                .sort_by(|a, b| a.project_name.cmp(&b.project_name)),
+            SortColumn::Cost => self.sessions.sort_by(|a, b| {
+                b.estimated_cost_usd()
+                    .partial_cmp(&a.estimated_cost_usd())
+                    .unwrap_or(std::cmp::Ordering::Equal)
+            }),
+            SortColumn::Status => self.sessions.sort_by_key(|s| status_rank(&s.status)),
+            SortColumn::Tokens => self
+                .sessions
+                .sort_by_key(|s| std::cmp::Reverse(s.total_tokens())),
         }
     }
 
     fn apply_filter(&mut self) {
         let query = self.filter_query.to_lowercase();
         self.filtered = self
-            .entries
+            .sessions
             .iter()
             .enumerate()
-            .filter(|(_, e)| e.matches_filter(&query))
+            .filter(|(_, s)| !self.unfollowed.contains(&s.id) && s.matches_filter(&query))
             .map(|(i, _)| i)
             .collect();
+        self.clamp_selection();
     }
 
-    pub fn filtered_sessions(&self) -> Vec<&SessionEntry> {
+    fn clamp_selection(&mut self) {
+        if self.selected >= self.filtered.len() && !self.filtered.is_empty() {
+            self.selected = self.filtered.len() - 1;
+        }
+    }
+
+    pub fn filtered_sessions(&self) -> Vec<&Session> {
         self.filtered
             .iter()
-            .filter_map(|&i| self.entries.get(i))
+            .filter_map(|&i| self.sessions.get(i))
             .collect()
     }
 
-    pub fn selected_session(&self) -> Option<&SessionEntry> {
+    pub fn selected_session(&self) -> Option<&Session> {
         self.filtered
             .get(self.selected)
-            .and_then(|&i| self.entries.get(i))
+            .and_then(|&i| self.sessions.get(i))
     }
 
     pub fn selected_index(&self) -> usize {
         self.selected
-    }
-
-    pub fn set_selected(&mut self, idx: usize) {
-        self.selected = idx;
     }
 
     pub fn view_mode(&self) -> &ViewMode {
@@ -1121,111 +240,25 @@ impl App {
     }
 
     pub fn set_view_mode(&mut self, mode: ViewMode) {
-        if matches!(
-            mode,
-            ViewMode::QSwitcher | ViewMode::TerminalQSwitcher | ViewMode::TervezoQSwitcher
-        ) {
-            let max = self.filtered.len().min(9);
+        if matches!(mode, ViewMode::QSwitcher | ViewMode::TerminalQSwitcher) {
+            let max = self.filtered.len().min(QSWITCHER_MAX);
             if self.selected >= max && max > 0 {
                 self.selected = max - 1;
             }
         }
         if mode == ViewMode::Detail {
-            if let Some(entry) = self.selected_session() {
-                if let Some(session) = entry.as_local() {
-                    let cfg = scan_session_config(&session.cwd);
-                    self.detail_items = build_config_items(&cfg, &session.cwd);
-                    self.detail_config = Some(cfg);
-                    self.detail_cursor = 0;
-                    self.detail_preview = None;
-                    self.detail_preview_scroll = 0;
-                }
+            if let Some(session) = self.selected_session() {
+                let cfg = scan_session_config(&session.cwd);
+                self.detail_items = build_config_items(&cfg, &session.cwd);
+                self.detail_cursor = 0;
+                self.detail_preview = None;
+                self.detail_preview_scroll = 0;
             }
-        } else if !matches!(
-            mode,
-            ViewMode::TervezoDetail
-                | ViewMode::TervezoActionMenu
-                | ViewMode::TervezoConfirm
-                | ViewMode::TervezoPromptInput
-                | ViewMode::TervezoCreateDialog
-        ) {
-            self.detail_config = None;
+        } else if mode != ViewMode::SessionFilePicker {
             self.detail_items.clear();
             self.detail_preview = None;
         }
-        if mode == ViewMode::TervezoDetail {
-            if let Some(entry) = self.selected_session() {
-                if let Some(imp) = entry.as_remote() {
-                    let state = TervezoDetailState::new(imp.clone());
-                    self.tervezo_detail = Some(state);
-                    let (tx, rx) = mpsc::channel();
-                    self.tervezo_detail_tx = Some(tx);
-                    self.tervezo_detail_rx = Some(rx);
-                }
-            }
-        } else if !matches!(
-            mode,
-            ViewMode::TervezoActionMenu
-                | ViewMode::TervezoConfirm
-                | ViewMode::TervezoPromptInput
-                | ViewMode::TervezoQSwitcher
-        ) {
-            self.tervezo_detail = None;
-            self.tervezo_detail_tx = None;
-            self.tervezo_detail_rx = None;
-            self.stop_sse_stream();
-        }
-        if mode == ViewMode::NewSessionMenu {
-            self.new_session_menu = Some(NewSessionMenuState::new(self.has_tervezo()));
-        } else if self.new_session_menu.is_some() {
-            self.new_session_menu = None;
-        }
-        if mode == ViewMode::TervezoCreateDialog {
-            let mut state = TervezoCreateState::new();
-            if let Ok(output) = std::process::Command::new("git")
-                .args(["remote", "get-url", "origin"])
-                .output()
-            {
-                if output.status.success() {
-                    let url = String::from_utf8_lossy(&output.stdout).trim().to_string();
-                    if !url.is_empty() {
-                        state.repo_url = extract_repo_name(&url);
-                    }
-                }
-            }
-            self.tervezo_create = Some(state);
-            let (tx, rx) = mpsc::channel();
-            self.tervezo_create_tx = Some(tx);
-            self.tervezo_create_rx = Some(rx);
-            self.spawn_workspace_fetch();
-        } else if self.tervezo_create.is_some() && mode != ViewMode::TervezoCreateDialog {
-            self.tervezo_create = None;
-            self.tervezo_create_tx = None;
-            self.tervezo_create_rx = None;
-            self.workspace_rx = None;
-        }
         self.view_mode = mode;
-    }
-
-    pub fn tervezo_config(&self) -> Option<&TervezoConfig> {
-        self.tervezo_config.as_ref()
-    }
-
-    pub fn has_tervezo(&self) -> bool {
-        self.tervezo_config.is_some()
-    }
-
-    pub fn tervezo_fetcher_ref(&self) -> Option<&TervezoFetcher> {
-        self.tervezo_fetcher.as_ref()
-    }
-
-    pub fn remote_count(&self) -> usize {
-        self.entries.iter().filter(|e| e.is_remote()).count()
-    }
-
-    #[allow(dead_code)]
-    pub fn ssh_cache(&self) -> &HashMap<String, SshCredentials> {
-        &self.ssh_cache
     }
 
     pub fn detail_items(&self) -> &[ConfigItem] {
@@ -1275,75 +308,55 @@ impl App {
     }
 
     pub fn move_up(&mut self) {
-        if self.view_mode == ViewMode::Detail {
-            if self.detail_preview.is_some() {
-                self.detail_preview_scroll = self.detail_preview_scroll.saturating_sub(1);
-            } else if self.detail_cursor > 0 {
-                self.detail_cursor -= 1;
+        match self.view_mode {
+            ViewMode::Detail => {
+                if self.detail_preview.is_some() {
+                    self.detail_preview_scroll = self.detail_preview_scroll.saturating_sub(1);
+                } else {
+                    self.detail_cursor = self.detail_cursor.saturating_sub(1);
+                }
             }
-            return;
-        }
-        if self.view_mode == ViewMode::TervezoDetail {
-            if let Some(ref mut state) = self.tervezo_detail {
-                state.scroll_active_tab_up();
-            }
-            return;
-        }
-        if self.view_mode == ViewMode::Log {
-            self.log_scroll_up();
-            return;
-        }
-        if self.selected > 0 {
-            self.selected -= 1;
+            ViewMode::Log => self.log_scroll_up(),
+            _ => self.selected = self.selected.saturating_sub(1),
         }
     }
 
     pub fn move_down(&mut self) {
-        if self.view_mode == ViewMode::Detail {
-            if self.detail_preview.is_some() {
-                self.detail_preview_scroll += 1;
-            } else if self.detail_cursor + 1 < self.detail_items.len() {
-                self.detail_cursor += 1;
+        match self.view_mode {
+            ViewMode::Detail => {
+                if self.detail_preview.is_some() {
+                    self.detail_preview_scroll += 1;
+                } else if self.detail_cursor + 1 < self.detail_items.len() {
+                    self.detail_cursor += 1;
+                }
             }
-            return;
-        }
-        if self.view_mode == ViewMode::TervezoDetail {
-            if let Some(ref mut state) = self.tervezo_detail {
-                state.scroll_active_tab_down();
+            ViewMode::Log => self.log_scroll_down(),
+            ViewMode::QSwitcher | ViewMode::TerminalQSwitcher => {
+                let limit = self.filtered.len().min(QSWITCHER_MAX);
+                if self.selected + 1 < limit {
+                    self.selected += 1;
+                }
             }
-            return;
-        }
-        if self.view_mode == ViewMode::Log {
-            self.log_scroll_down();
-            return;
-        }
-        let limit = if matches!(
-            self.view_mode,
-            ViewMode::QSwitcher | ViewMode::TerminalQSwitcher | ViewMode::TervezoQSwitcher
-        ) {
-            self.filtered.len().min(9)
-        } else {
-            self.filtered.len()
-        };
-        if self.selected + 1 < limit {
-            self.selected += 1;
+            _ => {
+                if self.selected + 1 < self.filtered.len() {
+                    self.selected += 1;
+                }
+            }
         }
     }
 
     pub fn move_to_top(&mut self) {
         if self.view_mode == ViewMode::Log {
             self.log_scroll_to_top();
-            return;
+        } else {
+            self.selected = 0;
         }
-        self.selected = 0;
     }
 
     pub fn move_to_bottom(&mut self) {
         if self.view_mode == ViewMode::Log {
             self.log_scroll_to_bottom();
-            return;
-        }
-        if !self.filtered.is_empty() {
+        } else if !self.filtered.is_empty() {
             self.selected = self.filtered.len() - 1;
         }
     }
@@ -1402,7 +415,7 @@ impl App {
     }
 
     pub fn active_attached_sessions(&self) -> Vec<String> {
-        self.local_sessions
+        self.sessions
             .iter()
             .filter(|s| {
                 self.terminal_manager.is_attached(&s.id)
@@ -1429,78 +442,13 @@ impl App {
     }
 
     pub fn command_tab_complete(&mut self) {
-        let input = self.command_input.clone();
-        let expanded = if let Some(rest) = input.strip_prefix('~') {
-            if let Some(home) = dirs::home_dir() {
-                home.to_string_lossy().to_string() + rest
-            } else {
-                input
-            }
-        } else {
-            input
-        };
-
-        let path = std::path::Path::new(&expanded);
-        let (dir, prefix) = if path.is_dir() && expanded.ends_with('/') {
-            (path.to_path_buf(), String::new())
-        } else {
-            let dir = path.parent().unwrap_or(std::path::Path::new("."));
-            let prefix = path
-                .file_name()
-                .map(|f| f.to_string_lossy().to_string())
-                .unwrap_or_default();
-            (dir.to_path_buf(), prefix)
-        };
-
-        let entries = match std::fs::read_dir(&dir) {
-            Ok(e) => e,
-            Err(_) => return,
-        };
-
-        let mut matches: Vec<String> = entries
-            .flatten()
-            .filter(|e| {
-                e.file_type().map(|ft| ft.is_dir()).unwrap_or(false)
-                    && e.file_name().to_string_lossy().starts_with(&prefix)
-            })
-            .map(|e| {
-                let full = dir.join(e.file_name());
-                let mut s = full.to_string_lossy().to_string();
-                s.push('/');
-                if self.command_input.starts_with('~') {
-                    if let Some(home) = dirs::home_dir() {
-                        let home_str = home.to_string_lossy().to_string();
-                        if s.starts_with(&home_str) {
-                            s = format!("~{}", &s[home_str.len()..]);
-                        }
-                    }
-                }
-                s
-            })
-            .collect();
-
-        matches.sort();
-
-        if matches.len() == 1 {
-            self.command_input = matches.remove(0);
-        } else if matches.len() > 1 {
-            let common = longest_common_prefix(&matches);
-            if common.len() > self.command_input.len() {
-                self.command_input = common;
-            }
+        if let Some(completed) = complete_directory(&self.command_input) {
+            self.command_input = completed;
         }
     }
 
     pub fn all_sessions(&self) -> &[Session] {
-        &self.local_sessions
-    }
-
-    #[allow(dead_code)]
-    pub fn live_sessions(&self) -> Vec<&Session> {
-        self.local_sessions
-            .iter()
-            .filter(|s| s.pid.is_some())
-            .collect()
+        &self.sessions
     }
 
     pub fn log_scroll(&self) -> usize {
@@ -1548,15 +496,9 @@ impl App {
     pub fn open_side_panel(&mut self, rows: u16, cols: u16) {
         let cwd = self
             .attached_session_id()
-            .and_then(|sid| {
-                self.local_sessions
-                    .iter()
-                    .find(|s| s.id == sid)
-                    .map(|s| s.cwd.clone())
-            })
-            .unwrap_or_else(|| {
-                std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("/"))
-            });
+            .and_then(|sid| self.sessions.iter().find(|s| s.id == sid))
+            .map(|s| s.cwd.clone())
+            .unwrap_or_else(|| std::env::current_dir().unwrap_or_else(|_| PathBuf::from("/")));
         if !self.terminal_manager.open_side_terminal(&cwd, rows, cols) {
             return;
         }
@@ -1572,57 +514,34 @@ impl App {
 
     pub fn drain_ci_statuses(&mut self) {
         while let Ok((id, status)) = self.ci_rx.try_recv() {
-            if matches!(self.ci_statuses.get(&id), Some(CiStatus::Fixing)) {
-                if matches!(status, CiStatus::Passing | CiStatus::Running) {
-                    self.ci_statuses.insert(id, status);
-                }
-            } else {
-                self.ci_statuses.insert(id, status);
-            }
+            self.ci_statuses.insert(id, status);
         }
     }
 
     pub fn check_ci_statuses(&mut self) {
-        if self.ci_last_check.elapsed() < std::time::Duration::from_secs(120) {
+        if self
+            .ci_last_check
+            .is_some_and(|t| t.elapsed() < CI_CHECK_INTERVAL)
+        {
             return;
         }
-        self.ci_last_check = std::time::Instant::now();
+        self.ci_last_check = Some(Instant::now());
 
-        let entries: Vec<SessionEntry> = self
-            .filtered
+        let targets: Vec<(String, Option<String>, PathBuf)> = self
+            .filtered_sessions()
             .iter()
-            .filter_map(|&i| self.entries.get(i).cloned())
+            .map(|s| (s.id.clone(), s.git_branch.clone(), s.cwd.clone()))
             .collect();
 
-        for entry in &entries {
-            let id = entry.id().to_string();
-            if matches!(self.ci_statuses.get(&id), Some(CiStatus::Fixing)) {
-                continue;
-            }
-            let branch = match entry.branch() {
-                Some(b) => b.to_string(),
-                None => {
-                    let tx = self.ci_tx.clone();
-                    let id_clone = id.clone();
-                    let _ = tx.send((id_clone, CiStatus::NoBranch));
-                    continue;
-                }
-            };
-
+        for (id, branch, cwd) in targets {
             let tx = self.ci_tx.clone();
-
-            match entry {
-                SessionEntry::Local(s) => {
-                    let cwd = s.cwd.clone();
+            match branch {
+                None => {
+                    let _ = tx.send((id, CiStatus::NoBranch));
+                }
+                Some(branch) => {
                     std::thread::spawn(move || {
                         let status = check_ci_for_local(&cwd, &branch);
-                        let _ = tx.send((id, status));
-                    });
-                }
-                SessionEntry::Remote(i) => {
-                    let repo_url = i.repo_url.clone().unwrap_or_default();
-                    std::thread::spawn(move || {
-                        let status = check_ci_for_remote(&repo_url, &branch);
                         let _ = tx.send((id, status));
                     });
                 }
@@ -1631,11 +550,72 @@ impl App {
     }
 }
 
-fn longest_common_prefix(strings: &[String]) -> String {
-    if strings.is_empty() {
-        return String::new();
+fn expand_home(input: &str) -> String {
+    match (input.strip_prefix('~'), dirs::home_dir()) {
+        (Some(rest), Some(home)) => home.to_string_lossy().to_string() + rest,
+        _ => input.to_string(),
     }
-    let first = &strings[0];
+}
+
+fn contract_home(path: &str) -> String {
+    match dirs::home_dir() {
+        Some(home) => {
+            let home_str = home.to_string_lossy().to_string();
+            match path.strip_prefix(&home_str) {
+                Some(rest) => format!("~{}", rest),
+                None => path.to_string(),
+            }
+        }
+        None => path.to_string(),
+    }
+}
+
+fn complete_directory(input: &str) -> Option<String> {
+    let expanded = expand_home(input);
+    let path = Path::new(&expanded);
+    let (dir, prefix) = if path.is_dir() && expanded.ends_with('/') {
+        (path.to_path_buf(), String::new())
+    } else {
+        let dir = path.parent().unwrap_or(Path::new("."));
+        let prefix = path
+            .file_name()
+            .map(|f| f.to_string_lossy().to_string())
+            .unwrap_or_default();
+        (dir.to_path_buf(), prefix)
+    };
+
+    let entries = std::fs::read_dir(&dir).ok()?;
+    let mut matches: Vec<String> = entries
+        .flatten()
+        .filter(|e| {
+            e.file_type().map(|ft| ft.is_dir()).unwrap_or(false)
+                && e.file_name().to_string_lossy().starts_with(&prefix)
+        })
+        .map(|e| {
+            let full = format!("{}/", dir.join(e.file_name()).to_string_lossy());
+            if input.starts_with('~') {
+                contract_home(&full)
+            } else {
+                full
+            }
+        })
+        .collect();
+    matches.sort();
+
+    match matches.len() {
+        0 => None,
+        1 => matches.pop(),
+        _ => {
+            let common = longest_common_prefix(&matches);
+            (common.len() > input.len()).then_some(common)
+        }
+    }
+}
+
+fn longest_common_prefix(strings: &[String]) -> String {
+    let Some(first) = strings.first() else {
+        return String::new();
+    };
     let mut len = first.len();
     for s in &strings[1..] {
         len = len.min(s.len());
@@ -1649,31 +629,7 @@ fn longest_common_prefix(strings: &[String]) -> String {
     first[..len].to_string()
 }
 
-fn parse_github_owner_repo(url: &str) -> Option<String> {
-    let url = url.trim().trim_end_matches(".git");
-    if let Some(rest) = url.strip_prefix("https://github.com/") {
-        let parts: Vec<&str> = rest.splitn(3, '/').collect();
-        if parts.len() >= 2 {
-            return Some(format!("{}/{}", parts[0], parts[1]));
-        }
-    }
-    if let Some(rest) = url.strip_prefix("git@github.com:") {
-        let parts: Vec<&str> = rest.splitn(3, '/').collect();
-        if parts.len() >= 2 {
-            return Some(format!("{}/{}", parts[0], parts[1]));
-        }
-    }
-    None
-}
-
-fn extract_repo_name(url: &str) -> String {
-    if let Some(owner_repo) = parse_github_owner_repo(url) {
-        return owner_repo;
-    }
-    url.to_string()
-}
-
-fn check_ci_for_local(cwd: &std::path::Path, branch: &str) -> CiStatus {
+fn check_ci_for_local(cwd: &Path, branch: &str) -> CiStatus {
     let output = std::process::Command::new("gh")
         .args([
             "run",
@@ -1687,45 +643,20 @@ fn check_ci_for_local(cwd: &std::path::Path, branch: &str) -> CiStatus {
         ])
         .current_dir(cwd)
         .output();
-    parse_gh_run_output(output)
+    match output {
+        Ok(o) if o.status.success() => parse_gh_runs_json(&String::from_utf8_lossy(&o.stdout)),
+        _ => CiStatus::None,
+    }
 }
 
-fn check_ci_for_remote(repo_url: &str, branch: &str) -> CiStatus {
-    let owner_repo = match parse_github_owner_repo(repo_url) {
-        Some(r) => r,
-        None => return CiStatus::None,
-    };
-    let output = std::process::Command::new("gh")
-        .args([
-            "run",
-            "list",
-            "--branch",
-            branch,
-            "--limit",
-            "1",
-            "--json",
-            "conclusion,status",
-            "--repo",
-            &owner_repo,
-        ])
-        .output();
-    parse_gh_run_output(output)
-}
-
-fn parse_gh_run_output(output: std::io::Result<std::process::Output>) -> CiStatus {
-    let output = match output {
-        Ok(o) if o.status.success() => o,
-        _ => return CiStatus::None,
-    };
-    let text = String::from_utf8_lossy(&output.stdout);
-    let runs: Vec<serde_json::Value> = match serde_json::from_str(&text) {
+fn parse_gh_runs_json(text: &str) -> CiStatus {
+    let runs: Vec<serde_json::Value> = match serde_json::from_str(text) {
         Ok(v) => v,
         Err(_) => return CiStatus::None,
     };
-    if runs.is_empty() {
+    let Some(run) = runs.first() else {
         return CiStatus::None;
-    }
-    let run = &runs[0];
+    };
     let status = run.get("status").and_then(|v| v.as_str()).unwrap_or("");
     let conclusion = run.get("conclusion").and_then(|v| v.as_str()).unwrap_or("");
 
@@ -1743,169 +674,60 @@ fn parse_gh_run_output(output: std::io::Result<std::process::Output>) -> CiStatu
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::tervezo::models::{Implementation, ImplementationStatus, PrDetails};
 
-    /// Build a minimal Implementation for tests.
-    fn make_impl(status: ImplementationStatus, pr_url: Option<&str>) -> Implementation {
-        Implementation {
-            id: "test-id".into(),
-            title: None,
-            status,
-            branch: None,
-            repo_url: None,
-            created_at: None,
-            updated_at: None,
-            estimated_cost_usd: None,
-            total_tokens: None,
-            message_count: None,
-            pr_url: pr_url.map(String::from),
-            pr_number: None,
-            pr_status: None,
-            mode: None,
+    #[test]
+    fn test_longest_common_prefix() {
+        let items = vec!["/a/foo/".to_string(), "/a/foobar/".to_string()];
+        assert_eq!(longest_common_prefix(&items), "/a/foo");
+        assert_eq!(longest_common_prefix(&[]), "");
+        assert_eq!(longest_common_prefix(&["/x/".to_string()]), "/x/");
+    }
+
+    #[test]
+    fn test_parse_gh_runs_json() {
+        assert_eq!(
+            parse_gh_runs_json(r#"[{"status":"completed","conclusion":"success"}]"#),
+            CiStatus::Passing
+        );
+        assert_eq!(
+            parse_gh_runs_json(r#"[{"status":"completed","conclusion":"failure"}]"#),
+            CiStatus::Failing
+        );
+        assert_eq!(
+            parse_gh_runs_json(r#"[{"status":"in_progress","conclusion":""}]"#),
+            CiStatus::Running
+        );
+        assert_eq!(parse_gh_runs_json("[]"), CiStatus::None);
+        assert_eq!(parse_gh_runs_json("not json"), CiStatus::None);
+    }
+
+    #[test]
+    fn test_complete_directory_single_match() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::create_dir(dir.path().join("alpha")).unwrap();
+        std::fs::create_dir(dir.path().join("beta")).unwrap();
+        let input = format!("{}/al", dir.path().display());
+        let completed = complete_directory(&input).unwrap();
+        assert!(completed.ends_with("/alpha/"));
+    }
+
+    #[test]
+    fn test_complete_directory_common_prefix() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::create_dir(dir.path().join("proj-one")).unwrap();
+        std::fs::create_dir(dir.path().join("proj-two")).unwrap();
+        let input = format!("{}/p", dir.path().display());
+        let completed = complete_directory(&input).unwrap();
+        assert!(completed.ends_with("/proj-"));
+        assert_eq!(complete_directory(&completed), None);
+    }
+
+    #[test]
+    fn test_sort_column_cycle() {
+        let mut col = SortColumn::LastActive;
+        for _ in 0..5 {
+            col = col.next();
         }
-    }
-
-    fn make_pr(status: &str, url: Option<&str>, merged: bool) -> PrDetails {
-        PrDetails {
-            url: url.map(String::from),
-            number: Some(1),
-            status: Some(status.into()),
-            title: None,
-            mergeable: None,
-            merged,
-            draft: false,
-        }
-    }
-
-    #[test]
-    fn test_view_pr_in_browser_available_when_pr_details_has_url() {
-        let imp = make_impl(ImplementationStatus::Completed, None);
-        let mut state = TervezoDetailState::new(imp);
-        state.pr_details = Some(make_pr("open", Some("https://github.com/pr/1"), false));
-        let actions = state.compute_available_actions();
-        assert!(
-            actions.contains(&TervezoAction::ViewPrInBrowser),
-            "ViewPrInBrowser should be available when pr_details has a URL"
-        );
-    }
-
-    #[test]
-    fn test_view_pr_in_browser_available_via_implementation_pr_url() {
-        let imp = make_impl(
-            ImplementationStatus::Completed,
-            Some("https://github.com/pr/2"),
-        );
-        let state = TervezoDetailState::new(imp);
-        // No pr_details, but implementation.pr_url is set → has_pr = true, url available
-        let actions = state.compute_available_actions();
-        assert!(
-            actions.contains(&TervezoAction::ViewPrInBrowser),
-            "ViewPrInBrowser should be available when implementation.pr_url is set"
-        );
-    }
-
-    #[test]
-    fn test_view_pr_in_browser_not_available_without_pr() {
-        let imp = make_impl(ImplementationStatus::Completed, None);
-        let state = TervezoDetailState::new(imp);
-        let actions = state.compute_available_actions();
-        assert!(
-            !actions.contains(&TervezoAction::ViewPrInBrowser),
-            "ViewPrInBrowser should NOT appear when no PR exists"
-        );
-    }
-
-    #[test]
-    fn test_view_pr_in_browser_not_available_when_pr_has_no_url() {
-        let imp = make_impl(ImplementationStatus::Completed, None);
-        let mut state = TervezoDetailState::new(imp);
-        // PR details exist but url is None
-        state.pr_details = Some(make_pr("open", None, false));
-        let actions = state.compute_available_actions();
-        assert!(
-            !actions.contains(&TervezoAction::ViewPrInBrowser),
-            "ViewPrInBrowser should NOT appear when PR has no URL"
-        );
-    }
-
-    #[test]
-    fn test_view_pr_in_browser_is_not_destructive() {
-        assert!(
-            !TervezoAction::ViewPrInBrowser.is_destructive(),
-            "ViewPrInBrowser must not be destructive (no confirmation dialog)"
-        );
-    }
-
-    #[test]
-    fn test_create_field_next_cycles_through_all_fields() {
-        let field = TervezoCreateField::Workspace;
-        let field = field.next();
-        assert_eq!(field, TervezoCreateField::Prompt);
-        let field = field.next();
-        assert_eq!(field, TervezoCreateField::Mode);
-        let field = field.next();
-        assert_eq!(field, TervezoCreateField::RepoUrl);
-        let field = field.next();
-        assert_eq!(field, TervezoCreateField::BaseBranch);
-        let field = field.next();
-        assert_eq!(field, TervezoCreateField::Workspace);
-    }
-
-    #[test]
-    fn test_create_field_prev_cycles_through_all_fields() {
-        let field = TervezoCreateField::Workspace;
-        let field = field.prev();
-        assert_eq!(field, TervezoCreateField::BaseBranch);
-        let field = field.prev();
-        assert_eq!(field, TervezoCreateField::RepoUrl);
-        let field = field.prev();
-        assert_eq!(field, TervezoCreateField::Mode);
-        let field = field.prev();
-        assert_eq!(field, TervezoCreateField::Prompt);
-        let field = field.prev();
-        assert_eq!(field, TervezoCreateField::Workspace);
-    }
-
-    #[test]
-    fn test_create_mode_toggle_and_api_values() {
-        let mode = TervezoCreateMode::Feature;
-        assert_eq!(mode.label(), "Feature");
-        assert_eq!(mode.api_value(), "feature");
-
-        let mode = mode.toggle();
-        assert_eq!(mode, TervezoCreateMode::BugFix);
-        assert_eq!(mode.label(), "Bug Fix");
-        assert_eq!(mode.api_value(), "bugfix");
-
-        let mode = mode.toggle();
-        assert_eq!(mode, TervezoCreateMode::Feature);
-    }
-
-    #[test]
-    fn test_create_state_defaults() {
-        let state = TervezoCreateState::new();
-        assert_eq!(state.active_field, TervezoCreateField::Workspace);
-        assert_eq!(state.mode, TervezoCreateMode::Feature);
-        assert!(state.prompt.is_empty());
-        assert_eq!(state.base_branch, "main");
-        assert!(!state.submitting);
-        assert!(state.error.is_none());
-    }
-
-    #[test]
-    fn test_parse_github_owner_repo() {
-        assert_eq!(
-            parse_github_owner_repo("https://github.com/waxb/c9s"),
-            Some("waxb/c9s".to_string())
-        );
-        assert_eq!(
-            parse_github_owner_repo("https://github.com/waxb/c9s.git"),
-            Some("waxb/c9s".to_string())
-        );
-        assert_eq!(
-            parse_github_owner_repo("git@github.com:waxb/c9s.git"),
-            Some("waxb/c9s".to_string())
-        );
-        assert_eq!(parse_github_owner_repo("not-a-url"), None);
+        assert_eq!(col, SortColumn::LastActive);
     }
 }

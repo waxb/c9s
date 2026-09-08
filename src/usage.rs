@@ -226,6 +226,28 @@ fn format_reset_time(iso: &str) -> Option<String> {
     Some(local.format("%b %-d at %-H:%M").to_string())
 }
 
+fn call_api(token: &str) -> Option<ApiResponse> {
+    let agent = ureq::Agent::config_builder()
+        .timeout_global(Some(std::time::Duration::from_secs(REQUEST_TIMEOUT_SECS)))
+        .build()
+        .new_agent();
+
+    let resp = agent
+        .get("https://api.anthropic.com/api/oauth/usage")
+        .header("Authorization", &format!("Bearer {}", token))
+        .header("anthropic-beta", "oauth-2025-04-20")
+        .header("User-Agent", "c9s/0.1")
+        .call()
+        .ok()?;
+
+    if resp.status() != 200 {
+        return None;
+    }
+
+    let body = resp.into_body().read_to_string().ok()?;
+    serde_json::from_str(&body).ok()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -251,26 +273,4 @@ mod tests {
         assert_eq!(parse_utilization(Some(f64::NAN)), None);
         assert_eq!(parse_utilization(None), None);
     }
-}
-
-fn call_api(token: &str) -> Option<ApiResponse> {
-    let agent = ureq::Agent::config_builder()
-        .timeout_global(Some(std::time::Duration::from_secs(REQUEST_TIMEOUT_SECS)))
-        .build()
-        .new_agent();
-
-    let resp = agent
-        .get("https://api.anthropic.com/api/oauth/usage")
-        .header("Authorization", &format!("Bearer {}", token))
-        .header("anthropic-beta", "oauth-2025-04-20")
-        .header("User-Agent", "c9s/0.1")
-        .call()
-        .ok()?;
-
-    if resp.status() != 200 {
-        return None;
-    }
-
-    let body = resp.into_body().read_to_string().ok()?;
-    serde_json::from_str(&body).ok()
 }

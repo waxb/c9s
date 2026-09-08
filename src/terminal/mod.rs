@@ -43,24 +43,6 @@ impl EmbeddedTerminal {
         )
     }
 
-    pub fn spawn_ssh(
-        session_id: &str,
-        project_name: &str,
-        ssh_command: &str,
-        rows: u16,
-        cols: u16,
-    ) -> Result<Self> {
-        Self::spawn_inner(
-            session_id,
-            project_name,
-            "bash",
-            &["-c", ssh_command],
-            Path::new("/tmp"),
-            rows,
-            cols,
-        )
-    }
-
     pub(crate) fn spawn_shell(cwd: &Path, rows: u16, cols: u16) -> Result<Self> {
         let id = uuid::Uuid::new_v4().to_string();
         Self::spawn_inner(&id, "shell", "bash", &["--login"], cwd, rows, cols)

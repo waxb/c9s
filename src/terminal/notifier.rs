@@ -231,10 +231,8 @@ impl JsonlNotifier {
                         self.tool_use_at = None;
                     }
                 }
-                "progress" => {
-                    if self.state != SessionState::ToolWait {
-                        self.state = SessionState::Working;
-                    }
+                "progress" if self.state != SessionState::ToolWait => {
+                    self.state = SessionState::Working;
                 }
                 _ => {}
             }

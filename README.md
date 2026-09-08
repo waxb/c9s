@@ -23,6 +23,7 @@ c9s
 - Bell notifications when Claude finishes
 - Session status (Active / Thinking / Idle / Dead)
 - Native text selection in terminal mode
+- Side shell panel next to the attached session (Ctrl+t)
 
 ## Keybindings
 
@@ -38,10 +39,15 @@ c9s
 | `1`-`9` | Attach to session by number |
 | `Space` | Quick switcher |
 | `d` | Session detail panel |
+| `f` | Session file picker (in detail view) |
 | `n` | New session (enter path) |
+| `Ctrl+b` | Open the `claude --resume` picker for the selected project |
+| `x` | Kill selected session (with confirmation) |
+| `u` | Unfollow (hide) session until restart |
 | `/` | Filter sessions |
 | `s` | Cycle sort column |
 | `r` | Refresh session list |
+| `L` | Toggle log panel |
 | `?` | Toggle help |
 | `Esc` | Back / clear filter |
 | `q` | Quit |
@@ -54,6 +60,7 @@ c9s
 | `Ctrl+Space` | Quick switcher |
 | `Ctrl+n` / `Ctrl+p` | Cycle next / prev session |
 | `Ctrl+k` / `Ctrl+j` | Scroll history up / down |
+| `Ctrl+t` | Toggle side shell panel |
 
 ## Requirements
 
