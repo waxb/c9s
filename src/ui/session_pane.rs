@@ -7,6 +7,7 @@ use ratatui::Frame;
 use crate::app::{App, PaneRow};
 use crate::session::Session;
 use crate::ui::session_list::{context_style, format_count, session_title, truncate_chars};
+use crate::ui::terminal_view::WARM_MARK;
 use crate::ui::theme::Theme;
 
 const ROW_LINES: usize = 2;
@@ -48,10 +49,13 @@ fn row_lines(
     } else {
         " ".to_string()
     };
-    let head = format!("{}{} ", marker, number);
-    let title_width = width.saturating_sub(head.len() + 1);
+    let head = format!("{}{}", marker, number);
+    let warm = app.is_warm(&row.session_id);
+    let warm_mark = if warm { WARM_MARK } else { " " };
+    let title_width = width.saturating_sub(head.len() + 2);
     let first = Line::from(vec![
         Span::styled(head, base.patch(Theme::help_key())),
+        Span::styled(warm_mark, base.patch(Theme::warm())),
         Span::styled(
             format!(
                 "{:<w$}",
@@ -65,11 +69,16 @@ fn row_lines(
     let second = match session {
         Some(s) => {
             let status = Theme::status(&s.status);
+            let warm_note = app
+                .warm_remaining(&s.id)
+                .map(|left| format!(" warm {}h", left.as_secs().div_ceil(3600)))
+                .unwrap_or_default();
             let detail = format!(
-                " ${:.2} {}m {}",
+                " ${:.2} {}m {}{}",
                 s.estimated_cost_usd(),
                 format_count(s.message_count as u64),
-                short_age(s)
+                short_age(s),
+                warm_note
             );
             let name = s
                 .waiting_for

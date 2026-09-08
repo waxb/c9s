@@ -1,5 +1,5 @@
 use anyhow::Result;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
@@ -118,6 +118,7 @@ pub struct TabEntry {
     pub has_bell: bool,
     pub bell_blink: bool,
     pub waiting: bool,
+    pub warm: bool,
     pub current: usize,
     pub count: usize,
 }
@@ -389,7 +390,7 @@ impl TerminalManager {
         self.registry_status.get(session_id) == Some(&RegistryStatus::Waiting)
     }
 
-    pub fn tab_info(&self) -> Vec<TabEntry> {
+    pub fn tab_info(&self, warm: &HashSet<String>) -> Vec<TabEntry> {
         self.tabs
             .iter()
             .enumerate()
@@ -415,6 +416,7 @@ impl TerminalManager {
                     has_bell,
                     bell_blink,
                     waiting,
+                    warm: tab.terminals.iter().any(|t| warm.contains(t.session_id())),
                     current: tab.current + 1,
                     count: tab.terminals.len(),
                 }
@@ -596,7 +598,7 @@ mod tests {
 
         assert_eq!(m.tabs.len(), 2);
         assert_eq!(m.active_session_id(), Some("b1"));
-        let info = m.tab_info();
+        let info = m.tab_info(&HashSet::new());
         assert_eq!(info[0].count, 2);
         assert_eq!(info[0].current, 2);
         assert!(info[1].is_active);
@@ -640,7 +642,7 @@ mod tests {
         assert!(m.observe_registry(&statuses, true));
         assert!(m.has_bell_for("a1"));
         assert!(!m.has_bell_for("a2"));
-        let info = m.tab_info();
+        let info = m.tab_info(&HashSet::new());
         assert!(info[0].waiting);
         assert!(info[0].has_bell);
 

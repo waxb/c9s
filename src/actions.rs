@@ -165,6 +165,7 @@ pub fn process_action(app: &mut App, action: Action, terminal: &Term) -> Result<
             _ => app.collapse_selected(),
         },
         Action::ToggleSessionPane => toggle_session_pane(app, terminal)?,
+        Action::ToggleKeepWarm => toggle_keep_warm(app),
         Action::ResumeSessionPicker => {
             if let Some(cwd) = app.selected_session().map(|s| s.cwd.clone()) {
                 let (rows, cols) = pty_dims(terminal, app)?;
@@ -321,6 +322,55 @@ fn toggle_session_pane(app: &mut App, terminal: &Term) -> Result<()> {
     }
     resize_panes(app, screen_area(terminal)?);
     Ok(())
+}
+
+fn toggle_keep_warm(app: &mut App) {
+    let target = match app.view_mode() {
+        ViewMode::Terminal | ViewMode::TerminalQSwitcher => {
+            app.attached_session_id().map(str::to_string)
+        }
+        _ => target_session_id(app),
+    };
+    let Some(id) = target else {
+        return;
+    };
+    if !app.terminal_manager().is_attached(&id) {
+        app.set_pane_status("keep-warm needs a session attached in c9s");
+        tlog!(info, "keep-warm ignored for {}: not attached", id);
+        return;
+    }
+    let session = app.find_session(&id);
+    if !app.is_warm(&id) && session.is_some_and(|s| s.cache_ttl_1h == Some(false)) {
+        app.set_pane_status(
+            "session uses the 5-minute cache; keep-warm would ping every few minutes, refused",
+        );
+        tlog!(info, "keep-warm refused for {}: 5 minute cache ttl", id);
+        return;
+    }
+    let cold = session.is_some_and(|s| {
+        (chrono::Utc::now() - s.last_activity)
+            .to_std()
+            .unwrap_or_default()
+            > std::time::Duration::from_secs(3600)
+    });
+    let label = session
+        .map(ui::session_title)
+        .unwrap_or_else(|| id[..8.min(id.len())].to_string());
+    if app.toggle_keep_warm(&id) {
+        let note = if cold {
+            "; cache already cold, first ping rewrites it"
+        } else {
+            ""
+        };
+        app.set_pane_status(&format!(
+            "keep-warm on for {} (12h, pings at 55m idle{})",
+            label, note
+        ));
+        tlog!(info, "keep-warm enabled for {}", id);
+    } else {
+        app.set_pane_status(&format!("keep-warm off for {}", label));
+        tlog!(info, "keep-warm disabled for {}", id);
+    }
 }
 
 fn launch_new(app: &mut App) {

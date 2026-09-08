@@ -186,6 +186,7 @@ fn poll_background(app: &mut App) -> bool {
     }
 
     dirty |= app.poll_discovery();
+    dirty |= app.poll_keep_warm();
     app.drain_ci_statuses();
     app.check_ci_statuses();
 

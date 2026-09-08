@@ -8,6 +8,8 @@ use crate::terminal::TabEntry;
 use crate::ui::theme::Theme;
 use crate::usage::UsageData;
 
+pub const WARM_MARK: &str = "X";
+
 pub(crate) fn tab_label(index: usize, tab: &TabEntry) -> String {
     let depth = if tab.count > 1 {
         format!(" [{}/{}]", tab.current, tab.count)
@@ -28,6 +30,8 @@ pub struct TerminalViewData<'a> {
     pub scrolled: bool,
     pub usage: &'a UsageData,
     pub pane_key: &'a str,
+    pub warm_key: &'a str,
+    pub warm: bool,
 }
 
 pub fn render_terminal(f: &mut Frame, screen: &vt100::Screen, data: &TerminalViewData, area: Rect) {
@@ -37,6 +41,8 @@ pub fn render_terminal(f: &mut Frame, screen: &vt100::Screen, data: &TerminalVie
         scrolled,
         usage,
         pane_key,
+        warm_key,
+        warm,
     } = *data;
     let chunks = Layout::vertical([
         Constraint::Length(1),
@@ -64,6 +70,11 @@ pub fn render_terminal(f: &mut Frame, screen: &vt100::Screen, data: &TerminalVie
 
     let version = env!("CARGO_PKG_VERSION");
 
+    let warm_indicator = if warm {
+        Span::styled(" [warm]", Theme::warm())
+    } else {
+        Span::styled("", Style::default())
+    };
     let status_line = if exited {
         Line::from(vec![
             Span::styled(
@@ -76,10 +87,11 @@ pub fn render_terminal(f: &mut Frame, screen: &vt100::Screen, data: &TerminalVie
         Line::from(vec![
             Span::styled(format!(" c9s {}", version), Theme::attached_marker()),
             scroll_indicator,
+            warm_indicator,
             Span::styled(
                 format!(
-                    "  C-d:list  C-Space:switch  C-n/p:cycle  {}:sessions  C-j/k:scroll  C-t:shell  {}",
-                    pane_key, project
+                    "  C-d:list  C-Space:switch  C-n/p:cycle  {}:sessions  C-j/k:scroll  C-t:shell  {}:warm  {}",
+                    pane_key, warm_key, project
                 ),
                 Theme::footer(),
             ),
@@ -213,6 +225,13 @@ fn render_tab_bar(f: &mut Frame, tabs: &[TabEntry], area: Rect) {
             cell.set_symbol("]");
             col += 1;
         }
+
+        if tab.warm && col < max_col {
+            let cell = &mut buf[(col, area.y)];
+            cell.set_style(Theme::warm().bg(bg));
+            cell.set_symbol(WARM_MARK);
+            col += 1;
+        }
     }
 }
 
@@ -288,6 +307,7 @@ mod tests {
             has_bell,
             bell_blink: false,
             waiting,
+            warm: false,
             current,
             count,
         }

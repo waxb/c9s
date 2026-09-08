@@ -3,6 +3,7 @@ mod list;
 mod pane;
 mod panels;
 mod support;
+mod warm;
 
 pub use list::{QuickSwitch, Row};
 pub use pane::{
@@ -18,19 +19,26 @@ use std::time::{Duration, Instant};
 use crate::config::Config;
 use crate::session::config::{build_config_items, scan_session_config, ConfigItem};
 use crate::session::registry::{RegistryStatus, SessionRegistry};
-use crate::session::{group_projects, names, DiscoveryWorker, Project, Session, SessionFile};
+use crate::session::{
+    group_projects, names, DiscoveryWorker, Project, Session, SessionFile, SessionStatus,
+};
 use crate::store::Store;
 use crate::terminal::TerminalManager;
+use crate::tlog;
 use crate::ui::Panes;
 use crate::usage::{UsageData, UsageFetcher};
 use anyhow::Result;
 use list::{ListState, RowKey};
 use pane::PaneState;
+use warm::{ping_payload, KeepWarm};
 
 const CI_CHECK_INTERVAL: Duration = Duration::from_secs(120);
 const REGISTRY_POLL_INTERVAL: Duration = Duration::from_secs(1);
 const DISCOVERY_INTERVAL: Duration = Duration::from_secs(5);
 const INITIAL_SCAN_TIMEOUT: Duration = Duration::from_secs(15);
+const KEEP_WARM_INTERVAL: Duration = Duration::from_secs(55 * 60);
+const KEEP_WARM_MAX_AGE: Duration = Duration::from_secs(12 * 3600);
+const KEEP_WARM_POLL: Duration = Duration::from_secs(5);
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ViewMode {
@@ -110,6 +118,8 @@ pub struct App {
     takeover: Option<TakeoverPrompt>,
     unhide: Option<UnhideDialog>,
     dialog_return: ViewMode,
+    keep_warm: KeepWarm,
+    last_warm_poll: Option<Instant>,
 }
 
 impl App {
@@ -156,6 +166,8 @@ impl App {
             takeover: None,
             unhide: None,
             dialog_return: ViewMode::List,
+            keep_warm: KeepWarm::new(KEEP_WARM_INTERVAL, KEEP_WARM_MAX_AGE),
+            last_warm_poll: None,
         };
 
         if let Some(sessions) = app.discovery.wait_first(INITIAL_SCAN_TIMEOUT) {
@@ -613,6 +625,80 @@ impl App {
             .collect();
         self.terminal_manager
             .observe_registry(&statuses, viewing_active)
+    }
+
+    pub fn is_warm(&self, session_id: &str) -> bool {
+        self.keep_warm.is_warm(session_id)
+    }
+
+    pub fn warm_ids(&self) -> HashSet<String> {
+        self.keep_warm.warm_ids()
+    }
+
+    pub fn warm_remaining(&self, session_id: &str) -> Option<Duration> {
+        self.keep_warm.remaining(session_id, Instant::now())
+    }
+
+    pub fn toggle_keep_warm(&mut self, session_id: &str) -> bool {
+        self.keep_warm.toggle(session_id, Instant::now())
+    }
+
+    pub fn poll_keep_warm(&mut self) -> bool {
+        if self
+            .last_warm_poll
+            .is_some_and(|t| t.elapsed() < KEEP_WARM_POLL)
+        {
+            return false;
+        }
+        self.last_warm_poll = Some(Instant::now());
+        let now = Instant::now();
+        let mut changed = false;
+        for id in self.keep_warm.expire(now) {
+            tlog!(info, "keep-warm window ended for {}", id);
+            changed = true;
+        }
+        let candidates: Vec<(String, bool, Option<Duration>)> = self
+            .keep_warm
+            .warm_ids()
+            .into_iter()
+            .map(|id| {
+                let attached = self.terminal_manager.is_attached(&id);
+                let idle = self.find_session(&id).and_then(|s| {
+                    (s.status == SessionStatus::Idle).then(|| {
+                        (chrono::Utc::now() - s.last_activity)
+                            .to_std()
+                            .unwrap_or_default()
+                    })
+                });
+                (id, attached, idle)
+            })
+            .collect();
+        for (id, attached, idle) in candidates {
+            if !attached {
+                self.keep_warm.disable(&id);
+                changed = true;
+                continue;
+            }
+            let Some(idle_for) = idle else {
+                continue;
+            };
+            if !self.keep_warm.due(&id, now, idle_for) {
+                continue;
+            }
+            match self.terminal_manager.write_to_session(&id, &ping_payload()) {
+                Ok(true) => {
+                    self.keep_warm.record_ping(&id, now);
+                    tlog!(info, "keep-warm ping sent to {}", id);
+                    changed = true;
+                }
+                Ok(false) => {
+                    self.keep_warm.disable(&id);
+                    changed = true;
+                }
+                Err(e) => tlog!(warn, "keep-warm ping to {} failed: {}", id, e),
+            }
+        }
+        changed
     }
 
     pub fn command_input(&self) -> &str {

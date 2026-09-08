@@ -7,6 +7,7 @@ use ratatui::Frame;
 use crate::app::{App, Row};
 use crate::session::{Project, Session};
 use crate::ui::session_list::session_title;
+use crate::ui::terminal_view::WARM_MARK;
 use crate::ui::theme::Theme;
 
 const POPUP_WIDTH: u16 = 72;
@@ -40,6 +41,11 @@ fn marker_for(is_attached: bool, has_bell: bool, base_mod: Modifier) -> (&'stati
     }
 }
 
+fn warm_span(warm: bool, base_mod: Modifier) -> Span<'static> {
+    let text = if warm { WARM_MARK } else { " " };
+    Span::styled(text, Theme::warm().add_modifier(base_mod))
+}
+
 fn base_modifier(is_selected: bool) -> Modifier {
     if is_selected {
         Modifier::REVERSED
@@ -60,6 +66,7 @@ fn project_line(
         .iter()
         .any(|s| app.terminal_manager().is_attached(&s.id));
     let has_bell = visible.iter().any(|s| app.has_bell(&s.id));
+    let warm = visible.iter().any(|s| app.is_warm(&s.id));
     let base_mod = base_modifier(is_selected);
     let (marker, marker_style) = marker_for(is_attached, has_bell, base_mod);
     let current = app.current_visible_session(project);
@@ -88,6 +95,7 @@ fn project_line(
 
     Line::from(vec![
         Span::styled(format!(" {}", marker), marker_style),
+        warm_span(warm, base_mod),
         Span::styled(
             format!("{} ", index + 1),
             Style::default()
@@ -111,13 +119,15 @@ fn project_line(
 fn session_line(app: &App, session: &Session, is_selected: bool) -> Line<'static> {
     let is_attached = app.terminal_manager().is_attached(&session.id);
     let has_bell = app.has_bell(&session.id);
+    let warm = app.is_warm(&session.id);
     let base_mod = base_modifier(is_selected);
     let (marker, marker_style) = marker_for(is_attached, has_bell, base_mod);
     let label = format!("    {}", session_title(session));
 
     Line::from(vec![
         Span::styled(format!(" {}", marker), marker_style),
-        Span::styled("  ", Style::default().add_modifier(base_mod)),
+        warm_span(warm, base_mod),
+        Span::styled(" ", Style::default().add_modifier(base_mod)),
         Span::styled(
             truncate(&label, NAME_COL),
             Style::default().fg(Color::White).add_modifier(base_mod),

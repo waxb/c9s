@@ -90,6 +90,10 @@ impl Theme {
             .add_modifier(Modifier::BOLD)
     }
 
+    pub fn warm() -> Style {
+        Style::default().fg(Color::Red).add_modifier(Modifier::BOLD)
+    }
+
     pub fn bell() -> Style {
         Style::default()
             .fg(Color::Yellow)

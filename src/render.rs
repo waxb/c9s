@@ -141,14 +141,18 @@ fn render_terminal_view(app: &App, f: &mut Frame, area: Rect) {
     let screen = guard.screen();
     let scrolled = screen.scrollback() > 0;
     let exited = term.is_exited();
-    let tabs = app.terminal_manager().tab_info();
+    let tabs = app.terminal_manager().tab_info(&app.warm_ids());
     let pane_key = app.config.keys.session_pane.label();
+    let warm_key = app.config.keys.keep_warm.label();
+    let warm = app.attached_session_id().is_some_and(|id| app.is_warm(id));
     let data = ui::TerminalViewData {
         tabs: &tabs,
         exited,
         scrolled,
         usage: app.usage(),
         pane_key: &pane_key,
+        warm_key: &warm_key,
+        warm,
     };
     ui::render_terminal(f, screen, &data, area);
 }

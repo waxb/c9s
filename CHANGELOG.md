@@ -13,6 +13,7 @@
 - Notifiers watch only their own transcript.
 - SQLite schema v2 with title, session name, context, compaction, API error, cache write and hidden columns.
 - Transcript statistics are exact for every file size: lines are parsed with a streaming deserializer that skips message bodies, only appended bytes are parsed on refresh, and per-file offsets are checkpointed in SQLite so a restart with 1 GB of transcripts renders in well under a second. Previously files over 2 MB were sampled head and tail only, undercounting tokens and cost by up to 60x.
+- Keep-warm: `Ctrl+q` in a session (or `w` in the pane and list) marks it with a red `X` and types a minimal prompt whenever it has been idle for 55 minutes, keeping the 1-hour prompt cache alive for up to 12 hours; configurable key under `[keys] keep_warm`.
 - Usage panel on the selector page shows every per-model weekly window the usage API reports (the `limits[]` weekly_scoped entries such as Fable, plus `seven_day_opus` and `seven_day_sonnet`) under the all-models bar; panel height follows the number of bars.
 - PTY is resized whenever the pane layout or the active session changes; list and quick switcher selection stay on the same row across background refreshes.
 

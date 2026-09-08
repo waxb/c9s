@@ -6,6 +6,7 @@ use ratatui::Frame;
 
 use crate::app::{App, CiStatus, Row, ViewMode};
 use crate::session::{Project, Session, SessionStatus};
+use crate::ui::terminal_view::WARM_MARK;
 use crate::ui::theme::Theme;
 use crate::ui::usage_panel::render_usage_panel;
 
@@ -113,19 +114,23 @@ fn ci_cell(status: Option<&CiStatus>) -> Cell<'static> {
     Cell::from(symbol).style(style)
 }
 
-fn marker_cell(is_attached: bool, has_bell: bool) -> Cell<'static> {
+fn marker_cell(is_attached: bool, has_bell: bool, warm: bool) -> Cell<'static> {
     let marker = match (is_attached, has_bell) {
         (true, true) => ">>*",
-        (true, false) => ">>",
-        (false, true) => " *",
-        (false, false) => "",
+        (true, false) => ">> ",
+        (false, true) => " * ",
+        (false, false) => "   ",
     };
     let style = if has_bell {
         Theme::bell()
     } else {
         Theme::attached_marker()
     };
-    Cell::from(marker).style(style)
+    let warm_mark = if warm { WARM_MARK } else { "" };
+    Cell::from(Line::from(vec![
+        Span::styled(marker, style),
+        Span::styled(warm_mark, Theme::warm()),
+    ]))
 }
 
 fn project_row(app: &App, project: &Project) -> TableRow<'static> {
@@ -135,6 +140,7 @@ fn project_row(app: &App, project: &Project) -> TableRow<'static> {
         .iter()
         .any(|s| app.terminal_manager().is_attached(&s.id));
     let has_bell = visible.iter().any(|s| app.has_bell(&s.id));
+    let warm = visible.iter().any(|s| app.is_warm(&s.id));
     let marker = if app.is_expanded(project) { "v" } else { ">" };
     let label = format!(
         "{} {}  [{} live / {}]",
@@ -172,7 +178,7 @@ fn project_row(app: &App, project: &Project) -> TableRow<'static> {
         .unwrap_or_default();
 
     TableRow::new(vec![
-        marker_cell(is_attached, has_bell),
+        marker_cell(is_attached, has_bell, warm),
         ci_cell(current.and_then(|s| app.ci_statuses.get(&s.id))),
         Cell::from(label).style(name_style),
         Cell::from(branch),
@@ -190,6 +196,7 @@ fn project_row(app: &App, project: &Project) -> TableRow<'static> {
 fn session_row(app: &App, project: &Project, session: &Session) -> TableRow<'static> {
     let is_attached = app.terminal_manager().is_attached(&session.id);
     let has_bell = app.has_bell(&session.id);
+    let warm = app.is_warm(&session.id);
     let is_current = project.current_session().map(|s| s.id.as_str()) == Some(session.id.as_str());
     let prefix = if is_current { "  * " } else { "    " };
     let name_style = if has_bell {
@@ -204,7 +211,7 @@ fn session_row(app: &App, project: &Project, session: &Session) -> TableRow<'sta
         .unwrap_or_else(|| "-".to_string());
 
     TableRow::new(vec![
-        marker_cell(is_attached, has_bell),
+        marker_cell(is_attached, has_bell, warm),
         ci_cell(app.ci_statuses.get(&session.id)),
         Cell::from(format!("{}{}", prefix, session_title(session))).style(name_style),
         Cell::from(
@@ -259,7 +266,7 @@ fn render_table(f: &mut Frame, app: &App, area: Rect) {
         .collect();
 
     let widths = [
-        Constraint::Length(3),
+        Constraint::Length(4),
         Constraint::Length(2),
         Constraint::Min(24),
         Constraint::Length(15),

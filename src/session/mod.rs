@@ -81,6 +81,7 @@ pub struct Session {
     pub api_error_count: u32,
     pub title: Option<String>,
     pub last_prompt: Option<String>,
+    pub cache_ttl_1h: Option<bool>,
 }
 
 impl Session {
@@ -211,6 +212,7 @@ pub(crate) mod test_support {
             api_error_count: 0,
             title: None,
             last_prompt: None,
+            cache_ttl_1h: None,
         }
     }
 }

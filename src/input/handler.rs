@@ -53,6 +53,7 @@ pub enum Action {
     ToggleSideTerminal,
     SideTerminalInput(Vec<u8>),
     ToggleSessionPane,
+    ToggleKeepWarm,
     ForkSession,
     RenameSession,
     MessageSession,
@@ -122,6 +123,9 @@ fn handle_key(key: &KeyEvent, mode: &ViewMode, side_focused: bool, keys: &Keys) 
     if keys.session_pane.matches(key) {
         return Action::ToggleSessionPane;
     }
+    if keys.keep_warm.matches(key) {
+        return Action::ToggleKeepWarm;
+    }
 
     if side_focused {
         return Action::SideTerminalInput(key_event_to_bytes(key));
@@ -184,6 +188,7 @@ fn handle_session_pane_key(key: &KeyEvent) -> Action {
         KeyCode::Char('r') => Action::RenameSession,
         KeyCode::Char('m') => Action::MessageSession,
         KeyCode::Char('M') => Action::CoordinateSession,
+        KeyCode::Char('w') => Action::ToggleKeepWarm,
         KeyCode::Esc | KeyCode::Char('q') => Action::Back,
         _ => Action::None,
     }
@@ -252,6 +257,7 @@ fn handle_normal_key(key: &KeyEvent) -> Action {
         KeyCode::Char('L') => Action::ToggleLog,
         KeyCode::Char('F') => Action::ForkSession,
         KeyCode::Char('U') => Action::OpenUnhideDialog,
+        KeyCode::Char('w') => Action::ToggleKeepWarm,
         KeyCode::Char(' ') => Action::ToggleExpand,
         KeyCode::Char('l') | KeyCode::Right => Action::ExpandRow,
         KeyCode::Char('h') | KeyCode::Left => Action::CollapseRow,
@@ -583,6 +589,31 @@ mod tests {
         assert_eq!(
             handle_normal_key(&key(KeyCode::Char('U'))),
             Action::OpenUnhideDialog
+        );
+    }
+
+    #[test]
+    fn test_keep_warm_key_everywhere_and_w_in_pane_and_list() {
+        let keys = Keys::default();
+        let ctrl_q = key_with_mod(KeyCode::Char('q'), KeyModifiers::CONTROL);
+        for mode in [ViewMode::Terminal, ViewMode::SessionPane, ViewMode::List] {
+            assert_eq!(
+                handle_key(&ctrl_q, &mode, false, &keys),
+                Action::ToggleKeepWarm
+            );
+        }
+        assert_eq!(
+            handle_key(
+                &key(KeyCode::Char('w')),
+                &ViewMode::SessionPane,
+                false,
+                &keys
+            ),
+            Action::ToggleKeepWarm
+        );
+        assert_eq!(
+            handle_normal_key(&key(KeyCode::Char('w'))),
+            Action::ToggleKeepWarm
         );
     }
 

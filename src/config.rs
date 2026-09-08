@@ -5,6 +5,7 @@ use std::path::PathBuf;
 use crate::tlog;
 
 const DEFAULT_SESSION_PANE_KEY: &str = "ctrl-]";
+const DEFAULT_KEEP_WARM_KEY: &str = "ctrl-q";
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct KeyBinding {
@@ -53,12 +54,15 @@ impl KeyBinding {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Keys {
     pub session_pane: KeyBinding,
+    pub keep_warm: KeyBinding,
 }
 
 impl Default for Keys {
     fn default() -> Self {
         Self {
             session_pane: KeyBinding::parse(DEFAULT_SESSION_PANE_KEY)
+                .expect("default key binding is valid"),
+            keep_warm: KeyBinding::parse(DEFAULT_KEEP_WARM_KEY)
                 .expect("default key binding is valid"),
         }
     }
@@ -78,17 +82,26 @@ struct RawConfig {
 #[derive(Deserialize, Default)]
 struct RawKeys {
     session_pane: Option<String>,
+    keep_warm: Option<String>,
 }
 
 impl Config {
     pub fn parse(text: &str) -> Result<Self, String> {
         let raw: RawConfig = toml::from_str(text).map_err(|e| e.to_string())?;
+        let defaults = Keys::default();
         let session_pane = match raw.keys.session_pane {
             Some(spec) => KeyBinding::parse(&spec)?,
-            None => Keys::default().session_pane,
+            None => defaults.session_pane,
+        };
+        let keep_warm = match raw.keys.keep_warm {
+            Some(spec) => KeyBinding::parse(&spec)?,
+            None => defaults.keep_warm,
         };
         Ok(Self {
-            keys: Keys { session_pane },
+            keys: Keys {
+                session_pane,
+                keep_warm,
+            },
         })
     }
 
@@ -154,6 +167,10 @@ mod tests {
         let text = "[tervezo]\napi_key = \"x\"\n\n[keys]\nsession_pane = \"ctrl-y\"\n";
         let config = Config::parse(text).unwrap();
         assert!(config.keys.session_pane.matches(&ctrl('y')));
+        assert!(config.keys.keep_warm.matches(&ctrl('q')));
+        let both = Config::parse("[keys]\nkeep_warm = \"ctrl-w\"\n").unwrap();
+        assert!(both.keys.keep_warm.matches(&ctrl('w')));
+        assert!(both.keys.session_pane.matches(&ctrl('5')));
         assert_eq!(Config::parse("").unwrap(), Config::default());
         assert!(Config::parse("[keys]\nsession_pane = \"nope\"\n").is_err());
     }

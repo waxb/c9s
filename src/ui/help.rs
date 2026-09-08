@@ -32,12 +32,14 @@ const BINDINGS: &[(&str, &str)] = &[
     ("Ctrl+Space", "Quick switcher"),
     ("Ctrl+n / Ctrl+p", "Next / prev project tab"),
     ("Ctrl+]", "Toggle session pane (configurable)"),
+    ("Ctrl+q", "Toggle keep-warm pings (configurable)"),
     ("Ctrl+k / Ctrl+j", "Scroll history up / down"),
     ("", ""),
     ("Session pane", ""),
     ("Enter / 1-9", "Switch to session"),
     ("n / f / x / r", "New / fork / discard / rename"),
     ("m / M", "Message session / coordinate with it"),
+    ("w", "Toggle keep-warm (red X marker)"),
 ];
 
 pub fn render_help(f: &mut Frame, area: Rect) {

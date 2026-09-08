@@ -308,6 +308,7 @@ fn build_session(
         api_error_count: stats.api_error_count,
         title: stats.title(),
         last_prompt: stats.last_prompt.clone(),
+        cache_ttl_1h: stats.cache_ttl_1h,
     })
 }
 
@@ -349,6 +350,7 @@ fn placeholder_session(entry: &RegistryEntry) -> Session {
         api_error_count: 0,
         title: None,
         last_prompt: None,
+        cache_ttl_1h: None,
     }
 }
 

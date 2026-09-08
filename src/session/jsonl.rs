@@ -33,6 +33,7 @@ pub struct JsonlStats {
     pub custom_title: Option<String>,
     pub last_prompt: Option<String>,
     pub context_tokens: u64,
+    pub cache_ttl_1h: Option<bool>,
 }
 
 impl JsonlStats {
@@ -255,6 +256,9 @@ fn apply_assistant_message(message: &RawMessage, is_sidechain: bool, stats: &mut
         stats.context_tokens =
             usage.input_tokens + usage.cache_read_input_tokens + usage.cache_creation_input_tokens;
     }
+    if write_5m + write_1h > 0 {
+        stats.cache_ttl_1h = Some(write_1h > 0);
+    }
 }
 
 fn split_cache_creation(usage: &RawUsage) -> (u64, u64) {
@@ -387,6 +391,14 @@ mod tests {
         ]);
         assert_eq!(stats.cache_write_5m_tokens, 150);
         assert_eq!(stats.cache_write_1h_tokens, 400);
+        assert_eq!(stats.cache_ttl_1h, Some(false));
+
+        let one_hour = stats_for(&[
+            r#"{"type":"assistant","message":{"usage":{"input_tokens":1,"cache_creation_input_tokens":500,"cache_creation":{"ephemeral_5m_input_tokens":0,"ephemeral_1h_input_tokens":500}}}}"#,
+            r#"{"type":"assistant","message":{"usage":{"input_tokens":1,"cache_read_input_tokens":900}}}"#,
+        ]);
+        assert_eq!(one_hour.cache_ttl_1h, Some(true));
+        assert_eq!(stats_for(&[]).cache_ttl_1h, None);
     }
 
     #[test]
