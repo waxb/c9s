@@ -308,7 +308,7 @@ fn render_footer(f: &mut Frame, app: &App, area: Rect) {
     f.render_widget(Paragraph::new(footer), area);
 }
 
-pub(crate) fn session_title(session: &Session) -> String {
+pub fn session_title(session: &Session) -> String {
     let raw = session
         .title
         .as_deref()

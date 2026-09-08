@@ -12,10 +12,11 @@ use crate::config::Config;
 use crate::session::config::{build_config_items, scan_session_config, ConfigItem};
 use crate::session::registry::{RegistryStatus, SessionRegistry};
 use crate::session::{
-    group_projects, DiscoveryWorker, Project, Session, SessionFile, SessionStatus,
+    group_projects, names, DiscoveryWorker, Project, Session, SessionFile, SessionStatus,
 };
 use crate::store::Store;
 use crate::terminal::{EmbeddedTerminal, TerminalManager};
+use crate::ui::Panes;
 use crate::usage::{UsageData, UsageFetcher};
 use anyhow::Result;
 use list::ListState;
@@ -519,7 +520,31 @@ impl App {
     }
 
     pub fn active_attached_sessions(&self) -> Vec<String> {
-        self.terminal_manager.live_session_names()
+        self.terminal_manager
+            .live_session_ids()
+            .into_iter()
+            .map(|(project, id)| match self.find_session(&id) {
+                Some(s) => format!("{}: {}", project, crate::ui::session_title(s)),
+                None => format!("{}: {}", project, &id[..8.min(id.len())]),
+            })
+            .collect()
+    }
+
+    pub fn panes(&self) -> Panes {
+        Panes {
+            session: false,
+            shell: self.is_side_panel_open(),
+        }
+    }
+
+    pub fn generate_session_name(&self) -> String {
+        let taken: HashSet<String> = self
+            .registry
+            .live_interactive()
+            .into_iter()
+            .filter_map(|e| e.name)
+            .collect();
+        names::generate(&taken)
     }
 
     pub fn poll_registry(&mut self, viewing_active: bool) -> bool {
@@ -530,9 +555,9 @@ impl App {
             return false;
         }
         self.last_registry_poll = Some(Instant::now());
-        let statuses: HashMap<String, RegistryStatus> = self
-            .registry
-            .live_interactive()
+        let entries = self.registry.live_interactive();
+        self.terminal_manager.reconcile_ids(&entries);
+        let statuses: HashMap<String, RegistryStatus> = entries
             .into_iter()
             .map(|e| (e.session_id, e.status))
             .collect();
@@ -606,9 +631,9 @@ impl App {
 
     pub fn open_side_panel(&mut self, rows: u16, cols: u16) {
         let cwd = self
-            .attached_session_id()
-            .and_then(|sid| self.find_session(sid))
-            .map(|s| s.cwd.clone())
+            .terminal_manager
+            .active_root()
+            .map(Path::to_path_buf)
             .unwrap_or_else(|| std::env::current_dir().unwrap_or_else(|_| PathBuf::from("/")));
         if !self.terminal_manager.open_side_terminal(&cwd, rows, cols) {
             return;

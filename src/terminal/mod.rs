@@ -12,7 +12,7 @@ use std::time::{Duration, Instant};
 
 use crate::session::registry::process_alive;
 
-pub use manager::{TabEntry, TerminalManager};
+pub use manager::{kill_process, TabEntry, TerminalManager};
 
 const SCROLLBACK_LINES: usize = 10_000;
 const READ_BUF_SIZE: usize = 8192;
@@ -20,7 +20,6 @@ const TERM_GRACE: Duration = Duration::from_millis(300);
 
 pub struct EmbeddedTerminal {
     session_id: String,
-    project_name: String,
     parser: Arc<Mutex<vt100::Parser>>,
     writer: Box<dyn Write + Send>,
     master: Box<dyn MasterPty>,
@@ -32,23 +31,16 @@ pub struct EmbeddedTerminal {
     dirty: Arc<AtomicBool>,
 }
 
-fn project_name_for(cwd: &Path) -> String {
+pub(crate) fn project_name_for(cwd: &Path) -> String {
     cwd.file_name()
         .map(|n| n.to_string_lossy().to_string())
         .unwrap_or_else(|| cwd.to_string_lossy().to_string())
 }
 
 impl EmbeddedTerminal {
-    pub fn spawn_resume(
-        session_id: &str,
-        project_name: &str,
-        cwd: &Path,
-        rows: u16,
-        cols: u16,
-    ) -> Result<Self> {
+    pub fn spawn_resume(session_id: &str, cwd: &Path, rows: u16, cols: u16) -> Result<Self> {
         Self::spawn_inner(
             session_id,
-            project_name,
             "claude",
             &["--resume", session_id],
             cwd,
@@ -59,30 +51,59 @@ impl EmbeddedTerminal {
 
     pub(crate) fn spawn_shell(cwd: &Path, rows: u16, cols: u16) -> Result<Self> {
         let id = uuid::Uuid::new_v4().to_string();
-        Self::spawn_inner(&id, "shell", "bash", &["--login"], cwd, rows, cols)
+        Self::spawn_inner(&id, "bash", &["--login"], cwd, rows, cols)
     }
 
     pub fn spawn_resume_picker(cwd: &Path, rows: u16, cols: u16) -> Result<Self> {
         let id = uuid::Uuid::new_v4().to_string();
+        Self::spawn_inner(&id, "claude", &["--resume"], cwd, rows, cols)
+    }
+
+    pub fn spawn_new(cwd: &Path, name: &str, rows: u16, cols: u16) -> Result<Self> {
+        let id = uuid::Uuid::new_v4().to_string();
         Self::spawn_inner(
             &id,
-            &project_name_for(cwd),
             "claude",
-            &["--resume"],
+            &["--session-id", &id, "-n", name],
             cwd,
             rows,
             cols,
         )
     }
 
-    pub fn spawn_new(cwd: &Path, rows: u16, cols: u16) -> Result<Self> {
+    pub fn spawn_fork(
+        cwd: &Path,
+        source_id: &str,
+        name: &str,
+        rows: u16,
+        cols: u16,
+    ) -> Result<Self> {
         let id = uuid::Uuid::new_v4().to_string();
-        Self::spawn_inner(&id, &project_name_for(cwd), "claude", &[], cwd, rows, cols)
+        Self::spawn_inner(
+            &id,
+            "claude",
+            &[
+                "--session-id",
+                &id,
+                "--fork-session",
+                "--resume",
+                source_id,
+                "-n",
+                name,
+            ],
+            cwd,
+            rows,
+            cols,
+        )
+    }
+
+    #[cfg(test)]
+    pub(crate) fn spawn_for_test(session_id: &str, cmd: &str, args: &[&str], cwd: &Path) -> Self {
+        Self::spawn_inner(session_id, cmd, args, cwd, 5, 20).expect("spawn")
     }
 
     fn spawn_inner(
         session_id: &str,
-        project_name: &str,
         cmd: &str,
         args: &[&str],
         cwd: &Path,
@@ -151,7 +172,6 @@ impl EmbeddedTerminal {
 
         Ok(Self {
             session_id: session_id.to_string(),
-            project_name: project_name.to_string(),
             parser,
             writer,
             master: pair.master,
@@ -279,8 +299,8 @@ impl EmbeddedTerminal {
         &self.session_id
     }
 
-    pub fn project_name(&self) -> &str {
-        &self.project_name
+    pub fn set_session_id(&mut self, session_id: &str) {
+        self.session_id = session_id.to_string();
     }
 }
 
@@ -327,7 +347,7 @@ mod tests {
     fn test_spawned_shell_reports_pid_and_exit() {
         let dir = tempfile::tempdir().unwrap();
         let term =
-            EmbeddedTerminal::spawn_inner("t", "t", "true", &[], dir.path(), 5, 20).expect("spawn");
+            EmbeddedTerminal::spawn_inner("t", "true", &[], dir.path(), 5, 20).expect("spawn");
         let start = Instant::now();
         while !term.is_exited() && start.elapsed() < Duration::from_secs(5) {
             std::thread::sleep(Duration::from_millis(20));
@@ -338,8 +358,8 @@ mod tests {
     #[test]
     fn test_terminate_kills_long_running_child() {
         let dir = tempfile::tempdir().unwrap();
-        let term = EmbeddedTerminal::spawn_inner("t", "t", "sleep", &["30"], dir.path(), 5, 20)
-            .expect("spawn");
+        let term =
+            EmbeddedTerminal::spawn_inner("t", "sleep", &["30"], dir.path(), 5, 20).expect("spawn");
         std::thread::sleep(Duration::from_millis(100));
         let pid = term.pid().expect("pid");
         assert!(process_alive(pid));

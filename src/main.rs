@@ -24,6 +24,7 @@ use session::SessionManager;
 use std::io::{stdout, IsTerminal};
 use std::path::PathBuf;
 use std::time::{Duration, Instant};
+use terminal::kill_process;
 
 type Term = Terminal<CrosstermBackend<std::io::Stdout>>;
 
@@ -221,12 +222,17 @@ fn handle_events(terminal: &Term, app: &mut App) -> Result<bool> {
 
 fn handle_resize(app: &mut App, cols: u16, rows: u16) {
     let area = Rect::new(0, 0, cols, rows);
+    resize_panes(app, area);
+}
+
+fn resize_panes(app: &App, area: Rect) {
+    let panes = app.panes();
     if is_terminal_view(app.view_mode()) {
-        let (pty_rows, pty_cols) = ui::pty_size(area, app.is_side_panel_open());
+        let (pty_rows, pty_cols) = ui::pty_size(area, panes);
         let _ = app.terminal_manager().resize_active(pty_rows, pty_cols);
     }
     if app.is_side_panel_open() {
-        let (panel_rows, panel_cols) = ui::side_pty_size(area);
+        let (panel_rows, panel_cols) = ui::shell_pty_size(area, panes);
         if let Some(st) = app.side_terminal() {
             let _ = st.resize(panel_rows, panel_cols);
         }
@@ -235,11 +241,8 @@ fn handle_resize(app: &mut App, cols: u16, rows: u16) {
 
 fn draw_frame(f: &mut Frame, app: &App) {
     let full_area = f.area();
-    let (area, side_area) = if app.is_side_panel_open() {
-        ui::split_with_side_panel(full_area)
-    } else {
-        (full_area, Rect::default())
-    };
+    let areas = ui::split_areas(full_area, app.panes());
+    let area = areas.main;
 
     match app.view_mode() {
         ViewMode::List | ViewMode::Filter => ui::render_session_list(f, app, area),
@@ -286,10 +289,8 @@ fn draw_frame(f: &mut Frame, app: &App) {
         }
     }
 
-    if app.is_side_panel_open() {
-        if let Some(st) = app.side_terminal() {
-            ui::render_side_panel(f, st, app.is_side_panel_focused(), side_area);
-        }
+    if let (Some(side_area), Some(st)) = (areas.shell_pane, app.side_terminal()) {
+        ui::render_side_panel(f, st, app.is_side_panel_focused(), side_area);
     }
 }
 
@@ -332,10 +333,7 @@ fn screen_area(terminal: &Term) -> Result<Rect> {
 }
 
 fn pty_dims(terminal: &Term, app: &App) -> Result<(u16, u16)> {
-    Ok(ui::pty_size(
-        screen_area(terminal)?,
-        app.is_side_panel_open(),
-    ))
+    Ok(ui::pty_size(screen_area(terminal)?, app.panes()))
 }
 
 fn process_action(app: &mut App, action: Action, terminal: &Term) -> Result<()> {
@@ -350,24 +348,19 @@ fn process_action(app: &mut App, action: Action, terminal: &Term) -> Result<()> 
         Action::ConfirmQuit => app.quit(),
         Action::CancelQuit => app.set_view_mode(ViewMode::List),
         Action::KillSession => {
-            if let Some(session) = app.selected_session() {
-                if session.takeover_pid().is_some() {
-                    app.confirm_kill_session_id = Some(session.id.clone());
-                    app.set_view_mode(ViewMode::ConfirmKill);
-                }
+            if let Some(id) = app.selected_session().map(|s| s.id.clone()) {
+                app.confirm_kill_session_id = Some(id);
+                app.set_view_mode(ViewMode::ConfirmKill);
             }
         }
         Action::ConfirmKill => {
             if let Some(session_id) = app.confirm_kill_session_id.take() {
-                if let Some(pid) = app.find_session(&session_id).and_then(|s| s.takeover_pid()) {
-                    unsafe {
-                        libc::kill(pid as i32, libc::SIGTERM);
-                    }
-                }
+                discard_session(app, &session_id);
             }
             app.set_view_mode(ViewMode::List);
             app.request_refresh();
         }
+        Action::ForkSession => fork_selected(app, terminal)?,
         Action::CancelKill => {
             app.confirm_kill_session_id = None;
             app.set_view_mode(ViewMode::List);
@@ -487,17 +480,14 @@ fn process_action(app: &mut App, action: Action, terminal: &Term) -> Result<()> 
         }
         Action::ClearLog => app.clear_log(),
         Action::ToggleSideTerminal => {
+            let area = screen_area(terminal)?;
             if app.is_side_panel_open() {
                 app.close_side_panel();
             } else {
-                let area = screen_area(terminal)?;
-                let (panel_rows, panel_cols) = ui::side_pty_size(area);
+                let (panel_rows, panel_cols) = ui::shell_pty_size(area, app.panes());
                 app.open_side_panel(panel_rows, panel_cols);
-                if app.is_side_panel_open() && is_terminal_view(app.view_mode()) {
-                    let (rows, cols) = ui::pty_size(area, true);
-                    let _ = app.terminal_manager().resize_active(rows, cols);
-                }
             }
+            resize_panes(app, area);
         }
         Action::SideTerminalInput(bytes) => {
             if let Some(st) = app.side_terminal_mut() {
@@ -582,12 +572,40 @@ fn submit_new_session(app: &mut App, terminal: &Term) -> Result<()> {
     let cwd = std::fs::canonicalize(&expanded).unwrap_or_else(|_| PathBuf::from(&expanded));
     if cwd.is_dir() {
         let (rows, cols) = pty_dims(terminal, app)?;
-        let _ = app.terminal_manager_mut().attach_new(&cwd, rows, cols);
+        let name = app.generate_session_name();
+        let _ = app
+            .terminal_manager_mut()
+            .attach_new(&cwd, &name, rows, cols);
         app.set_view_mode(ViewMode::Terminal);
     } else {
         tlog!(warn, "new session: not a directory: {}", cwd.display());
         app.set_view_mode(ViewMode::List);
     }
+    Ok(())
+}
+
+fn discard_session(app: &mut App, session_id: &str) {
+    let discarded = app.terminal_manager_mut().discard(session_id);
+    if !discarded {
+        if let Some(pid) = app.find_session(session_id).and_then(|s| s.takeover_pid()) {
+            kill_process(pid);
+        }
+    }
+    app.hide_session(session_id);
+}
+
+fn fork_selected(app: &mut App, terminal: &Term) -> Result<()> {
+    let Some((source_id, cwd)) = app
+        .selected_session()
+        .map(|s| (s.id.clone(), s.cwd.clone()))
+    else {
+        return Ok(());
+    };
+    let (rows, cols) = pty_dims(terminal, app)?;
+    let name = app.generate_session_name();
+    app.terminal_manager_mut()
+        .attach_fork(&cwd, &source_id, &name, rows, cols)?;
+    app.set_view_mode(ViewMode::Terminal);
     Ok(())
 }
 

@@ -2,6 +2,7 @@ pub mod config;
 mod discovery;
 mod jsonl;
 mod manager;
+pub mod names;
 pub mod pricing;
 pub mod project;
 pub mod registry;

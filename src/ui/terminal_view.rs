@@ -5,23 +5,21 @@ use ratatui::widgets::Paragraph;
 use ratatui::Frame;
 
 use crate::terminal::TabEntry;
-use crate::ui::side_panel::split_with_side_panel;
 use crate::ui::theme::Theme;
 use crate::usage::UsageData;
 
-const TAB_BAR_ROWS: u16 = 1;
-const STATUS_ROWS: u16 = 1;
-
-pub fn pty_size(area: Rect, side_panel_open: bool) -> (u16, u16) {
-    let main = if side_panel_open {
-        split_with_side_panel(area).0
+pub(crate) fn tab_label(index: usize, tab: &TabEntry) -> String {
+    let depth = if tab.count > 1 {
+        format!(" [{}/{}]", tab.current, tab.count)
     } else {
-        area
+        String::new()
     };
-    (
-        main.height.saturating_sub(TAB_BAR_ROWS + STATUS_ROWS),
-        main.width,
-    )
+    let marker = match (tab.waiting, tab.has_bell) {
+        (true, _) => "!",
+        (false, true) => "*",
+        (false, false) => "",
+    };
+    format!("{}: {}{}{}", index + 1, tab.name, depth, marker)
 }
 
 pub struct TerminalViewData<'a> {
@@ -177,7 +175,9 @@ fn render_tab_bar(f: &mut Frame, tabs: &[TabEntry], area: Rect) {
             }
         }
 
-        let (fg, modifier) = if tab.is_active {
+        let (fg, modifier) = if tab.waiting {
+            (Color::Red, Modifier::BOLD)
+        } else if tab.is_active {
             (Color::Cyan, Modifier::BOLD)
         } else if tab.bell_blink {
             (Color::Yellow, Modifier::BOLD | Modifier::SLOW_BLINK)
@@ -188,13 +188,7 @@ fn render_tab_bar(f: &mut Frame, tabs: &[TabEntry], area: Rect) {
         };
 
         let tab_style = Style::default().fg(fg).bg(bg).add_modifier(modifier);
-
-        let has_star = tab.has_bell && !tab.is_active;
-        let text = if has_star {
-            format!("{}: {}*", i + 1, tab.name)
-        } else {
-            format!("{}: {}", i + 1, tab.name)
-        };
+        let text = tab_label(i, tab);
 
         if tab.is_active && col < max_col {
             let cell = &mut buf[(col, area.y)];
@@ -287,13 +281,23 @@ pub(crate) fn convert_color(c: vt100::Color) -> Color {
 mod tests {
     use super::*;
 
+    fn tab(current: usize, count: usize, waiting: bool, has_bell: bool) -> TabEntry {
+        TabEntry {
+            name: "c9s".into(),
+            is_active: false,
+            has_bell,
+            bell_blink: false,
+            waiting,
+            current,
+            count,
+        }
+    }
+
     #[test]
-    fn test_pty_size_matches_render_layout() {
-        let area = Rect::new(0, 0, 100, 40);
-        assert_eq!(pty_size(area, false), (38, 100));
-        let (rows, cols) = pty_size(area, true);
-        assert_eq!(rows, 38);
-        assert_eq!(cols, split_with_side_panel(area).0.width);
-        assert_eq!(cols, 60);
+    fn test_tab_label_shows_depth_and_markers() {
+        assert_eq!(tab_label(0, &tab(1, 1, false, false)), "1: c9s");
+        assert_eq!(tab_label(1, &tab(2, 3, false, false)), "2: c9s [2/3]");
+        assert_eq!(tab_label(0, &tab(1, 2, false, true)), "1: c9s [1/2]*");
+        assert_eq!(tab_label(0, &tab(1, 2, true, true)), "1: c9s [1/2]!");
     }
 }

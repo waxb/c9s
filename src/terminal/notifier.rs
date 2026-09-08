@@ -15,8 +15,7 @@ enum SessionState {
 }
 
 pub struct JsonlNotifier {
-    jsonl_path: Option<PathBuf>,
-    project_dir: PathBuf,
+    jsonl_path: PathBuf,
     last_known_size: u64,
     read_offset: u64,
     state: SessionState,
@@ -40,16 +39,10 @@ impl JsonlNotifier {
         let project_dir = claude_dir.join("projects").join(&encoded);
 
         let jsonl_path = project_dir.join(format!("{}.jsonl", session_id));
-        let (path, size) = if jsonl_path.exists() {
-            let size = std::fs::metadata(&jsonl_path).map(|m| m.len()).unwrap_or(0);
-            (Some(jsonl_path), size)
-        } else {
-            (None, 0)
-        };
+        let size = std::fs::metadata(&jsonl_path).map(|m| m.len()).unwrap_or(0);
 
         Self {
-            jsonl_path: path,
-            project_dir,
+            jsonl_path,
             last_known_size: size,
             read_offset: size,
             state: SessionState::Unknown,
@@ -58,15 +51,7 @@ impl JsonlNotifier {
     }
 
     pub fn check(&mut self) -> bool {
-        if self.jsonl_path.is_none() {
-            self.try_discover_path();
-        }
-
-        let path = match &self.jsonl_path {
-            Some(p) => p.clone(),
-            None => return false,
-        };
-
+        let path = self.jsonl_path.clone();
         let current_size = match std::fs::metadata(&path) {
             Ok(m) => m.len(),
             Err(_) => return false,
@@ -192,29 +177,6 @@ impl JsonlNotifier {
             }
         }
     }
-
-    fn try_discover_path(&mut self) {
-        let Ok(entries) = std::fs::read_dir(&self.project_dir) else {
-            return;
-        };
-
-        let newest = entries
-            .flatten()
-            .map(|e| e.path())
-            .filter(|p| p.extension().is_some_and(|e| e == "jsonl"))
-            .filter_map(|p| {
-                let mtime = p.metadata().ok()?.modified().ok()?;
-                Some((p, mtime))
-            })
-            .max_by_key(|(_, mtime)| *mtime);
-
-        if let Some((path, _)) = newest {
-            let size = path.metadata().map(|m| m.len()).unwrap_or(0);
-            self.last_known_size = size;
-            self.read_offset = size;
-            self.jsonl_path = Some(path);
-        }
-    }
 }
 
 #[cfg(test)]
@@ -223,8 +185,7 @@ mod tests {
 
     fn notifier_at(state: SessionState) -> JsonlNotifier {
         JsonlNotifier {
-            jsonl_path: None,
-            project_dir: PathBuf::from("/nonexistent"),
+            jsonl_path: PathBuf::from("/nonexistent/none.jsonl"),
             last_known_size: 0,
             read_offset: 0,
             state,
@@ -274,8 +235,7 @@ mod tests {
         let path = dir.path().join("s.jsonl");
         std::fs::write(&path, "").unwrap();
         let mut n = JsonlNotifier {
-            jsonl_path: Some(path.clone()),
-            project_dir: dir.path().to_path_buf(),
+            jsonl_path: path.clone(),
             last_known_size: 0,
             read_offset: 0,
             state: SessionState::Unknown,
@@ -289,5 +249,29 @@ mod tests {
         .unwrap();
         assert!(n.check());
         assert!(!n.check());
+    }
+
+    #[test]
+    fn test_notifier_waits_for_its_own_transcript() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(
+            dir.path().join("other.jsonl"),
+            "{\"type\":\"user\"}\n{\"type\":\"assistant\",\"message\":{\"stop_reason\":\"end_turn\"}}\n",
+        )
+        .unwrap();
+        let mut n = JsonlNotifier {
+            jsonl_path: dir.path().join("mine.jsonl"),
+            last_known_size: 0,
+            read_offset: 0,
+            state: SessionState::Unknown,
+            tool_use_at: None,
+        };
+        assert!(!n.check(), "must not adopt another session's transcript");
+        std::fs::write(
+            dir.path().join("mine.jsonl"),
+            "{\"type\":\"user\"}\n{\"type\":\"assistant\",\"message\":{\"stop_reason\":\"end_turn\"}}\n",
+        )
+        .unwrap();
+        assert!(n.check());
     }
 }

@@ -18,14 +18,14 @@ pub fn render_confirm_kill(f: &mut Frame, session_name: &str, area: Rect) {
     let lines = vec![
         Line::from(""),
         Line::from(Span::styled(
-            format!("  Kill session: {}", session_name),
+            format!("  Discard session: {}", session_name),
             title_style,
         )),
         Line::from(""),
         Line::from(vec![
             Span::styled("    ", Style::default()),
             Span::styled(
-                " y/Enter: kill ",
+                " y/Enter: discard ",
                 Style::default().fg(Color::Red).add_modifier(Modifier::BOLD),
             ),
             Span::styled("   ", Style::default()),
@@ -40,7 +40,7 @@ pub fn render_confirm_kill(f: &mut Frame, session_name: &str, area: Rect) {
 
     let dialog = Paragraph::new(lines).block(
         Block::default()
-            .title(" Kill Session? ")
+            .title(" Discard Session? ")
             .borders(Borders::ALL)
             .border_style(border_style),
     );
