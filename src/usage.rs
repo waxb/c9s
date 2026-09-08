@@ -27,6 +27,7 @@ pub struct UsageData {
 
 pub struct UsageFetcher {
     cached: UsageData,
+    generation: u64,
     last_request: Option<Instant>,
     rx: mpsc::Receiver<UsageData>,
     tx: mpsc::Sender<()>,
@@ -112,6 +113,7 @@ impl UsageFetcher {
 
         Self {
             cached: UsageData::default(),
+            generation: 0,
             last_request: None,
             rx: result_rx,
             tx: trigger_tx,
@@ -124,6 +126,7 @@ impl UsageFetcher {
             self.inflight = false;
             if data.api_available {
                 self.cached = data;
+                self.generation += 1;
             } else {
                 self.last_request = backdated(CACHE_TTL_SECS - BACKOFF_TTL_SECS);
                 return &self.cached;
@@ -143,6 +146,10 @@ impl UsageFetcher {
         }
 
         &self.cached
+    }
+
+    pub fn generation(&self) -> u64 {
+        self.generation
     }
 
     pub fn invalidate(&mut self) {

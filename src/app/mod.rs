@@ -22,7 +22,7 @@ use crate::session::registry::{RegistryStatus, SessionRegistry};
 use crate::session::{
     group_projects, names, DiscoveryWorker, Project, Session, SessionFile, SessionStatus,
 };
-use crate::store::Store;
+use crate::store::{Store, UsageSample};
 use crate::terminal::TerminalManager;
 use crate::tlog;
 use crate::ui::Panes;
@@ -120,6 +120,7 @@ pub struct App {
     dialog_return: ViewMode,
     keep_warm: KeepWarm,
     last_warm_poll: Option<Instant>,
+    usage_generation: u64,
 }
 
 impl App {
@@ -168,6 +169,7 @@ impl App {
             dialog_return: ViewMode::List,
             keep_warm: KeepWarm::new(KEEP_WARM_INTERVAL, KEEP_WARM_MAX_AGE),
             last_warm_poll: None,
+            usage_generation: 0,
         };
 
         if let Some(sessions) = app.discovery.wait_first(INITIAL_SCAN_TIMEOUT) {
@@ -248,6 +250,37 @@ impl App {
 
     pub fn refresh_usage(&mut self) {
         self.usage = self.usage_fetcher.get().clone();
+        let generation = self.usage_fetcher.generation();
+        if generation != self.usage_generation {
+            self.usage_generation = generation;
+            self.record_usage("poll", None);
+            tlog!(
+                info,
+                "usage 5h {}% 7d {}%",
+                self.usage.five_hour.unwrap_or(0),
+                self.usage.seven_day.unwrap_or(0)
+            );
+        }
+    }
+
+    fn record_usage(&self, event: &str, session_id: Option<&str>) {
+        let Some(store) = self.store.as_ref() else {
+            return;
+        };
+        let context_tokens = session_id
+            .and_then(|id| self.find_session(id))
+            .map(|s| s.context_tokens);
+        let sample = UsageSample {
+            ts_ms: chrono::Utc::now().timestamp_millis(),
+            five_hour: self.usage.five_hour,
+            seven_day: self.usage.seven_day,
+            event: event.to_string(),
+            session_id: session_id.map(str::to_string),
+            context_tokens,
+        };
+        if let Err(e) = store.record_usage_sample(&sample) {
+            tlog!(warn, "usage sample not recorded: {}", e);
+        }
     }
 
     pub fn invalidate_usage(&mut self) {
@@ -688,7 +721,14 @@ impl App {
             match self.terminal_manager.write_to_session(&id, &ping_payload()) {
                 Ok(true) => {
                     self.keep_warm.record_ping(&id, now);
-                    tlog!(info, "keep-warm ping sent to {}", id);
+                    self.record_usage("ping", Some(&id));
+                    self.usage_fetcher.invalidate();
+                    tlog!(
+                        info,
+                        "keep-warm ping sent to {} (5h {}%)",
+                        id,
+                        self.usage.five_hour.unwrap_or(0)
+                    );
                     changed = true;
                 }
                 Ok(false) => {

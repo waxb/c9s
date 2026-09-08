@@ -5,7 +5,17 @@ use std::path::{Path, PathBuf};
 
 use crate::session::{CachedTranscript, Session};
 
-const SCHEMA_VERSION: i64 = 3;
+const SCHEMA_VERSION: i64 = 4;
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct UsageSample {
+    pub ts_ms: i64,
+    pub five_hour: Option<u8>,
+    pub seven_day: Option<u8>,
+    pub event: String,
+    pub session_id: Option<String>,
+    pub context_tokens: Option<u64>,
+}
 
 const V2_COLUMNS: &[(&str, &str)] = &[
     ("title", "TEXT"),
@@ -78,6 +88,16 @@ impl Store {
                 file_len INTEGER NOT NULL,
                 mtime_ms INTEGER NOT NULL,
                 stats TEXT NOT NULL
+            );
+
+            CREATE TABLE IF NOT EXISTS usage_samples (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                ts_ms INTEGER NOT NULL,
+                five_hour INTEGER,
+                seven_day INTEGER,
+                event TEXT NOT NULL,
+                session_id TEXT,
+                context_tokens INTEGER
             );
 
             CREATE INDEX IF NOT EXISTS idx_sessions_project ON sessions(project_name);
@@ -243,6 +263,42 @@ impl Store {
         Ok(())
     }
 
+    pub fn record_usage_sample(&self, sample: &UsageSample) -> Result<()> {
+        self.conn.execute(
+            "INSERT INTO usage_samples (ts_ms, five_hour, seven_day, event, session_id, context_tokens)
+            VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+            rusqlite::params![
+                sample.ts_ms,
+                sample.five_hour.map(i64::from),
+                sample.seven_day.map(i64::from),
+                sample.event,
+                sample.session_id,
+                sample.context_tokens.map(|c| c as i64),
+            ],
+        )?;
+        Ok(())
+    }
+
+    pub fn recent_usage_samples(&self, limit: usize) -> Result<Vec<UsageSample>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT ts_ms, five_hour, seven_day, event, session_id, context_tokens
+            FROM usage_samples ORDER BY id DESC LIMIT ?1",
+        )?;
+        let rows = stmt.query_map(rusqlite::params![limit as i64], |row| {
+            Ok(UsageSample {
+                ts_ms: row.get(0)?,
+                five_hour: row.get::<_, Option<i64>>(1)?.map(|v| v.clamp(0, 255) as u8),
+                seven_day: row.get::<_, Option<i64>>(2)?.map(|v| v.clamp(0, 255) as u8),
+                event: row.get(3)?,
+                session_id: row.get(4)?,
+                context_tokens: row.get::<_, Option<i64>>(5)?.map(|v| v.max(0) as u64),
+            })
+        })?;
+        let mut samples: Vec<UsageSample> = rows.collect::<std::result::Result<_, _>>()?;
+        samples.reverse();
+        Ok(samples)
+    }
+
     pub fn hidden_ids(&self) -> Result<HashSet<String>> {
         let mut stmt = self
             .conn
@@ -354,6 +410,34 @@ mod tests {
             .unwrap();
         let loaded = store.load_transcript_stats().unwrap();
         assert_eq!(loaded, vec![(path, updated)]);
+    }
+
+    #[test]
+    fn test_usage_samples_round_trip_in_order() {
+        let (_dir, store) = temp_store();
+        let poll = UsageSample {
+            ts_ms: 1_700_000_000_000,
+            five_hour: Some(34),
+            seven_day: Some(61),
+            event: "poll".into(),
+            session_id: None,
+            context_tokens: None,
+        };
+        let ping = UsageSample {
+            ts_ms: 1_700_000_060_000,
+            five_hour: Some(34),
+            seven_day: Some(61),
+            event: "ping".into(),
+            session_id: Some("s1".into()),
+            context_tokens: Some(900_000),
+        };
+        store.record_usage_sample(&poll).unwrap();
+        store.record_usage_sample(&ping).unwrap();
+        assert_eq!(
+            store.recent_usage_samples(10).unwrap(),
+            vec![poll, ping.clone()]
+        );
+        assert_eq!(store.recent_usage_samples(1).unwrap(), vec![ping]);
     }
 
     #[test]

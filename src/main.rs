@@ -48,8 +48,14 @@ fn main() -> Result<()> {
                 println!("c9s - Claude Code Session Manager");
                 println!();
                 println!("Usage:");
-                println!("  c9s           Launch the TUI dashboard");
-                println!("  c9s version   Show version");
+                println!("  c9s              Launch the TUI dashboard");
+                println!("  c9s version      Show version");
+                println!("  c9s usage-log    Print recent usage samples and keep-warm pings");
+                return Ok(());
+            }
+            "usage-log" => {
+                let limit = args.get(2).and_then(|a| a.parse().ok()).unwrap_or(60);
+                print_usage_log(limit)?;
                 return Ok(());
             }
             other => {
@@ -97,6 +103,44 @@ fn main() -> Result<()> {
     stdout().execute(LeaveAlternateScreen)?;
 
     result
+}
+
+fn print_usage_log(limit: usize) -> Result<()> {
+    let store = store::Store::open()?;
+    let samples = store.recent_usage_samples(limit)?;
+    println!(
+        "{:<20} {:>4} {:>4}  {:<5} {:<9} {}",
+        "time", "5h%", "7d%", "event", "session", "context"
+    );
+    for s in samples {
+        let time = chrono::DateTime::<chrono::Utc>::from_timestamp_millis(s.ts_ms)
+            .map(|t| {
+                t.with_timezone(&chrono::Local)
+                    .format("%Y-%m-%d %H:%M:%S")
+                    .to_string()
+            })
+            .unwrap_or_default();
+        let pct = |v: Option<u8>| v.map(|p| p.to_string()).unwrap_or_else(|| "-".into());
+        let session = s
+            .session_id
+            .as_deref()
+            .map(|id| id[..8.min(id.len())].to_string())
+            .unwrap_or_default();
+        let context = s
+            .context_tokens
+            .map(|c| format!("{}K", c / 1000))
+            .unwrap_or_default();
+        println!(
+            "{:<20} {:>4} {:>4}  {:<5} {:<9} {}",
+            time,
+            pct(s.five_hour),
+            pct(s.seven_day),
+            s.event,
+            session,
+            context
+        );
+    }
+    Ok(())
 }
 
 fn run_loop(terminal: &mut Term, app: &mut App) -> Result<()> {
