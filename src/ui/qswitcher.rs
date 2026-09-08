@@ -164,10 +164,11 @@ pub fn render_qswitcher(f: &mut Frame, app: &App, area: Rect) {
             let project = app.project(row.project_index())?;
             let is_selected = *i == selected;
             Some(match row {
-                Row::Project(p) => {
+                Row::Project(_) => {
                     let index = project_counter;
                     project_counter += 1;
-                    let expanded = app.quick_switch().expanded == Some(*p);
+                    let expanded =
+                        app.quick_switch().expanded.as_deref() == Some(project.root.as_path());
                     project_line(app, index, project, is_selected, expanded)
                 }
                 Row::Session(_, s) => session_line(app, project.sessions.get(*s)?, is_selected),

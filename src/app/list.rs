@@ -223,7 +223,7 @@ impl ListState {
 
 pub struct QuickSwitch {
     pub selected: usize,
-    pub expanded: Option<usize>,
+    pub expanded: Option<PathBuf>,
 }
 
 impl QuickSwitch {
@@ -241,7 +241,7 @@ impl QuickSwitch {
                 continue;
             }
             rows.push(Row::Project(pi));
-            if self.expanded == Some(pi) {
+            if self.expanded.as_deref() == Some(project.root.as_path()) {
                 for (si, session) in project.sessions.iter().enumerate() {
                     if list.is_visible(session) {
                         rows.push(Row::Session(pi, si));
@@ -254,6 +254,23 @@ impl QuickSwitch {
 
     pub fn selected_row(&self, list: &ListState, projects: &[Project]) -> Option<Row> {
         self.rows(list, projects).get(self.selected).copied()
+    }
+
+    pub fn selected_key(&self, list: &ListState, projects: &[Project]) -> Option<RowKey> {
+        self.selected_row(list, projects)
+            .and_then(|row| list.row_key(projects, row))
+    }
+
+    pub fn select_key(&mut self, list: &ListState, projects: &[Project], key: &RowKey) {
+        let rows = self.rows(list, projects);
+        if let Some(pos) = rows
+            .iter()
+            .position(|row| list.row_key(projects, *row).as_ref() == Some(key))
+        {
+            self.selected = pos;
+        } else {
+            self.selected = self.selected.min(rows.len().saturating_sub(1));
+        }
     }
 
     pub fn move_up(&mut self) {
@@ -270,7 +287,7 @@ impl QuickSwitch {
     pub fn expand(&mut self, list: &ListState, projects: &[Project]) {
         if let Some(row) = self.selected_row(list, projects) {
             let pi = row.project_index();
-            self.expanded = Some(pi);
+            self.expanded = projects.get(pi).map(|p| p.root.clone());
             let rows = self.rows(list, projects);
             if let Some(pos) = rows.iter().position(|r| *r == Row::Project(pi)) {
                 self.selected = pos;
@@ -408,5 +425,47 @@ mod tests {
         qs.collapse(&list, &projects);
         assert_eq!(qs.rows(&list, &projects).len(), 2);
         assert_eq!(qs.selected, 0);
+    }
+
+    #[test]
+    fn test_quick_switch_keys_survive_project_reorder() {
+        let mut projects = projects();
+        let list = ListState::new(HashSet::new());
+        let mut qs = QuickSwitch::new();
+        qs.expand(&list, &projects);
+        qs.move_down(&list, &projects);
+        qs.move_down(&list, &projects);
+        let key = qs.selected_key(&list, &projects).unwrap();
+        assert_eq!(key, RowKey::Session("a2".into()));
+
+        projects.reverse();
+        qs.select_key(&list, &projects, &key);
+        assert!(matches!(
+            qs.selected_row(&list, &projects),
+            Some(Row::Session(1, 1))
+        ));
+        assert_eq!(qs.rows(&list, &projects).len(), 4);
+    }
+
+    #[test]
+    fn test_list_select_key_and_rows_survive_project_reorder() {
+        let mut projects = projects();
+        let mut list = ListState::new(HashSet::new());
+        list.expand(&projects[0].root);
+        list.rebuild_rows(&projects);
+        list.select_key(&projects, &RowKey::Session("a2".into()));
+        let key = list
+            .selected_row()
+            .and_then(|row| list.row_key(&projects, row))
+            .unwrap();
+
+        projects.reverse();
+        list.rebuild_rows(&projects);
+        list.select_key(&projects, &key);
+        let row = list.selected_row().unwrap();
+        assert_eq!(
+            list.row_key(&projects, row),
+            Some(RowKey::Session("a2".into()))
+        );
     }
 }

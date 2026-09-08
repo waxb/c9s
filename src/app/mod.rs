@@ -24,7 +24,7 @@ use crate::terminal::TerminalManager;
 use crate::ui::Panes;
 use crate::usage::{UsageData, UsageFetcher};
 use anyhow::Result;
-use list::ListState;
+use list::{ListState, RowKey};
 use pane::PaneState;
 
 const CI_CHECK_INTERVAL: Duration = Duration::from_secs(120);
@@ -186,6 +186,8 @@ impl App {
             }
         }
 
+        let list_key = self.selected_key();
+        let switch_key = self.qswitch.selected_key(&self.list, &self.projects);
         let previous: HashMap<PathBuf, Project> = std::mem::take(&mut self.projects)
             .into_iter()
             .map(|p| (p.root.clone(), p))
@@ -197,19 +199,39 @@ impl App {
                 None => p,
             })
             .collect();
-        self.rebuild_rows_keeping_selection();
+        self.rebuild_rows_with_key(list_key);
+        if let Some(key) = switch_key {
+            self.qswitch.select_key(&self.list, &self.projects, &key);
+        }
+        self.prune_ci_statuses();
     }
 
-    fn rebuild_rows_keeping_selection(&mut self) {
-        let key = self
-            .list
+    fn selected_key(&self) -> Option<RowKey> {
+        self.list
             .selected_row()
-            .and_then(|row| self.list.row_key(&self.projects, row));
+            .and_then(|row| self.list.row_key(&self.projects, row))
+    }
+
+    fn rebuild_rows_with_key(&mut self, key: Option<RowKey>) {
         self.list.sort_projects(&mut self.projects);
         self.list.rebuild_rows(&self.projects);
         if let Some(key) = key {
             self.list.select_key(&self.projects, &key);
         }
+    }
+
+    fn rebuild_rows_keeping_selection(&mut self) {
+        let key = self.selected_key();
+        self.rebuild_rows_with_key(key);
+    }
+
+    fn prune_ci_statuses(&mut self) {
+        let known: HashSet<&str> = self
+            .projects
+            .iter()
+            .flat_map(|p| p.sessions.iter().map(|s| s.id.as_str()))
+            .collect();
+        self.ci_statuses.retain(|id, _| known.contains(id.as_str()));
     }
 
     pub fn refresh_usage(&mut self) {
