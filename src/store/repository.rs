@@ -86,7 +86,7 @@ impl Store {
                 session.input_tokens,
                 session.output_tokens,
                 session.cache_read_tokens,
-                session.cache_write_tokens,
+                session.cache_write_tokens(),
                 session.estimated_cost_usd(),
                 session.message_count,
                 session.tool_call_count,

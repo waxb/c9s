@@ -2,13 +2,17 @@
 use anyhow::Context;
 use anyhow::Result;
 use chrono::{DateTime, Utc};
-use serde_json::Value;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::time::SystemTime;
 
+use super::jsonl::{parse_jsonl, JsonlStats};
 use super::{Session, SessionStatus};
+
+const HUNG_THRESHOLD_MINUTES: i64 = 5;
+const CACHE_LARGE_FILE: u64 = 2 * 1024 * 1024;
+const CACHE_GROWTH_TOLERANCE: u64 = 64 * 1024;
 
 pub struct SessionDiscovery {
     claude_dir: PathBuf,
@@ -19,30 +23,6 @@ pub struct SessionDiscovery {
 struct ProcessInfo {
     pid: u32,
     cwd: PathBuf,
-}
-
-#[derive(Debug, Default, Clone)]
-struct JsonlStats {
-    session_id: Option<String>,
-    cwd: Option<String>,
-    git_branch: Option<String>,
-    model: Option<String>,
-    claude_version: Option<String>,
-    input_tokens: u64,
-    output_tokens: u64,
-    cache_read_tokens: u64,
-    cache_write_tokens: u64,
-    message_count: u32,
-    tool_call_count: u32,
-    first_timestamp: Option<DateTime<Utc>>,
-    last_timestamp: Option<DateTime<Utc>>,
-    last_message_type: Option<String>,
-    last_stop_reason: Option<String>,
-    permission_mode: Option<String>,
-    plan_slugs: Vec<String>,
-    compaction_count: u32,
-    hook_run_count: u32,
-    hook_error_count: u32,
 }
 
 impl SessionDiscovery {
@@ -57,144 +37,39 @@ impl SessionDiscovery {
     }
 
     pub fn discover_all(&mut self) -> Result<Vec<Session>> {
-        let live_processes = self.find_claude_processes()?;
-        let mut sessions = Vec::new();
-
-        let live_cwds: HashMap<String, u32> = live_processes
-            .iter()
+        let live_cwds: HashMap<String, u32> = self
+            .find_claude_processes()?
+            .into_iter()
             .map(|p| (p.cwd.to_string_lossy().to_string(), p.pid))
             .collect();
 
         let projects_dir = self.claude_dir.join("projects");
-        if !projects_dir.exists() {
-            return Ok(sessions);
-        }
+        let mut seen: HashMap<String, Session> = HashMap::new();
 
-        let mut seen_sessions: HashMap<String, Session> = HashMap::new();
-
-        if let Ok(entries) = std::fs::read_dir(&projects_dir) {
-            for entry in entries.flatten() {
-                let path = entry.path();
-                if !path.is_dir() {
-                    continue;
-                }
-
-                let dir_name = path
-                    .file_name()
-                    .unwrap_or_default()
-                    .to_string_lossy()
-                    .to_string();
-
-                if dir_name.starts_with('.') {
-                    continue;
-                }
-
-                let fallback_cwd = decode_project_path(&dir_name);
-
-                if let Ok(jsonl_files) = std::fs::read_dir(&path) {
-                    for jf in jsonl_files.flatten() {
-                        let jf_path = jf.path();
-                        if jf_path.extension().is_none_or(|e| e != "jsonl") {
-                            continue;
-                        }
-
-                        let session_id = jf_path
-                            .file_stem()
-                            .unwrap_or_default()
-                            .to_string_lossy()
-                            .to_string();
-
-                        if session_id.contains('.') {
-                            continue;
-                        }
-
-                        let stats = self.parse_jsonl_cached(&jf_path);
-
-                        if stats.session_id.is_none() && stats.message_count == 0 {
-                            continue;
-                        }
-
-                        let real_session_id = stats
-                            .session_id
-                            .clone()
-                            .unwrap_or_else(|| session_id.clone());
-
-                        let project_cwd = stats.cwd.clone().unwrap_or_else(|| fallback_cwd.clone());
-
-                        let pid = live_cwds.get(&project_cwd).copied();
-
-                        let status = match pid {
-                            Some(_) => {
-                                let hung_threshold = chrono::Duration::minutes(5);
-                                let is_hung = match stats.last_timestamp {
-                                    Some(ts) => {
-                                        Utc::now().signed_duration_since(ts) > hung_threshold
-                                    }
-                                    None => false,
-                                };
-                                if is_hung {
-                                    SessionStatus::Idle
-                                } else {
-                                    match stats.last_message_type.as_deref() {
-                                        Some("user") => SessionStatus::Thinking,
-                                        Some("assistant") => {
-                                            match stats.last_stop_reason.as_deref() {
-                                                Some("end_turn") => SessionStatus::Idle,
-                                                Some("tool_use") => SessionStatus::Active,
-                                                _ => SessionStatus::Active,
-                                            }
-                                        }
-                                        _ => SessionStatus::Active,
-                                    }
-                                }
-                            }
-                            None => SessionStatus::Dead,
-                        };
-
-                        let project_name = extract_project_name(&project_cwd);
-                        let now = Utc::now();
-
-                        let session = Session {
-                            id: real_session_id.clone(),
-                            pid,
-                            cwd: PathBuf::from(&project_cwd),
-                            project_name,
-                            git_branch: stats.git_branch,
-                            model: stats.model,
-                            status,
-                            started_at: stats.first_timestamp.unwrap_or(now),
-                            last_activity: stats.last_timestamp.unwrap_or(now),
-                            input_tokens: stats.input_tokens,
-                            output_tokens: stats.output_tokens,
-                            cache_read_tokens: stats.cache_read_tokens,
-                            cache_write_tokens: stats.cache_write_tokens,
-                            message_count: stats.message_count,
-                            tool_call_count: stats.tool_call_count,
-                            claude_version: stats.claude_version,
-                            permission_mode: stats.permission_mode,
-                            plan_slugs: stats.plan_slugs,
-                            compaction_count: stats.compaction_count,
-                            hook_run_count: stats.hook_run_count,
-                            hook_error_count: stats.hook_error_count,
-                        };
-
-                        let existing = seen_sessions.get(&project_cwd);
-                        let should_insert = match existing {
-                            None => true,
-                            Some(ex) => session.last_activity > ex.last_activity,
-                        };
-
-                        if should_insert {
-                            seen_sessions.insert(project_cwd.clone(), session);
-                        }
-                    }
-                }
+        for jf_path in list_session_jsonl_files(&projects_dir) {
+            let fallback_cwd = jf_path
+                .parent()
+                .and_then(|p| p.file_name())
+                .map(|n| decode_project_path(&n.to_string_lossy()))
+                .unwrap_or_default();
+            let stats = self.parse_jsonl_cached(&jf_path);
+            if stats.session_id.is_none() && stats.message_count == 0 {
+                continue;
+            }
+            let Some(session) = build_session(&jf_path, stats, &fallback_cwd, &live_cwds) else {
+                continue;
+            };
+            let key = session.cwd.to_string_lossy().to_string();
+            let replace = seen
+                .get(&key)
+                .is_none_or(|existing| prefer_over(&session, existing));
+            if replace {
+                seen.insert(key, session);
             }
         }
 
-        sessions.extend(seen_sessions.into_values());
+        let mut sessions: Vec<Session> = seen.into_values().collect();
         sessions.sort_by_key(|s| std::cmp::Reverse(s.last_activity));
-
         Ok(sessions)
     }
 
@@ -229,24 +104,7 @@ impl SessionDiscovery {
             .output()
             .context("failed to run lsof")?;
 
-        let stdout = String::from_utf8_lossy(&output.stdout);
-        let mut processes = Vec::new();
-        let mut current_pid: Option<u32> = None;
-
-        for line in stdout.lines() {
-            if let Some(pid_str) = line.strip_prefix('p') {
-                current_pid = pid_str.parse().ok();
-            } else if let Some(path) = line.strip_prefix('n') {
-                if let Some(pid) = current_pid {
-                    processes.push(ProcessInfo {
-                        pid,
-                        cwd: PathBuf::from(path),
-                    });
-                }
-            }
-        }
-
-        Ok(processes)
+        Ok(parse_lsof_output(&String::from_utf8_lossy(&output.stdout)))
     }
 
     #[cfg(target_os = "linux")]
@@ -275,16 +133,15 @@ impl SessionDiscovery {
                 if *cached_mtime == mtime {
                     return cached_stats.clone();
                 }
-                if file_size > 2 * 1024 * 1024 {
-                    let growth = file_size.saturating_sub(*cached_size);
-                    if growth < 64 * 1024 {
-                        return cached_stats.clone();
-                    }
+                if file_size > CACHE_LARGE_FILE
+                    && file_size.saturating_sub(*cached_size) < CACHE_GROWTH_TOLERANCE
+                {
+                    return cached_stats.clone();
                 }
             }
         }
 
-        let stats = Self::parse_jsonl(path);
+        let stats = parse_jsonl(path);
 
         if let Some(mtime) = mtime {
             self.stats_cache
@@ -293,184 +150,131 @@ impl SessionDiscovery {
 
         stats
     }
+}
 
-    fn parse_jsonl(path: &Path) -> JsonlStats {
-        let mut stats = JsonlStats::default();
-
-        let file_size = std::fs::metadata(path).map(|m| m.len()).unwrap_or(0);
-        const TAIL_SIZE: u64 = 512 * 1024;
-        const LARGE_FILE_THRESHOLD: u64 = 2 * 1024 * 1024;
-
-        if file_size > LARGE_FILE_THRESHOLD {
-            Self::parse_jsonl_fast(path, file_size, TAIL_SIZE, &mut stats);
-        } else {
-            Self::parse_jsonl_full(path, &mut stats);
+#[cfg(target_os = "macos")]
+fn parse_lsof_output(stdout: &str) -> Vec<ProcessInfo> {
+    let mut processes = Vec::new();
+    let mut current_pid: Option<u32> = None;
+    for line in stdout.lines() {
+        if let Some(pid_str) = line.strip_prefix('p') {
+            current_pid = pid_str.parse().ok();
+        } else if let Some(path) = line.strip_prefix('n') {
+            if let Some(pid) = current_pid {
+                processes.push(ProcessInfo {
+                    pid,
+                    cwd: PathBuf::from(path),
+                });
+            }
         }
-
-        stats
     }
+    processes
+}
 
-    fn parse_jsonl_full(path: &Path, stats: &mut JsonlStats) {
-        let content = match std::fs::read_to_string(path) {
-            Ok(c) => c,
-            Err(_) => return,
+fn list_session_jsonl_files(projects_dir: &Path) -> Vec<PathBuf> {
+    let Ok(entries) = std::fs::read_dir(projects_dir) else {
+        return Vec::new();
+    };
+    let mut files = Vec::new();
+    for project in entries.flatten() {
+        let path = project.path();
+        let name = project.file_name().to_string_lossy().to_string();
+        if !path.is_dir() || name.starts_with('.') {
+            continue;
+        }
+        let Ok(jsonl_files) = std::fs::read_dir(&path) else {
+            continue;
         };
-        Self::parse_jsonl_lines(&content, stats, true);
+        files.extend(
+            jsonl_files
+                .flatten()
+                .map(|e| e.path())
+                .filter(|p| is_session_jsonl(p)),
+        );
     }
+    files
+}
 
-    fn parse_jsonl_fast(path: &Path, file_size: u64, tail_size: u64, stats: &mut JsonlStats) {
-        use std::io::{BufRead, BufReader, Read, Seek, SeekFrom};
+fn is_session_jsonl(path: &Path) -> bool {
+    path.extension().is_some_and(|e| e == "jsonl")
+        && path
+            .file_stem()
+            .is_some_and(|stem| !stem.to_string_lossy().contains('.'))
+}
 
-        let file = match std::fs::File::open(path) {
-            Ok(f) => f,
-            Err(_) => return,
-        };
+fn build_session(
+    jf_path: &Path,
+    stats: JsonlStats,
+    fallback_cwd: &str,
+    live_cwds: &HashMap<String, u32>,
+) -> Option<Session> {
+    let file_session_id = jf_path.file_stem()?.to_string_lossy().to_string();
+    let id = stats.session_id.clone().unwrap_or(file_session_id);
+    let project_cwd = stats
+        .cwd
+        .clone()
+        .unwrap_or_else(|| fallback_cwd.to_string());
+    let pid = live_cwds.get(&project_cwd).copied();
+    let status = match pid {
+        Some(_) => infer_live_status(&stats, Utc::now()),
+        None => SessionStatus::Dead,
+    };
+    let now = Utc::now();
 
-        let mut reader = BufReader::new(&file);
+    Some(Session {
+        id,
+        pid,
+        cwd: PathBuf::from(&project_cwd),
+        project_name: extract_project_name(&project_cwd),
+        git_branch: stats.git_branch.clone(),
+        model: stats.model.clone(),
+        status,
+        started_at: stats.first_timestamp.unwrap_or(now),
+        last_activity: stats.last_timestamp.unwrap_or(now),
+        input_tokens: stats.input_tokens,
+        output_tokens: stats.output_tokens,
+        cache_read_tokens: stats.cache_read_tokens,
+        cache_write_5m_tokens: stats.cache_write_5m_tokens,
+        cache_write_1h_tokens: stats.cache_write_1h_tokens,
+        context_tokens: stats.context_tokens,
+        message_count: stats.message_count,
+        tool_call_count: stats.tool_call_count,
+        claude_version: stats.claude_version.clone(),
+        permission_mode: stats.permission_mode.clone(),
+        plan_slugs: stats.plan_slugs.clone(),
+        compaction_count: stats.compaction_count,
+        hook_run_count: stats.hook_run_count,
+        hook_error_count: stats.hook_error_count,
+        api_error_count: stats.api_error_count,
+        title: stats.title(),
+        last_prompt: stats.last_prompt.clone(),
+    })
+}
 
-        let mut head = String::new();
-        let mut head_bytes = 0u64;
-        const HEAD_LIMIT: u64 = 64 * 1024;
-        loop {
-            let mut line = String::new();
-            match reader.read_line(&mut line) {
-                Ok(0) => break,
-                Ok(n) => {
-                    head_bytes += n as u64;
-                    head.push_str(&line);
-                    if head_bytes >= HEAD_LIMIT {
-                        break;
-                    }
-                }
-                Err(_) => break,
-            }
-        }
-        Self::parse_jsonl_lines(&head, stats, false);
-
-        let tail_start = file_size.saturating_sub(tail_size);
-        if tail_start > head_bytes {
-            let file2 = match std::fs::File::open(path) {
-                Ok(f) => f,
-                Err(_) => return,
-            };
-            let mut reader2 = BufReader::new(file2);
-            if reader2.seek(SeekFrom::Start(tail_start)).is_err() {
-                return;
-            }
-            let mut tail = String::new();
-            if reader2.read_to_string(&mut tail).is_err() {
-                return;
-            }
-            if let Some(first_nl) = tail.find('\n') {
-                let tail_clean = &tail[first_nl + 1..];
-                Self::parse_jsonl_lines(tail_clean, stats, false);
-            }
-        }
+fn infer_live_status(stats: &JsonlStats, now: DateTime<Utc>) -> SessionStatus {
+    let hung = stats.last_timestamp.is_some_and(|ts| {
+        now.signed_duration_since(ts) > chrono::Duration::minutes(HUNG_THRESHOLD_MINUTES)
+    });
+    if hung {
+        return SessionStatus::Idle;
     }
+    match (
+        stats.last_message_type.as_deref(),
+        stats.last_stop_reason.as_deref(),
+    ) {
+        (Some("user"), _) => SessionStatus::Thinking,
+        (Some("assistant"), Some("end_turn")) => SessionStatus::Idle,
+        _ => SessionStatus::Active,
+    }
+}
 
-    fn parse_jsonl_lines(content: &str, stats: &mut JsonlStats, count_messages: bool) {
-        for line in content.lines() {
-            let value: Value = match serde_json::from_str(line) {
-                Ok(v) => v,
-                Err(_) => continue,
-            };
-
-            if let Some(sid) = value.get("sessionId").and_then(|v| v.as_str()) {
-                stats.session_id = Some(sid.to_string());
-            }
-
-            if stats.cwd.is_none() {
-                if let Some(cwd) = value.get("cwd").and_then(|v| v.as_str()) {
-                    stats.cwd = Some(cwd.to_string());
-                }
-            }
-
-            if let Some(branch) = value.get("gitBranch").and_then(|v| v.as_str()) {
-                stats.git_branch = Some(branch.to_string());
-            }
-
-            if let Some(version) = value.get("version").and_then(|v| v.as_str()) {
-                stats.claude_version = Some(version.to_string());
-            }
-
-            if stats.permission_mode.is_none() {
-                if let Some(pm) = value.get("permissionMode").and_then(|v| v.as_str()) {
-                    stats.permission_mode = Some(pm.to_string());
-                }
-            }
-
-            if let Some(slug) = value.get("slug").and_then(|v| v.as_str()) {
-                if !stats.plan_slugs.contains(&slug.to_string()) {
-                    stats.plan_slugs.push(slug.to_string());
-                }
-            }
-
-            if let Some(hc) = value.get("hookCount").and_then(|v| v.as_u64()) {
-                stats.hook_run_count += hc as u32;
-            }
-
-            if let Some(errs) = value.get("hookErrors").and_then(|v| v.as_array()) {
-                stats.hook_error_count += errs.len() as u32;
-            }
-
-            if let Some(ts_str) = value.get("timestamp").and_then(|v| v.as_str()) {
-                if let Ok(ts) = ts_str.parse::<DateTime<Utc>>() {
-                    if stats.first_timestamp.is_none() {
-                        stats.first_timestamp = Some(ts);
-                    }
-                    stats.last_timestamp = Some(ts);
-                }
-            }
-
-            let msg_type = value.get("type").and_then(|v| v.as_str()).unwrap_or("");
-
-            match msg_type {
-                "user" => {
-                    if count_messages {
-                        stats.message_count += 1;
-                    }
-                    stats.last_message_type = Some("user".to_string());
-                }
-                "assistant" => {
-                    if count_messages {
-                        stats.message_count += 1;
-                    }
-                    stats.last_message_type = Some("assistant".to_string());
-
-                    if let Some(message) = value.get("message") {
-                        if let Some(sr) = message.get("stop_reason").and_then(|v| v.as_str()) {
-                            stats.last_stop_reason = Some(sr.to_string());
-                        }
-                        if let Some(model) = message.get("model").and_then(|v| v.as_str()) {
-                            stats.model = Some(model.to_string());
-                        }
-
-                        if let Some(usage) = message.get("usage") {
-                            stats.input_tokens += usage
-                                .get("input_tokens")
-                                .and_then(|v| v.as_u64())
-                                .unwrap_or(0);
-                            stats.output_tokens += usage
-                                .get("output_tokens")
-                                .and_then(|v| v.as_u64())
-                                .unwrap_or(0);
-                            stats.cache_read_tokens += usage
-                                .get("cache_read_input_tokens")
-                                .and_then(|v| v.as_u64())
-                                .unwrap_or(0);
-                            stats.cache_write_tokens += usage
-                                .get("cache_creation_input_tokens")
-                                .and_then(|v| v.as_u64())
-                                .unwrap_or(0);
-                        }
-                    }
-                }
-                "progress" if value.get("data").is_some() => {
-                    stats.tool_call_count += 1;
-                }
-                _ => {}
-            }
-        }
+fn prefer_over(candidate: &Session, existing: &Session) -> bool {
+    let candidate_live = candidate.status != SessionStatus::Dead;
+    let existing_live = existing.status != SessionStatus::Dead;
+    match (candidate_live, existing_live) {
+        (true, false) => true,
+        (false, true) => false,
+        _ => candidate.last_activity > existing.last_activity,
     }
 }
 
@@ -491,53 +295,40 @@ pub fn list_session_files(cwd: &Path, current_session_id: &str) -> Vec<SessionFi
     let encoded = cwd.to_string_lossy().replace('/', "-");
     let project_dir = claude_dir.join("projects").join(&encoded);
 
-    if !project_dir.exists() {
+    let Ok(entries) = std::fs::read_dir(&project_dir) else {
         return Vec::new();
-    }
+    };
 
-    let mut files: Vec<SessionFile> = Vec::new();
-
-    if let Ok(entries) = std::fs::read_dir(&project_dir) {
-        for entry in entries.flatten() {
-            let path = entry.path();
-            if path.extension().is_none_or(|e| e != "jsonl") {
-                continue;
-            }
-            let session_id = path
-                .file_stem()
-                .unwrap_or_default()
-                .to_string_lossy()
-                .to_string();
-            if session_id.contains('.') {
-                continue;
-            }
-
-            let meta = std::fs::metadata(&path).ok();
-            let size_bytes = meta.as_ref().map(|m| m.len()).unwrap_or(0);
-            if size_bytes == 0 {
-                continue;
-            }
-            let last_modified = meta
-                .and_then(|m| m.modified().ok())
-                .map(DateTime::<Utc>::from);
-
-            let msg_count = count_messages(&path);
-            if msg_count == 0 && session_id != current_session_id {
-                continue;
-            }
-
-            files.push(SessionFile {
-                is_current: session_id == current_session_id,
-                session_id,
-                size_bytes,
-                last_modified,
-                message_count: msg_count,
-            });
-        }
-    }
+    let mut files: Vec<SessionFile> = entries
+        .flatten()
+        .map(|e| e.path())
+        .filter(|p| is_session_jsonl(p))
+        .filter_map(|path| session_file_entry(&path, current_session_id))
+        .collect();
 
     files.sort_by_key(|f| std::cmp::Reverse(f.last_modified));
     files
+}
+
+fn session_file_entry(path: &Path, current_session_id: &str) -> Option<SessionFile> {
+    let session_id = path.file_stem()?.to_string_lossy().to_string();
+    let meta = std::fs::metadata(path).ok()?;
+    let size_bytes = meta.len();
+    if size_bytes == 0 {
+        return None;
+    }
+    let is_current = session_id == current_session_id;
+    let message_count = count_messages(path);
+    if message_count == 0 && !is_current {
+        return None;
+    }
+    Some(SessionFile {
+        session_id,
+        size_bytes,
+        last_modified: meta.modified().ok().map(DateTime::<Utc>::from),
+        message_count,
+        is_current,
+    })
 }
 
 fn count_messages(path: &Path) -> u32 {
@@ -578,21 +369,103 @@ mod tests {
     }
 
     #[test]
-    fn test_parse_jsonl_extracts_session_id() {
-        let dir = tempfile::tempdir().unwrap();
-        let file = dir.path().join("test.jsonl");
-        let lines = [
-            r#"{"sessionId":"abc-123","cwd":"/tmp/proj","type":"user","timestamp":"2026-01-01T00:00:00Z"}"#,
-            r#"{"type":"assistant","message":{"model":"claude-sonnet-4-20250514","stop_reason":"end_turn","usage":{"input_tokens":100,"output_tokens":50}},"timestamp":"2026-01-01T00:01:00Z"}"#,
-        ];
-        std::fs::write(&file, lines.join("\n")).unwrap();
+    fn test_extract_project_name() {
+        assert_eq!(
+            extract_project_name("/Users/me/Documents/c9s"),
+            "Documents/c9s"
+        );
+        assert_eq!(extract_project_name("/c9s"), "/c9s");
+    }
 
-        let stats = SessionDiscovery::parse_jsonl(&file);
-        assert_eq!(stats.session_id.as_deref(), Some("abc-123"));
-        assert_eq!(stats.cwd.as_deref(), Some("/tmp/proj"));
-        assert_eq!(stats.input_tokens, 100);
-        assert_eq!(stats.output_tokens, 50);
-        assert_eq!(stats.message_count, 2);
-        assert!(stats.model.as_deref().unwrap().contains("sonnet"));
+    #[test]
+    fn test_is_session_jsonl() {
+        assert!(is_session_jsonl(Path::new("/x/abc.jsonl")));
+        assert!(!is_session_jsonl(Path::new("/x/abc.tmp.jsonl")));
+        assert!(!is_session_jsonl(Path::new("/x/abc.json")));
+    }
+
+    #[test]
+    fn test_infer_live_status() {
+        let now = Utc::now();
+        let fresh = JsonlStats {
+            last_timestamp: Some(now),
+            last_message_type: Some("user".to_string()),
+            ..Default::default()
+        };
+        assert_eq!(infer_live_status(&fresh, now), SessionStatus::Thinking);
+
+        let ended = JsonlStats {
+            last_timestamp: Some(now),
+            last_message_type: Some("assistant".to_string()),
+            last_stop_reason: Some("end_turn".to_string()),
+            ..Default::default()
+        };
+        assert_eq!(infer_live_status(&ended, now), SessionStatus::Idle);
+
+        let stale = JsonlStats {
+            last_timestamp: Some(now - chrono::Duration::minutes(10)),
+            last_message_type: Some("user".to_string()),
+            ..Default::default()
+        };
+        assert_eq!(infer_live_status(&stale, now), SessionStatus::Idle);
+    }
+
+    #[test]
+    fn test_prefer_live_session_over_newer_dead_one() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("a.jsonl");
+        std::fs::write(&path, "").unwrap();
+        let mut live_cwds = HashMap::new();
+        live_cwds.insert("/p".to_string(), 42u32);
+
+        let old_live = build_session(
+            &path,
+            JsonlStats {
+                session_id: Some("a".into()),
+                cwd: Some("/p".into()),
+                last_timestamp: Some(Utc::now() - chrono::Duration::hours(2)),
+                ..Default::default()
+            },
+            "",
+            &live_cwds,
+        )
+        .unwrap();
+        let new_dead = build_session(
+            &path,
+            JsonlStats {
+                session_id: Some("b".into()),
+                cwd: Some("/p".into()),
+                last_timestamp: Some(Utc::now()),
+                ..Default::default()
+            },
+            "",
+            &HashMap::new(),
+        )
+        .unwrap();
+        assert!(prefer_over(&old_live, &new_dead));
+        assert!(!prefer_over(&new_dead, &old_live));
+    }
+
+    #[test]
+    fn test_discover_all_from_temp_claude_dir() {
+        let home = tempfile::tempdir().unwrap();
+        let project_dir = home.path().join("projects").join("-tmp-proj");
+        std::fs::create_dir_all(&project_dir).unwrap();
+        std::fs::write(
+            project_dir.join("s1.jsonl"),
+            r#"{"sessionId":"s1","cwd":"/tmp/proj","type":"user","timestamp":"2026-01-01T00:00:00Z"}
+{"type":"assistant","message":{"model":"claude-opus-4-6","usage":{"input_tokens":10,"output_tokens":5}},"timestamp":"2026-01-01T00:01:00Z"}
+{"type":"ai-title","aiTitle":"Fix bug","sessionId":"s1"}"#,
+        )
+        .unwrap();
+        let mut discovery = SessionDiscovery {
+            claude_dir: home.path().to_path_buf(),
+            stats_cache: HashMap::new(),
+        };
+        let sessions = discovery.discover_all().unwrap();
+        let s = sessions.iter().find(|s| s.id == "s1").expect("s1 found");
+        assert_eq!(s.cwd, PathBuf::from("/tmp/proj"));
+        assert_eq!(s.title.as_deref(), Some("Fix bug"));
+        assert_eq!(s.message_count, 2);
     }
 }

@@ -135,7 +135,7 @@ fn session_row<'a>(app: &App, session: &'a Session) -> Row<'a> {
     let cells = vec![
         Cell::from(marker).style(marker_style),
         ci_cell(app.ci_statuses.get(&session.id)),
-        Cell::from(session.project_name.clone()).style(name_style),
+        Cell::from(project_label(session)).style(name_style),
         Cell::from(
             session
                 .git_branch
@@ -144,6 +144,7 @@ fn session_row<'a>(app: &App, session: &'a Session) -> Row<'a> {
         ),
         Cell::from(model_short),
         Cell::from(session.status.label()).style(Theme::status(&session.status)),
+        Cell::from(format!("{}%", session.context_percent())).style(context_style(session)),
         Cell::from(format_count(session.message_count as u64)),
         Cell::from(format_tokens(
             session.input_tokens + session.cache_read_tokens,
@@ -163,6 +164,7 @@ fn render_table(f: &mut Frame, app: &App, area: Rect) {
         "Branch",
         "Model",
         "Status",
+        "Ctx",
         "Msgs",
         "Tokens In",
         "Tokens Out",
@@ -187,6 +189,7 @@ fn render_table(f: &mut Frame, app: &App, area: Rect) {
         Constraint::Length(15),
         Constraint::Length(10),
         Constraint::Length(10),
+        Constraint::Length(4),
         Constraint::Length(6),
         Constraint::Length(10),
         Constraint::Length(10),
@@ -228,6 +231,25 @@ fn render_footer(f: &mut Frame, app: &App, area: Rect) {
         Span::styled(keys, Theme::footer()),
     ]);
     f.render_widget(Paragraph::new(footer), area);
+}
+
+fn project_label(session: &Session) -> String {
+    match session.title.as_deref() {
+        Some(title) if !title.is_empty() => format!("{}: {}", session.project_name, title),
+        _ => session.project_name.clone(),
+    }
+}
+
+fn context_style(session: &Session) -> Style {
+    let pct = session.context_percent();
+    let color = if pct >= 80 {
+        Color::Red
+    } else if pct >= 50 {
+        Color::Yellow
+    } else {
+        Color::DarkGray
+    };
+    Style::default().fg(color)
 }
 
 fn shorten_model(model: &str) -> String {

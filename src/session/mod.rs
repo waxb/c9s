@@ -1,6 +1,8 @@
 pub mod config;
 mod discovery;
+mod jsonl;
 mod manager;
+pub mod pricing;
 
 pub use discovery::{list_session_files, SessionDiscovery, SessionFile};
 pub use manager::SessionManager;
@@ -48,7 +50,9 @@ pub struct Session {
     pub input_tokens: u64,
     pub output_tokens: u64,
     pub cache_read_tokens: u64,
-    pub cache_write_tokens: u64,
+    pub cache_write_5m_tokens: u64,
+    pub cache_write_1h_tokens: u64,
+    pub context_tokens: u64,
     pub message_count: u32,
     pub tool_call_count: u32,
     pub claude_version: Option<String>,
@@ -57,24 +61,38 @@ pub struct Session {
     pub compaction_count: u32,
     pub hook_run_count: u32,
     pub hook_error_count: u32,
+    pub api_error_count: u32,
+    pub title: Option<String>,
+    pub last_prompt: Option<String>,
 }
 
 impl Session {
     pub fn estimated_cost_usd(&self) -> f64 {
         let model = self.model.as_deref().unwrap_or("");
-        let (input_price, output_price) = model_pricing(model);
-        let cache_read_price = input_price * 0.1;
-        let cache_write_price = input_price * 0.25;
-
-        (self.input_tokens as f64 * input_price
-            + self.output_tokens as f64 * output_price
-            + self.cache_read_tokens as f64 * cache_read_price
-            + self.cache_write_tokens as f64 * cache_write_price)
+        let p = pricing::pricing_for(model);
+        (self.input_tokens as f64 * p.input
+            + self.output_tokens as f64 * p.output
+            + self.cache_read_tokens as f64 * p.cache_read
+            + self.cache_write_5m_tokens as f64 * p.cache_write_5m
+            + self.cache_write_1h_tokens as f64 * p.cache_write_1h)
             / 1_000_000.0
     }
 
+    pub fn cache_write_tokens(&self) -> u64 {
+        self.cache_write_5m_tokens + self.cache_write_1h_tokens
+    }
+
     pub fn total_tokens(&self) -> u64 {
-        self.input_tokens + self.output_tokens + self.cache_read_tokens + self.cache_write_tokens
+        self.input_tokens + self.output_tokens + self.cache_read_tokens + self.cache_write_tokens()
+    }
+
+    pub fn context_window(&self) -> u64 {
+        pricing::context_window(self.model.as_deref().unwrap_or(""))
+    }
+
+    pub fn context_percent(&self) -> u8 {
+        let window = self.context_window().max(1);
+        ((self.context_tokens.saturating_mul(100)) / window).min(999) as u8
     }
 
     pub fn duration_display(&self) -> String {
@@ -108,49 +126,23 @@ impl Session {
             return true;
         }
         let q = query.to_lowercase();
-        self.project_name.to_lowercase().contains(&q)
-            || self.cwd.to_string_lossy().to_lowercase().contains(&q)
-            || self
-                .git_branch
-                .as_deref()
-                .unwrap_or("")
-                .to_lowercase()
-                .contains(&q)
-            || self
-                .model
-                .as_deref()
-                .unwrap_or("")
-                .to_lowercase()
-                .contains(&q)
-            || self.status.label().to_lowercase().contains(&q)
-    }
-}
-
-fn model_pricing(model: &str) -> (f64, f64) {
-    if model.contains("opus") {
-        (15.0, 75.0)
-    } else if model.contains("haiku") {
-        (0.80, 4.0)
-    } else {
-        (3.0, 15.0)
+        let contains = |value: &str| value.to_lowercase().contains(&q);
+        contains(&self.project_name)
+            || contains(&self.cwd.to_string_lossy())
+            || contains(self.git_branch.as_deref().unwrap_or(""))
+            || contains(self.model.as_deref().unwrap_or(""))
+            || contains(self.title.as_deref().unwrap_or(""))
+            || contains(self.status.label())
     }
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod test_support {
     use super::*;
-    use chrono::Utc;
-    use std::path::PathBuf;
 
-    fn make_session(
-        model: &str,
-        input: u64,
-        output: u64,
-        cache_read: u64,
-        cache_write: u64,
-    ) -> Session {
+    pub fn make_session(id: &str, model: &str) -> Session {
         Session {
-            id: "test".to_string(),
+            id: id.to_string(),
             pid: None,
             cwd: PathBuf::from("/tmp"),
             project_name: "test".to_string(),
@@ -159,10 +151,12 @@ mod tests {
             status: SessionStatus::Dead,
             started_at: Utc::now(),
             last_activity: Utc::now(),
-            input_tokens: input,
-            output_tokens: output,
-            cache_read_tokens: cache_read,
-            cache_write_tokens: cache_write,
+            input_tokens: 0,
+            output_tokens: 0,
+            cache_read_tokens: 0,
+            cache_write_5m_tokens: 0,
+            cache_write_1h_tokens: 0,
+            context_tokens: 0,
             message_count: 0,
             tool_call_count: 0,
             claude_version: None,
@@ -171,18 +165,77 @@ mod tests {
             compaction_count: 0,
             hook_run_count: 0,
             hook_error_count: 0,
+            api_error_count: 0,
+            title: None,
+            last_prompt: None,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::test_support::make_session;
+
+    fn close(a: f64, b: f64) -> bool {
+        (a - b).abs() < 1e-6
     }
 
     #[test]
-    fn test_estimated_cost() {
-        let session = make_session("claude-sonnet-4-20250514", 1_000_000, 100_000, 0, 0);
-        let cost = session.estimated_cost_usd();
-        let expected = (1_000_000.0 * 3.0 + 100_000.0 * 15.0) / 1_000_000.0;
-        assert!((cost - expected).abs() < 0.001);
+    fn test_estimated_cost_input_output() {
+        let mut s = make_session("t", "claude-sonnet-4-6");
+        s.input_tokens = 1_000_000;
+        s.output_tokens = 100_000;
+        assert!(close(s.estimated_cost_usd(), 3.0 + 1.5));
 
-        let opus = make_session("claude-opus-4-20250514", 1_000_000, 100_000, 0, 0);
-        let opus_cost = opus.estimated_cost_usd();
-        assert!(opus_cost > cost);
+        let mut opus = make_session("t", "claude-opus-4-6");
+        opus.input_tokens = 1_000_000;
+        opus.output_tokens = 100_000;
+        assert!(close(opus.estimated_cost_usd(), 5.0 + 2.5));
+    }
+
+    #[test]
+    fn test_estimated_cost_cache_writes_cost_more_than_input() {
+        let mut s = make_session("t", "claude-sonnet-4-6");
+        s.cache_write_5m_tokens = 1_000_000;
+        assert!(close(s.estimated_cost_usd(), 3.75));
+
+        let mut h = make_session("t", "claude-sonnet-4-6");
+        h.cache_write_1h_tokens = 1_000_000;
+        assert!(close(h.estimated_cost_usd(), 6.0));
+
+        let mut r = make_session("t", "claude-sonnet-4-6");
+        r.cache_read_tokens = 1_000_000;
+        assert!(close(r.estimated_cost_usd(), 0.3));
+    }
+
+    #[test]
+    fn test_total_tokens_includes_both_cache_writes() {
+        let mut s = make_session("t", "claude-opus-5");
+        s.input_tokens = 1;
+        s.output_tokens = 2;
+        s.cache_read_tokens = 3;
+        s.cache_write_5m_tokens = 4;
+        s.cache_write_1h_tokens = 5;
+        assert_eq!(s.total_tokens(), 15);
+        assert_eq!(s.cache_write_tokens(), 9);
+    }
+
+    #[test]
+    fn test_context_percent() {
+        let mut s = make_session("t", "claude-fable-5-1");
+        s.context_tokens = 300_000;
+        assert_eq!(s.context_percent(), 30);
+        let mut h = make_session("t", "claude-haiku-4-5");
+        h.context_tokens = 150_000;
+        assert_eq!(h.context_percent(), 75);
+    }
+
+    #[test]
+    fn test_matches_filter_uses_title() {
+        let mut s = make_session("t", "claude-opus-5");
+        s.title = Some("Fix login bug".to_string());
+        assert!(s.matches_filter("login"));
+        assert!(!s.matches_filter("payments"));
+        assert!(s.matches_filter(""));
     }
 }

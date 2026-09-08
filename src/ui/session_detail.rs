@@ -269,6 +269,10 @@ fn render_info_column(f: &mut Frame, session: &Session, area: Rect) {
         kv_line("Perm", session.permission_mode.as_deref().unwrap_or("-")),
     ];
 
+    if let Some(ref title) = session.title {
+        lines.push(kv_line("Title", title));
+    }
+
     if !session.plan_slugs.is_empty() {
         let slugs = session.plan_slugs.join(", ");
         lines.push(kv_line("Plans", &slugs));
@@ -287,11 +291,21 @@ fn render_usage_column(f: &mut Frame, session: &Session, area: Rect) {
         kv_line("In Tokens", &format_number(session.input_tokens)),
         kv_line("Out Tokens", &format_number(session.output_tokens)),
         kv_line("Cache Read", &format_number(session.cache_read_tokens)),
-        kv_line("Cache Write", &format_number(session.cache_write_tokens)),
+        kv_line("Cache Write", &format_number(session.cache_write_tokens())),
         kv_line("Messages", &session.message_count.to_string()),
         kv_line("Tool Calls", &session.tool_call_count.to_string()),
         cost_line("Cost", session.estimated_cost_usd()),
+        kv_line(
+            "Context",
+            &format!(
+                "{} / {} ({}%)",
+                format_number(session.context_tokens),
+                format_number(session.context_window()),
+                session.context_percent()
+            ),
+        ),
         kv_line("Compactions", &session.compaction_count.to_string()),
+        kv_line("API Errors", &session.api_error_count.to_string()),
         kv_line(
             "Hooks",
             &format!("{}/{}err", session.hook_run_count, session.hook_error_count),
