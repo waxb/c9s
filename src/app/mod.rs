@@ -7,8 +7,8 @@ mod warm;
 
 pub use list::{QuickSwitch, Row};
 pub use pane::{
-    coordinate_prompt, message_payload, rename_payload, MessageInput, NameInput, NamePurpose,
-    PaneRow, TakeoverPrompt, UnhideDialog,
+    coordinate_prompt, message_text, rename_text, MessageInput, NameInput, NamePurpose, PaneRow,
+    TakeoverPrompt, UnhideDialog,
 };
 
 use std::collections::{HashMap, HashSet};
@@ -30,7 +30,7 @@ use crate::usage::{UsageData, UsageFetcher};
 use anyhow::Result;
 use list::{ListState, RowKey};
 use pane::PaneState;
-use warm::{ping_payload, KeepWarm};
+use warm::{KeepWarm, PING_TEXT};
 
 const CI_CHECK_INTERVAL: Duration = Duration::from_secs(120);
 const REGISTRY_POLL_INTERVAL: Duration = Duration::from_secs(1);
@@ -718,7 +718,7 @@ impl App {
             if !self.keep_warm.due(&id, now, idle_for) {
                 continue;
             }
-            match self.terminal_manager.write_to_session(&id, &ping_payload()) {
+            match self.terminal_manager.type_line(&id, PING_TEXT) {
                 Ok(true) => {
                     self.keep_warm.record_ping(&id, now);
                     self.record_usage("ping", Some(&id));

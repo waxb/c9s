@@ -228,6 +228,7 @@ fn poll_background(app: &mut App) -> bool {
 
     dirty |= app.poll_discovery();
     dirty |= app.poll_keep_warm();
+    dirty |= app.terminal_manager_mut().flush_pending();
     app.drain_ci_statuses();
     app.check_ci_statuses();
 

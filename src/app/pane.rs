@@ -125,12 +125,12 @@ pub struct UnhideDialog {
     pub cursor: usize,
 }
 
-pub fn message_payload(sender: &str, text: &str) -> Vec<u8> {
-    format!("[c9s message from {}]: {}\r", sender, text.trim()).into_bytes()
+pub fn message_text(sender: &str, text: &str) -> String {
+    format!("[c9s message from {}]: {}", sender, text.trim())
 }
 
-pub fn rename_payload(name: &str) -> Vec<u8> {
-    format!("/rename {}\r", name.trim()).into_bytes()
+pub fn rename_text(name: &str) -> String {
+    format!("/rename {}", name.trim())
 }
 
 pub fn coordinate_prompt(peer_name: &str) -> String {
@@ -180,13 +180,10 @@ mod tests {
     #[test]
     fn test_payloads() {
         assert_eq!(
-            message_payload("c9s-c5", " hello there "),
-            b"[c9s message from c9s-c5]: hello there\r".to_vec()
+            message_text("c9s-c5", " hello there "),
+            "[c9s message from c9s-c5]: hello there"
         );
-        assert_eq!(
-            rename_payload("brave-otter"),
-            b"/rename brave-otter\r".to_vec()
-        );
+        assert_eq!(rename_text("brave-otter"), "/rename brave-otter");
         assert!(coordinate_prompt("infra-6a").contains("@infra-6a"));
         assert!(!coordinate_prompt("x").ends_with('\r'));
     }

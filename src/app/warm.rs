@@ -100,10 +100,6 @@ impl KeepWarm {
     }
 }
 
-pub fn ping_payload() -> Vec<u8> {
-    format!("{}\r", PING_TEXT).into_bytes()
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -163,12 +159,9 @@ mod tests {
     }
 
     #[test]
-    fn test_ping_payload_is_single_line_prompt() {
-        let payload = ping_payload();
-        assert!(payload.ends_with(b"\r"));
-        assert_eq!(payload.iter().filter(|b| **b == b'\r').count(), 1);
-        assert!(std::str::from_utf8(&payload)
-            .unwrap()
-            .starts_with("[c9s keep-warm]"));
+    fn test_ping_text_is_a_single_line() {
+        assert!(!PING_TEXT.contains('\n'));
+        assert!(!PING_TEXT.contains('\r'));
+        assert!(PING_TEXT.starts_with("[c9s keep-warm]"));
     }
 }

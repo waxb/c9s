@@ -3,7 +3,7 @@ use ratatui::layout::Rect;
 use std::path::PathBuf;
 
 use crate::app::{
-    message_payload, rename_payload, App, MessageInput, NameInput, NamePurpose, TakeoverPrompt,
+    message_text, rename_text, App, MessageInput, NameInput, NamePurpose, TakeoverPrompt,
     UnhideDialog, ViewMode,
 };
 use crate::input::Action;
@@ -476,7 +476,7 @@ fn submit_name(app: &mut App, terminal: &Term) -> Result<()> {
             if let Some(target) = input.target {
                 let sent = app
                     .terminal_manager_mut()
-                    .write_to_session(&target, &rename_payload(&name))?;
+                    .type_line(&target, &rename_text(&name))?;
                 if sent {
                     app.set_pane_status(&format!("renamed to {}", name));
                 }
@@ -514,11 +514,8 @@ fn submit_message(app: &mut App) {
         return;
     }
     let sender = app.sender_name();
-    let payload = message_payload(&sender, &input.value);
-    match app
-        .terminal_manager_mut()
-        .write_to_session(&input.target, &payload)
-    {
+    let text = message_text(&sender, &input.value);
+    match app.terminal_manager_mut().type_line(&input.target, &text) {
         Ok(true) => app.set_pane_status(&format!("sent to {}", input.target_label)),
         Ok(false) => app.set_pane_status("target is no longer attached"),
         Err(e) => app.set_pane_status(&format!("send failed: {}", e)),

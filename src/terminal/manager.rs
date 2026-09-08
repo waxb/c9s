@@ -11,6 +11,13 @@ use crate::tlog;
 const TERM_GRACE: Duration = Duration::from_millis(500);
 const KILL_GRACE: Duration = Duration::from_millis(200);
 const NOTIFY_INTERVAL: Duration = Duration::from_millis(250);
+const ENTER_DELAY: Duration = Duration::from_millis(250);
+
+struct PendingInput {
+    session_id: String,
+    due: Instant,
+    bytes: Vec<u8>,
+}
 
 fn wait_for_exit(pid: u32, timeout: Duration) -> bool {
     let start = Instant::now();
@@ -129,6 +136,7 @@ pub struct TerminalManager {
     notifiers: HashMap<String, JsonlNotifier>,
     registry_status: HashMap<String, RegistryStatus>,
     last_notify_check: Option<Instant>,
+    pending: Vec<PendingInput>,
 }
 
 impl TerminalManager {
@@ -139,6 +147,7 @@ impl TerminalManager {
             notifiers: HashMap::new(),
             registry_status: HashMap::new(),
             last_notify_check: None,
+            pending: Vec::new(),
         }
     }
 
@@ -285,6 +294,37 @@ impl TerminalManager {
         };
         self.tabs[ti].terminals[si].write_input(bytes)?;
         Ok(true)
+    }
+
+    pub fn type_line(&mut self, session_id: &str, text: &str) -> Result<bool> {
+        if !self.write_to_session(session_id, text.as_bytes())? {
+            return Ok(false);
+        }
+        self.pending.push(PendingInput {
+            session_id: session_id.to_string(),
+            due: Instant::now() + ENTER_DELAY,
+            bytes: b"\r".to_vec(),
+        });
+        Ok(true)
+    }
+
+    pub fn flush_pending(&mut self) -> bool {
+        self.flush_pending_at(Instant::now())
+    }
+
+    fn flush_pending_at(&mut self, now: Instant) -> bool {
+        let (due, later): (Vec<PendingInput>, Vec<PendingInput>) =
+            std::mem::take(&mut self.pending)
+                .into_iter()
+                .partition(|p| p.due <= now);
+        self.pending = later;
+        let mut wrote = false;
+        for p in due {
+            if let Ok(true) = self.write_to_session(&p.session_id, &p.bytes) {
+                wrote = true;
+            }
+        }
+        wrote
     }
 
     pub fn resize_active(&self, rows: u16, cols: u16) -> Result<()> {
@@ -654,6 +694,24 @@ mod tests {
         assert!(!m.has_bell_for("a1"), "switching clears the bell");
         m.discard("a1");
         m.discard("a2");
+    }
+
+    #[test]
+    fn test_type_line_sends_enter_as_a_separate_delayed_keystroke() {
+        let dir = tempfile::tempdir().unwrap();
+        let a = dir.path().join("a");
+        std::fs::create_dir_all(&a).unwrap();
+        let mut m = TerminalManager::new();
+        m.register(&a, "a", spawn_sleep("a1", &a));
+        let start = Instant::now();
+        assert!(m.type_line("a1", "hello").unwrap());
+        assert_eq!(m.pending.len(), 1);
+        assert!(!m.flush_pending_at(start));
+        assert_eq!(m.pending.len(), 1);
+        assert!(m.flush_pending_at(start + ENTER_DELAY + Duration::from_millis(1)));
+        assert!(m.pending.is_empty());
+        assert!(!m.type_line("nope", "x").unwrap());
+        m.discard("a1");
     }
 
     #[test]
