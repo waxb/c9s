@@ -140,11 +140,7 @@ fn run_loop(terminal: &mut Term, app: &mut App) -> Result<()> {
         app.terminal_manager_mut().cleanup_inactive_exited();
 
         if last_refresh.elapsed() >= REFRESH_INTERVAL {
-            if is_terminal_view(app.view_mode()) {
-                app.refresh_usage();
-            } else {
-                app.refresh()?;
-            }
+            app.refresh_usage();
             last_refresh = Instant::now();
             needs_draw = true;
         }
@@ -173,6 +169,7 @@ fn poll_background(app: &mut App) -> bool {
         }
     }
 
+    dirty |= app.poll_discovery();
     app.drain_ci_statuses();
     app.check_ci_statuses();
 
@@ -360,7 +357,7 @@ fn process_action(app: &mut App, action: Action, terminal: &Term) -> Result<()> 
                 }
             }
             app.set_view_mode(ViewMode::List);
-            let _ = app.refresh();
+            app.request_refresh();
         }
         Action::CancelKill => {
             app.confirm_kill_session_id = None;
@@ -451,9 +448,7 @@ fn process_action(app: &mut App, action: Action, terminal: &Term) -> Result<()> 
         Action::FilterBackspace => app.filter_pop(),
         Action::FilterSubmit => app.set_view_mode(ViewMode::List),
         Action::CycleSort => app.cycle_sort(),
-        Action::Refresh => {
-            let _ = app.refresh();
-        }
+        Action::Refresh => app.request_refresh(),
         Action::LaunchNew => app.set_view_mode(ViewMode::Command),
         Action::CommandInput(c) => app.command_push(c),
         Action::CommandBackspace => app.command_pop(),

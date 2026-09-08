@@ -22,6 +22,8 @@ c9s
 - Usage dashboard (OAuth rate limits + local stats)
 - Bell notifications when Claude finishes
 - Session status (Active / Thinking / Waiting / Idle / Dead) read from the Claude Code session registry
+- Session titles, context window usage (Ctx column), compaction and API error counts per session
+- Session discovery runs on a background thread, so the UI never blocks on transcript parsing
 - Native text selection in terminal mode
 - Side shell panel next to the attached session (Ctrl+t)
 
@@ -80,7 +82,7 @@ The binary will be at `target/release/c9s`.
 
 ## How It Works
 
-c9s discovers Claude Code sessions by scanning `~/.claude/projects/` for JSONL conversation logs. It parses token usage, model info, git branch, and message counts from these files. Live sessions are matched through the registry files Claude Code writes under `~/.claude/sessions/` (pid, session id, status), with a fallback to cross-referencing running `claude` processes with their working directories for older Claude Code versions.
+c9s discovers Claude Code sessions by scanning `~/.claude/projects/` for JSONL conversation logs on a background thread every five seconds (or on `r`). It parses token usage (including the 5 minute and 1 hour cache write split), model info, git branch, message and tool call counts, compactions, titles, and the current context size from these files. Cost estimates use the published per-model API prices; on a subscription plan they show the API-equivalent value, not what you are billed. Live sessions are matched through the registry files Claude Code writes under `~/.claude/sessions/` (pid, session id, status), with a fallback to cross-referencing running `claude` processes with their working directories for older Claude Code versions.
 
 When you attach to a session, c9s spawns a PTY terminal running `claude --resume <session-id>` in the session's working directory. The terminal is rendered via ratatui with full VT100 emulation (vt100 crate), supporting colors, cursor positioning, and scrollback.
 

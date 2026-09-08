@@ -4,9 +4,11 @@ mod jsonl;
 mod manager;
 pub mod pricing;
 pub mod registry;
+mod worker;
 
 pub use discovery::{list_session_files, SessionDiscovery, SessionFile};
 pub use manager::SessionManager;
+pub use worker::DiscoveryWorker;
 
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};

@@ -5,7 +5,7 @@ use std::time::{Duration, Instant};
 
 use crate::session::config::{build_config_items, scan_session_config, ConfigItem};
 use crate::session::registry::{RegistryStatus, SessionRegistry};
-use crate::session::{Session, SessionDiscovery, SessionFile, SessionStatus};
+use crate::session::{DiscoveryWorker, Session, SessionFile, SessionStatus};
 use crate::store::Store;
 use crate::terminal::{EmbeddedTerminal, TerminalManager};
 use crate::usage::{UsageData, UsageFetcher};
@@ -13,6 +13,8 @@ use anyhow::Result;
 
 const CI_CHECK_INTERVAL: Duration = Duration::from_secs(120);
 const REGISTRY_POLL_INTERVAL: Duration = Duration::from_secs(1);
+const DISCOVERY_INTERVAL: Duration = Duration::from_secs(5);
+const INITIAL_SCAN_TIMEOUT: Duration = Duration::from_secs(15);
 const QSWITCHER_MAX: usize = 9;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -89,7 +91,7 @@ pub struct App {
     sort_column: SortColumn,
     filter_query: String,
     command_input: String,
-    discovery: SessionDiscovery,
+    discovery: DiscoveryWorker,
     registry: SessionRegistry,
     last_registry_poll: Option<Instant>,
     store: Option<Store>,
@@ -126,7 +128,7 @@ impl App {
             sort_column: SortColumn::LastActive,
             filter_query: String::new(),
             command_input: String::new(),
-            discovery: SessionDiscovery::new(),
+            discovery: DiscoveryWorker::spawn(DISCOVERY_INTERVAL),
             registry: SessionRegistry::new(),
             last_registry_poll: None,
             store: Store::open().ok(),
@@ -151,12 +153,30 @@ impl App {
             session_file_cursor: 0,
         };
 
-        app.refresh()?;
+        if let Some(sessions) = app.discovery.wait_first(INITIAL_SCAN_TIMEOUT) {
+            app.apply_sessions(sessions);
+        }
+        app.refresh_usage();
         Ok(app)
     }
 
-    pub fn refresh(&mut self) -> Result<()> {
-        self.sessions = self.discovery.discover_all().unwrap_or_default();
+    pub fn request_refresh(&self) {
+        self.discovery.request_refresh();
+    }
+
+    pub fn poll_discovery(&mut self) -> bool {
+        match self.discovery.take_latest() {
+            Some(sessions) => {
+                self.apply_sessions(sessions);
+                true
+            }
+            None => false,
+        }
+    }
+
+    fn apply_sessions(&mut self, sessions: Vec<Session>) {
+        let selected_id = self.selected_session().map(|s| s.id.clone());
+        self.sessions = sessions;
 
         if let Some(ref store) = self.store {
             for session in &self.sessions {
@@ -166,8 +186,11 @@ impl App {
 
         self.apply_sort();
         self.apply_filter();
-        self.usage = self.usage_fetcher.get().clone();
-        Ok(())
+        if let Some(id) = selected_id {
+            if let Some(pos) = self.filtered_sessions().iter().position(|s| s.id == id) {
+                self.selected = pos;
+            }
+        }
     }
 
     pub fn refresh_usage(&mut self) {
