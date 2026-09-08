@@ -1,4 +1,4 @@
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use super::CiStatus;
 
@@ -7,6 +7,25 @@ pub fn expand_home(input: &str) -> String {
         (Some(rest), Some(home)) => home.to_string_lossy().to_string() + rest,
         _ => input.to_string(),
     }
+}
+
+pub fn display_path(path: &Path) -> String {
+    contract_home(&path.to_string_lossy())
+}
+
+pub fn resolve_new_session_dir(input: &str, fallback: Option<&Path>) -> Result<PathBuf, String> {
+    let typed = input.trim();
+    let candidate = if typed.is_empty() {
+        fallback
+            .map(|p| p.to_path_buf())
+            .ok_or_else(|| "enter a directory path".to_string())?
+    } else {
+        PathBuf::from(expand_home(typed))
+    };
+    if !candidate.is_dir() {
+        return Err("not a directory".to_string());
+    }
+    Ok(std::fs::canonicalize(&candidate).unwrap_or(candidate))
 }
 
 fn contract_home(path: &str) -> String {
@@ -172,5 +191,46 @@ mod tests {
         let completed = complete_directory(&input).unwrap();
         assert!(completed.ends_with("/proj-"));
         assert_eq!(complete_directory(&completed), None);
+    }
+
+    #[test]
+    fn test_resolve_new_session_dir_falls_back_to_selected_root() {
+        let dir = tempfile::tempdir().unwrap();
+        let want = std::fs::canonicalize(dir.path()).unwrap();
+        assert_eq!(resolve_new_session_dir("", Some(dir.path())), Ok(want.clone()));
+        assert_eq!(resolve_new_session_dir("   ", Some(dir.path())), Ok(want));
+    }
+
+    #[test]
+    fn test_resolve_new_session_dir_requires_path_without_fallback() {
+        let err = resolve_new_session_dir("", None).unwrap_err();
+        assert!(err.contains("directory"), "{}", err);
+    }
+
+    #[test]
+    fn test_resolve_new_session_dir_rejects_missing_directory() {
+        let dir = tempfile::tempdir().unwrap();
+        let bogus = format!("{}/does-not-exist", dir.path().display());
+        let err = resolve_new_session_dir(&bogus, Some(dir.path())).unwrap_err();
+        assert!(err.contains("not a directory"), "{}", err);
+        let file = dir.path().join("plain.txt");
+        std::fs::write(&file, b"x").unwrap();
+        assert!(resolve_new_session_dir(&file.to_string_lossy(), None).is_err());
+    }
+
+    #[test]
+    fn test_resolve_new_session_dir_accepts_typed_path() {
+        let dir = tempfile::tempdir().unwrap();
+        let want = std::fs::canonicalize(dir.path()).unwrap();
+        let typed = format!(" {} ", dir.path().display());
+        assert_eq!(resolve_new_session_dir(&typed, None), Ok(want));
+    }
+
+    #[test]
+    fn test_display_path_contracts_home() {
+        let home = dirs::home_dir().unwrap();
+        let shown = display_path(&home.join("work").join("c9s"));
+        assert_eq!(shown, "~/work/c9s");
+        assert_eq!(display_path(Path::new("/opt/x")), "/opt/x");
     }
 }

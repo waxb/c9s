@@ -31,7 +31,17 @@ pub fn draw_frame(f: &mut Frame, app: &App) {
         }
         ViewMode::Command => {
             ui::render_session_list(f, app, area);
-            ui::render_command_input(f, app.command_input(), area);
+            let hint = app
+                .command_error()
+                .unwrap_or("Enter accepts, Tab completes, Esc cancels");
+            ui::render_input_dialog(
+                f,
+                " New session directory ",
+                "path:",
+                app.command_input(),
+                hint,
+                area,
+            );
         }
         ViewMode::ConfirmKill => {
             render_base(app, f, area);

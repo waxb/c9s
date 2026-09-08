@@ -12,7 +12,7 @@ const BINDINGS: &[(&str, &str)] = &[
     ("Enter / a", "Attach (project row: current session)"),
     ("1-9", "Attach Nth project's current session"),
     ("Ctrl+Space", "Quick switcher (l expands a project)"),
-    ("n", "New session (path, then name)"),
+    ("n", "New session (directory, then name)"),
     ("F", "Fork selected session"),
     ("x", "Discard session (terminate + hide)"),
     ("u / U", "Hide session / unhide dialog"),

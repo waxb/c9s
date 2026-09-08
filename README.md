@@ -42,7 +42,7 @@ Projects are collapsed rows by default; expand them to see their sessions.
 | `Enter` / `a` | Attach (project row: its current session) |
 | `1`-`9` | Attach the Nth project's current session |
 | `Ctrl+Space` | Quick switcher |
-| `n` | New session (enter path, then name) |
+| `n` | New session (directory prefilled from the selected project, then name) |
 | `F` | Fork the selected session (new id, same context) |
 | `x` | Discard session (terminate if c9s-owned or verified, hide) |
 | `u` / `U` | Hide session / unhide dialog for the project |

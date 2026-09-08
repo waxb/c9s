@@ -1,4 +1,3 @@
-mod command_bar_view;
 mod confirm_kill;
 mod confirm_quit;
 mod confirm_takeover;
@@ -17,7 +16,6 @@ mod theme;
 mod unhide_dialog;
 pub mod usage_panel;
 
-pub use command_bar_view::render_command_input;
 pub use confirm_kill::render_confirm_kill;
 pub use confirm_quit::render_confirm_quit;
 pub use confirm_takeover::render_confirm_takeover;

@@ -89,6 +89,7 @@ pub struct App {
     qswitch: QuickSwitch,
     view_mode: ViewMode,
     command_input: String,
+    command_error: Option<String>,
     discovery: DiscoveryWorker,
     registry: SessionRegistry,
     last_registry_poll: Option<Instant>,
@@ -138,6 +139,7 @@ impl App {
             qswitch: QuickSwitch::new(),
             view_mode: ViewMode::List,
             command_input: String::new(),
+            command_error: None,
             discovery: DiscoveryWorker::spawn(DISCOVERY_INTERVAL),
             registry: SessionRegistry::new(),
             last_registry_poll: None,
@@ -745,15 +747,32 @@ impl App {
         &self.command_input
     }
 
+    pub fn command_error(&self) -> Option<&str> {
+        self.command_error.as_deref()
+    }
+
+    pub fn command_set(&mut self, value: String) {
+        self.command_input = value;
+        self.command_error = None;
+    }
+
+    pub fn command_set_error(&mut self, input: String, error: String) {
+        self.command_input = input;
+        self.command_error = Some(error);
+    }
+
     pub fn command_push(&mut self, c: char) {
         self.command_input.push(c);
+        self.command_error = None;
     }
 
     pub fn command_pop(&mut self) {
         self.command_input.pop();
+        self.command_error = None;
     }
 
     pub fn command_take(&mut self) -> String {
+        self.command_error = None;
         std::mem::take(&mut self.command_input)
     }
 
@@ -764,6 +783,13 @@ impl App {
     }
 }
 
-pub fn expand_home(input: &str) -> String {
-    support::expand_home(input)
+pub fn display_path(path: &std::path::Path) -> String {
+    support::display_path(path)
+}
+
+pub fn resolve_new_session_dir(
+    input: &str,
+    fallback: Option<&std::path::Path>,
+) -> Result<std::path::PathBuf, String> {
+    support::resolve_new_session_dir(input, fallback)
 }

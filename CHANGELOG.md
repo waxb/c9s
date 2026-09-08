@@ -17,6 +17,7 @@
 - Keep-warm: `Ctrl+q` in a session (or `w` in the pane and list) marks it with a red `X` and types a minimal prompt whenever it has been idle for 50 minutes, keeping the 1-hour prompt cache alive for up to 12 hours; configurable key under `[keys] keep_warm`.
 - Usage panel on the selector page shows every per-model weekly window the usage API reports (the `limits[]` weekly_scoped entries such as Fable, plus `seven_day_opus` and `seven_day_sonnet`) under the all-models bar; panel height follows the number of bars.
 - PTY is resized whenever the pane layout or the active session changes; list and quick switcher selection stay on the same row across background refreshes.
+- `n` in the list view prefills the directory prompt with the selected project root; Enter on an empty prompt uses that root, an invalid path keeps the prompt open with an error instead of silently returning to the list, and long paths scroll so the end stays visible.
 
 ## 0.3.0
 

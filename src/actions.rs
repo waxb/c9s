@@ -1,6 +1,5 @@
 use anyhow::Result;
 use ratatui::layout::Rect;
-use std::path::PathBuf;
 
 use crate::app::{
     message_text, rename_text, App, MessageInput, NameInput, NamePurpose, TakeoverPrompt,
@@ -384,26 +383,28 @@ fn launch_new(app: &mut App) {
             app.open_name_input(NameInput::new(NamePurpose::New, root, None, suggestion));
         }
     } else {
+        let prefill = app
+            .selected_project()
+            .map(|p| crate::app::display_path(&p.root))
+            .unwrap_or_default();
+        app.command_set(prefill);
         app.set_view_mode(ViewMode::Command);
     }
 }
 
 fn submit_new_session_path(app: &mut App) {
     let input = app.command_take();
-    let path = input.trim().to_string();
-    if path.is_empty() {
-        app.set_view_mode(ViewMode::List);
-        return;
-    }
-    let expanded = crate::app::expand_home(&path);
-    let cwd = std::fs::canonicalize(&expanded).unwrap_or_else(|_| PathBuf::from(&expanded));
-    if cwd.is_dir() {
-        app.set_view_mode(ViewMode::List);
-        let suggestion = app.generate_session_name();
-        app.open_name_input(NameInput::new(NamePurpose::New, cwd, None, suggestion));
-    } else {
-        tlog!(warn, "new session: not a directory: {}", cwd.display());
-        app.set_view_mode(ViewMode::List);
+    let fallback = app.selected_project().map(|p| p.root.clone());
+    match crate::app::resolve_new_session_dir(&input, fallback.as_deref()) {
+        Ok(cwd) => {
+            app.set_view_mode(ViewMode::List);
+            let suggestion = app.generate_session_name();
+            app.open_name_input(NameInput::new(NamePurpose::New, cwd, None, suggestion));
+        }
+        Err(error) => {
+            tlog!(warn, "new session: {} ({:?})", error, input.trim());
+            app.command_set_error(input, error);
+        }
     }
 }
 
