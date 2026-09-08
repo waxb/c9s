@@ -3,14 +3,14 @@ use std::collections::HashMap;
 use std::path::Path;
 use std::time::{Duration, Instant};
 
-use crate::session::registry::process_alive;
-use crate::tlog;
-
 use super::notifier::JsonlNotifier;
 use super::EmbeddedTerminal;
+use crate::session::registry::{process_alive, RegistryStatus};
+use crate::tlog;
 
 const TERM_GRACE: Duration = Duration::from_millis(500);
 const KILL_GRACE: Duration = Duration::from_millis(200);
+const NOTIFY_INTERVAL: Duration = Duration::from_millis(250);
 
 fn wait_for_exit(pid: u32, timeout: Duration) -> bool {
     let start = Instant::now();
@@ -36,13 +36,26 @@ fn kill_process(pid: u32) {
     wait_for_exit(pid, KILL_GRACE);
 }
 
+fn ring_terminal_bell() {
+    let _ = std::io::Write::write_all(&mut std::io::stderr(), b"\x07");
+}
+
+fn finished_turn(previous: Option<&RegistryStatus>, current: &RegistryStatus) -> bool {
+    let was_working = matches!(
+        previous,
+        Some(RegistryStatus::Busy) | Some(RegistryStatus::Compacting)
+    );
+    was_working && matches!(current, RegistryStatus::Idle | RegistryStatus::Waiting)
+}
+
 pub struct TerminalManager {
     terminals: HashMap<String, EmbeddedTerminal>,
     notifiers: HashMap<String, JsonlNotifier>,
+    registry_status: HashMap<String, RegistryStatus>,
     active_id: Option<String>,
     order: Vec<String>,
-    check_count: u64,
     side_terminals: HashMap<String, EmbeddedTerminal>,
+    last_notify_check: Option<Instant>,
 }
 
 impl TerminalManager {
@@ -50,10 +63,11 @@ impl TerminalManager {
         Self {
             terminals: HashMap::new(),
             notifiers: HashMap::new(),
+            registry_status: HashMap::new(),
             active_id: None,
             order: Vec::new(),
-            check_count: 0,
             side_terminals: HashMap::new(),
+            last_notify_check: None,
         }
     }
 
@@ -73,10 +87,7 @@ impl TerminalManager {
                 kill_process(pid);
             }
             let term = EmbeddedTerminal::spawn_resume(session_id, project_name, cwd, rows, cols)?;
-            self.order.push(session_id.to_string());
-            self.terminals.insert(session_id.to_string(), term);
-            self.notifiers
-                .insert(session_id.to_string(), JsonlNotifier::new(cwd, session_id));
+            self.register(term, Some(JsonlNotifier::new(cwd, session_id)));
         }
         self.active_id = Some(session_id.to_string());
         self.clear_active_bells();
@@ -87,10 +98,7 @@ impl TerminalManager {
         self.clear_active_bells();
         let term = EmbeddedTerminal::spawn_new(cwd, rows, cols)?;
         let id = term.session_id().to_string();
-        self.notifiers
-            .insert(id.clone(), JsonlNotifier::new(cwd, &id));
-        self.order.push(id.clone());
-        self.terminals.insert(id.clone(), term);
+        self.register(term, Some(JsonlNotifier::new(cwd, &id)));
         self.active_id = Some(id.clone());
         Ok(id)
     }
@@ -99,12 +107,25 @@ impl TerminalManager {
         self.clear_active_bells();
         let term = EmbeddedTerminal::spawn_resume_picker(cwd, rows, cols)?;
         let id = term.session_id().to_string();
-        self.notifiers
-            .insert(id.clone(), JsonlNotifier::new(cwd, &id));
-        self.order.push(id.clone());
-        self.terminals.insert(id.clone(), term);
+        self.register(term, Some(JsonlNotifier::new(cwd, &id)));
         self.active_id = Some(id.clone());
         Ok(id)
+    }
+
+    fn register(&mut self, term: EmbeddedTerminal, notifier: Option<JsonlNotifier>) {
+        let id = term.session_id().to_string();
+        if let Some(n) = notifier {
+            self.notifiers.insert(id.clone(), n);
+        }
+        self.order.push(id.clone());
+        self.terminals.insert(id, term);
+    }
+
+    fn unregister(&mut self, id: &str) {
+        self.terminals.remove(id);
+        self.notifiers.remove(id);
+        self.registry_status.remove(id);
+        self.order.retain(|o| o != id);
     }
 
     pub fn detach(&mut self) {
@@ -140,38 +161,28 @@ impl TerminalManager {
         Ok(())
     }
 
-    pub fn cycle_next(&mut self) {
+    fn cycle(&mut self, step: isize) {
         if self.order.is_empty() {
             return;
         }
         self.clear_active_bells();
-        let current_idx = self
+        let len = self.order.len() as isize;
+        let current = self
             .active_id
             .as_ref()
             .and_then(|id| self.order.iter().position(|o| o == id))
-            .unwrap_or(0);
-        let next_idx = (current_idx + 1) % self.order.len();
-        self.active_id = Some(self.order[next_idx].clone());
+            .unwrap_or(0) as isize;
+        let next = (current + step).rem_euclid(len) as usize;
+        self.active_id = Some(self.order[next].clone());
         self.clear_active_bells();
     }
 
+    pub fn cycle_next(&mut self) {
+        self.cycle(1);
+    }
+
     pub fn cycle_prev(&mut self) {
-        if self.order.is_empty() {
-            return;
-        }
-        self.clear_active_bells();
-        let current_idx = self
-            .active_id
-            .as_ref()
-            .and_then(|id| self.order.iter().position(|o| o == id))
-            .unwrap_or(0);
-        let prev_idx = if current_idx == 0 {
-            self.order.len() - 1
-        } else {
-            current_idx - 1
-        };
-        self.active_id = Some(self.order[prev_idx].clone());
-        self.clear_active_bells();
+        self.cycle(-1);
     }
 
     pub fn cleanup_inactive_exited(&mut self) {
@@ -183,17 +194,13 @@ impl TerminalManager {
             .map(|(id, _)| id.clone())
             .collect();
         for id in &dead {
-            self.terminals.remove(id);
-            self.notifiers.remove(id);
-            self.order.retain(|o| o != id);
+            self.unregister(id);
         }
     }
 
     pub fn remove_active(&mut self) {
         if let Some(id) = self.active_id.take() {
-            self.terminals.remove(&id);
-            self.notifiers.remove(&id);
-            self.order.retain(|o| o != &id);
+            self.unregister(&id);
         }
     }
 
@@ -201,8 +208,13 @@ impl TerminalManager {
         self.active_terminal().is_some_and(|t| t.is_exited())
     }
 
-    pub fn is_attached(&self, session_id: &str) -> bool {
-        self.terminals.contains_key(session_id)
+    pub fn live_session_names(&self) -> Vec<String> {
+        self.order
+            .iter()
+            .filter_map(|id| self.terminals.get(id))
+            .filter(|t| !t.is_exited())
+            .map(|t| t.project_name().to_string())
+            .collect()
     }
 
     pub fn has_bell_for(&self, session_id: &str) -> bool {
@@ -219,7 +231,6 @@ impl TerminalManager {
                 let term = self.terminals.get(id)?;
                 let is_active = self.active_id.as_deref() == Some(id.as_str());
                 Some(TabEntry {
-                    session_id: id.clone(),
                     name: term.project_name().to_string(),
                     is_active,
                     has_bell: !is_active && term.has_bell(),
@@ -229,26 +240,60 @@ impl TerminalManager {
             .collect()
     }
 
-    pub fn check_and_forward_notifications(&mut self, viewing_active: bool) -> bool {
-        self.check_count += 1;
-        for (id, notifier) in &mut self.notifiers {
-            if notifier.check() {
-                let is_focused = viewing_active && self.active_id.as_deref() == Some(id.as_str());
-                notifier.debug_log_ext(&format!(
-                    "BELL: fired for {} (focused={})",
-                    &id[..8.min(id.len())],
-                    is_focused
-                ));
-                if !is_focused {
-                    if let Some(term) = self.terminals.get(id) {
-                        term.set_bell();
-                    }
-                }
-                let _ = std::io::Write::write_all(&mut std::io::stderr(), b"\x07");
-                return true;
+    fn notify(&self, id: &str, viewing_active: bool) {
+        let is_focused = viewing_active && self.active_id.as_deref() == Some(id);
+        if !is_focused {
+            if let Some(term) = self.terminals.get(id) {
+                term.set_bell();
             }
         }
-        false
+        ring_terminal_bell();
+    }
+
+    pub fn observe_registry(
+        &mut self,
+        statuses: &HashMap<String, RegistryStatus>,
+        viewing_active: bool,
+    ) -> bool {
+        let ids: Vec<String> = self.terminals.keys().cloned().collect();
+        let mut notified = false;
+        for id in ids {
+            match statuses.get(&id) {
+                Some(current) => {
+                    let previous = self.registry_status.get(&id);
+                    if finished_turn(previous, current) {
+                        self.notify(&id, viewing_active);
+                        notified = true;
+                    }
+                    self.registry_status.insert(id, current.clone());
+                }
+                None => {
+                    self.registry_status.remove(&id);
+                }
+            }
+        }
+        notified
+    }
+
+    pub fn check_and_forward_notifications(&mut self, viewing_active: bool) -> bool {
+        if self
+            .last_notify_check
+            .is_some_and(|t| t.elapsed() < NOTIFY_INTERVAL)
+        {
+            return false;
+        }
+        self.last_notify_check = Some(Instant::now());
+
+        let fired: Vec<String> = self
+            .notifiers
+            .iter_mut()
+            .filter(|(id, _)| !self.registry_status.contains_key(id.as_str()))
+            .filter_map(|(id, notifier)| notifier.check().then(|| id.clone()))
+            .collect();
+        for id in &fired {
+            self.notify(id, viewing_active);
+        }
+        !fired.is_empty()
     }
 
     fn clear_active_bells(&self) {
@@ -267,7 +312,7 @@ impl TerminalManager {
         self.side_terminals.get_mut(&id)
     }
 
-    pub fn open_side_terminal(&mut self, cwd: &std::path::Path, rows: u16, cols: u16) -> bool {
+    pub fn open_side_terminal(&mut self, cwd: &Path, rows: u16, cols: u16) -> bool {
         let id = match &self.active_id {
             Some(id) => id.clone(),
             None => return false,
@@ -283,7 +328,10 @@ impl TerminalManager {
                 self.side_terminals.insert(id, term);
                 true
             }
-            Err(_) => false,
+            Err(e) => {
+                tlog!(error, "failed to open side shell: {}", e);
+                false
+            }
         }
     }
 
@@ -301,16 +349,45 @@ impl TerminalManager {
 }
 
 pub struct TabEntry {
-    #[allow(dead_code)]
-    pub session_id: String,
     pub name: String,
     pub is_active: bool,
     pub has_bell: bool,
     pub bell_blink: bool,
 }
 
-impl Drop for TerminalManager {
-    fn drop(&mut self) {
-        self.terminals.clear();
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_finished_turn_transitions() {
+        assert!(finished_turn(
+            Some(&RegistryStatus::Busy),
+            &RegistryStatus::Idle
+        ));
+        assert!(finished_turn(
+            Some(&RegistryStatus::Compacting),
+            &RegistryStatus::Waiting
+        ));
+        assert!(!finished_turn(
+            Some(&RegistryStatus::Idle),
+            &RegistryStatus::Idle
+        ));
+        assert!(!finished_turn(None, &RegistryStatus::Idle));
+        assert!(!finished_turn(
+            Some(&RegistryStatus::Busy),
+            &RegistryStatus::Busy
+        ));
+    }
+
+    #[test]
+    fn test_cycle_wraps_in_both_directions() {
+        let mut m = TerminalManager::new();
+        m.order = vec!["a".into(), "b".into(), "c".into()];
+        m.active_id = Some("c".into());
+        m.cycle_next();
+        assert_eq!(m.active_id.as_deref(), Some("a"));
+        m.cycle_prev();
+        assert_eq!(m.active_id.as_deref(), Some("c"));
     }
 }

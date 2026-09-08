@@ -4,6 +4,7 @@ use std::sync::mpsc;
 use std::time::{Duration, Instant};
 
 use crate::session::config::{build_config_items, scan_session_config, ConfigItem};
+use crate::session::registry::{RegistryStatus, SessionRegistry};
 use crate::session::{Session, SessionDiscovery, SessionFile, SessionStatus};
 use crate::store::Store;
 use crate::terminal::{EmbeddedTerminal, TerminalManager};
@@ -11,6 +12,7 @@ use crate::usage::{UsageData, UsageFetcher};
 use anyhow::Result;
 
 const CI_CHECK_INTERVAL: Duration = Duration::from_secs(120);
+const REGISTRY_POLL_INTERVAL: Duration = Duration::from_secs(1);
 const QSWITCHER_MAX: usize = 9;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -88,6 +90,8 @@ pub struct App {
     filter_query: String,
     command_input: String,
     discovery: SessionDiscovery,
+    registry: SessionRegistry,
+    last_registry_poll: Option<Instant>,
     store: Option<Store>,
     should_quit: bool,
     terminal_manager: TerminalManager,
@@ -123,6 +127,8 @@ impl App {
             filter_query: String::new(),
             command_input: String::new(),
             discovery: SessionDiscovery::new(),
+            registry: SessionRegistry::new(),
+            last_registry_poll: None,
             store: Store::open().ok(),
             should_quit: false,
             terminal_manager: TerminalManager::new(),
@@ -416,14 +422,25 @@ impl App {
     }
 
     pub fn active_attached_sessions(&self) -> Vec<String> {
-        self.sessions
-            .iter()
-            .filter(|s| {
-                self.terminal_manager.is_attached(&s.id)
-                    && matches!(s.status, SessionStatus::Active | SessionStatus::Thinking)
-            })
-            .map(|s| s.project_name.clone())
-            .collect()
+        self.terminal_manager.live_session_names()
+    }
+
+    pub fn poll_registry(&mut self, viewing_active: bool) -> bool {
+        if self
+            .last_registry_poll
+            .is_some_and(|t| t.elapsed() < REGISTRY_POLL_INTERVAL)
+        {
+            return false;
+        }
+        self.last_registry_poll = Some(Instant::now());
+        let statuses: HashMap<String, RegistryStatus> = self
+            .registry
+            .live_interactive()
+            .into_iter()
+            .map(|e| (e.session_id, e.status))
+            .collect();
+        self.terminal_manager
+            .observe_registry(&statuses, viewing_active)
     }
 
     pub fn command_input(&self) -> &str {

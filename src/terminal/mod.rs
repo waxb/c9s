@@ -2,14 +2,21 @@ mod manager;
 mod notifier;
 
 use anyhow::{Context, Result};
-use portable_pty::{native_pty_system, CommandBuilder, MasterPty, PtySize};
+use portable_pty::{native_pty_system, Child, CommandBuilder, MasterPty, PtySize};
 use std::io::{Read, Write};
 use std::path::Path;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard};
 use std::thread::JoinHandle;
+use std::time::{Duration, Instant};
+
+use crate::session::registry::process_alive;
 
 pub use manager::{TabEntry, TerminalManager};
+
+const SCROLLBACK_LINES: usize = 10_000;
+const READ_BUF_SIZE: usize = 8192;
+const TERM_GRACE: Duration = Duration::from_millis(300);
 
 pub struct EmbeddedTerminal {
     session_id: String,
@@ -17,11 +24,18 @@ pub struct EmbeddedTerminal {
     parser: Arc<Mutex<vt100::Parser>>,
     writer: Box<dyn Write + Send>,
     master: Box<dyn MasterPty>,
+    child: Mutex<Box<dyn Child + Send + Sync>>,
     _reader_handle: JoinHandle<()>,
     exited: Arc<AtomicBool>,
     bell: Arc<AtomicBool>,
     bell_blink: Arc<AtomicBool>,
     dirty: Arc<AtomicBool>,
+}
+
+fn project_name_for(cwd: &Path) -> String {
+    cwd.file_name()
+        .map(|n| n.to_string_lossy().to_string())
+        .unwrap_or_else(|| cwd.to_string_lossy().to_string())
 }
 
 impl EmbeddedTerminal {
@@ -49,25 +63,21 @@ impl EmbeddedTerminal {
     }
 
     pub fn spawn_resume_picker(cwd: &Path, rows: u16, cols: u16) -> Result<Self> {
-        let project_name = cwd
-            .file_name()
-            .map(|n| n.to_string_lossy().to_string())
-            .unwrap_or_else(|| cwd.to_string_lossy().to_string());
-
         let id = uuid::Uuid::new_v4().to_string();
-
-        Self::spawn_inner(&id, &project_name, "claude", &["--resume"], cwd, rows, cols)
+        Self::spawn_inner(
+            &id,
+            &project_name_for(cwd),
+            "claude",
+            &["--resume"],
+            cwd,
+            rows,
+            cols,
+        )
     }
 
     pub fn spawn_new(cwd: &Path, rows: u16, cols: u16) -> Result<Self> {
-        let project_name = cwd
-            .file_name()
-            .map(|n| n.to_string_lossy().to_string())
-            .unwrap_or_else(|| cwd.to_string_lossy().to_string());
-
         let id = uuid::Uuid::new_v4().to_string();
-
-        Self::spawn_inner(&id, &project_name, "claude", &[], cwd, rows, cols)
+        Self::spawn_inner(&id, &project_name_for(cwd), "claude", &[], cwd, rows, cols)
     }
 
     fn spawn_inner(
@@ -91,21 +101,15 @@ impl EmbeddedTerminal {
             .openpty(size)
             .map_err(|e| anyhow::anyhow!("{}", e))?;
 
-        let inner_cmd = if args.is_empty() {
-            cmd.to_string()
-        } else {
-            let escaped_args: Vec<String> = args
-                .iter()
-                .map(|a| format!("'{}'", a.replace('\'', "'\\''")))
-                .collect();
-            format!("{} {}", cmd, escaped_args.join(" "))
-        };
         let mut cmd_builder = CommandBuilder::new("bash");
         cmd_builder.arg("-c");
-        cmd_builder.arg(format!("export GPG_TTY=$(tty); exec {}", inner_cmd));
+        cmd_builder.arg(format!(
+            "export GPG_TTY=$(tty); exec {}",
+            shell_command(cmd, args)
+        ));
         cmd_builder.cwd(cwd);
 
-        let _child = pair
+        let child = pair
             .slave
             .spawn_command(cmd_builder)
             .map_err(|e| anyhow::anyhow!("{}", e))?;
@@ -120,10 +124,8 @@ impl EmbeddedTerminal {
             .take_writer()
             .map_err(|e| anyhow::anyhow!("{}", e))?;
 
-        let parser = Arc::new(Mutex::new(vt100::Parser::new(rows, cols, 10000)));
+        let parser = Arc::new(Mutex::new(vt100::Parser::new(rows, cols, SCROLLBACK_LINES)));
         let exited = Arc::new(AtomicBool::new(false));
-        let bell = Arc::new(AtomicBool::new(false));
-        let bell_blink = Arc::new(AtomicBool::new(false));
         let dirty = Arc::new(AtomicBool::new(true));
 
         let parser_clone = Arc::clone(&parser);
@@ -131,19 +133,14 @@ impl EmbeddedTerminal {
         let dirty_clone = Arc::clone(&dirty);
 
         let reader_handle = std::thread::spawn(move || {
-            let mut buf = [0u8; 8192];
+            let mut buf = [0u8; READ_BUF_SIZE];
             loop {
                 match reader.read(&mut buf) {
-                    Ok(0) => {
-                        exited_clone.store(true, Ordering::Relaxed);
-                        dirty_clone.store(true, Ordering::Relaxed);
-                        break;
-                    }
-                    Ok(n) => {
+                    Ok(n) if n > 0 => {
                         parser_clone.lock().unwrap().process(&buf[..n]);
                         dirty_clone.store(true, Ordering::Relaxed);
                     }
-                    Err(_) => {
+                    _ => {
                         exited_clone.store(true, Ordering::Relaxed);
                         dirty_clone.store(true, Ordering::Relaxed);
                         break;
@@ -158,10 +155,11 @@ impl EmbeddedTerminal {
             parser,
             writer,
             master: pair.master,
+            child: Mutex::new(child),
             _reader_handle: reader_handle,
             exited,
-            bell,
-            bell_blink,
+            bell: Arc::new(AtomicBool::new(false)),
+            bell_blink: Arc::new(AtomicBool::new(false)),
             dirty,
         })
     }
@@ -219,8 +217,40 @@ impl EmbeddedTerminal {
         Ok(())
     }
 
+    pub fn pid(&self) -> Option<u32> {
+        self.child.lock().ok().and_then(|c| c.process_id())
+    }
+
+    fn reap(&self) {
+        if let Ok(mut child) = self.child.lock() {
+            let _ = child.try_wait();
+        }
+    }
+
     pub fn is_exited(&self) -> bool {
-        self.exited.load(Ordering::Relaxed)
+        if !self.exited.load(Ordering::Relaxed) {
+            return false;
+        }
+        self.reap();
+        true
+    }
+
+    pub fn terminate(&self) {
+        if let Some(pid) = self.pid().filter(|&pid| process_alive(pid)) {
+            unsafe {
+                libc::kill(pid as i32, libc::SIGTERM);
+            }
+            let start = Instant::now();
+            while process_alive(pid) && start.elapsed() < TERM_GRACE {
+                std::thread::sleep(Duration::from_millis(25));
+            }
+            if process_alive(pid) {
+                unsafe {
+                    libc::kill(pid as i32, libc::SIGKILL);
+                }
+            }
+        }
+        self.reap();
     }
 
     pub fn has_bell(&self) -> bool {
@@ -251,5 +281,69 @@ impl EmbeddedTerminal {
 
     pub fn project_name(&self) -> &str {
         &self.project_name
+    }
+}
+
+impl Drop for EmbeddedTerminal {
+    fn drop(&mut self) {
+        if !self.exited.load(Ordering::Relaxed) {
+            self.terminate();
+        }
+    }
+}
+
+fn shell_command(cmd: &str, args: &[&str]) -> String {
+    if args.is_empty() {
+        return cmd.to_string();
+    }
+    let escaped: Vec<String> = args
+        .iter()
+        .map(|a| format!("'{}'", a.replace('\'', "'\\''")))
+        .collect();
+    format!("{} {}", cmd, escaped.join(" "))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_shell_command_quotes_arguments() {
+        assert_eq!(shell_command("claude", &[]), "claude");
+        assert_eq!(
+            shell_command("claude", &["--resume", "abc"]),
+            "claude '--resume' 'abc'"
+        );
+        assert_eq!(shell_command("x", &["it's"]), "x 'it'\\''s'");
+    }
+
+    #[test]
+    fn test_project_name_for() {
+        assert_eq!(project_name_for(Path::new("/a/b/c9s")), "c9s");
+        assert_eq!(project_name_for(Path::new("/")), "/");
+    }
+
+    #[test]
+    fn test_spawned_shell_reports_pid_and_exit() {
+        let dir = tempfile::tempdir().unwrap();
+        let term =
+            EmbeddedTerminal::spawn_inner("t", "t", "true", &[], dir.path(), 5, 20).expect("spawn");
+        let start = Instant::now();
+        while !term.is_exited() && start.elapsed() < Duration::from_secs(5) {
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        assert!(term.is_exited());
+    }
+
+    #[test]
+    fn test_terminate_kills_long_running_child() {
+        let dir = tempfile::tempdir().unwrap();
+        let term = EmbeddedTerminal::spawn_inner("t", "t", "sleep", &["30"], dir.path(), 5, 20)
+            .expect("spawn");
+        std::thread::sleep(Duration::from_millis(100));
+        let pid = term.pid().expect("pid");
+        assert!(process_alive(pid));
+        term.terminate();
+        assert!(!process_alive(pid));
     }
 }

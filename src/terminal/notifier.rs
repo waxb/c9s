@@ -1,18 +1,7 @@
 use serde_json::Value;
-use std::io::{BufRead, BufReader, Seek, SeekFrom, Write as IoWrite};
+use std::io::{BufRead, BufReader, Seek, SeekFrom};
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
-
-fn debug_log(msg: &str) {
-    if let Ok(mut f) = std::fs::OpenOptions::new()
-        .create(true)
-        .append(true)
-        .open("/tmp/c9s-bell-debug.log")
-    {
-        let ts = now_millis();
-        let _ = writeln!(f, "[{}] {}", ts, msg);
-    }
-}
 
 const TOOL_WAIT_MS: u64 = 5000;
 
@@ -53,13 +42,8 @@ impl JsonlNotifier {
         let jsonl_path = project_dir.join(format!("{}.jsonl", session_id));
         let (path, size) = if jsonl_path.exists() {
             let size = std::fs::metadata(&jsonl_path).map(|m| m.len()).unwrap_or(0);
-            debug_log(&format!(
-                "new: found jsonl at {:?} size={}",
-                jsonl_path, size
-            ));
             (Some(jsonl_path), size)
         } else {
-            debug_log(&format!("new: no jsonl at {:?}, will discover", jsonl_path));
             (None, 0)
         };
 
@@ -88,26 +72,8 @@ impl JsonlNotifier {
             Err(_) => return false,
         };
 
-        if current_size > self.last_known_size {
-            debug_log(&format!(
-                "new data: {} -> {} (+{}) read_offset={}",
-                self.last_known_size,
-                current_size,
-                current_size - self.last_known_size,
-                self.read_offset
-            ));
-        }
-
         if current_size == self.last_known_size && self.read_offset >= self.last_known_size {
-            if let Some(tool_at) = self.tool_use_at {
-                let elapsed = now_millis().saturating_sub(tool_at);
-                if elapsed >= TOOL_WAIT_MS {
-                    debug_log(&format!("BELL: tool_wait timer fired after {}ms", elapsed));
-                    self.tool_use_at = None;
-                    return true;
-                }
-            }
-            return false;
+            return self.tool_wait_expired();
         }
 
         if current_size < self.read_offset {
@@ -132,111 +98,13 @@ impl JsonlNotifier {
 
         while reader.read_line(&mut line).unwrap_or(0) > 0 {
             if !line.ends_with('\n') {
-                debug_log(&format!(
-                    "partial line ({} bytes), will retry next tick",
-                    line.len()
-                ));
                 break;
             }
-
-            let line_bytes = line.len() as u64;
+            good_offset += line.len() as u64;
             let trimmed = line.trim();
-
-            if trimmed.is_empty() {
-                good_offset += line_bytes;
-                line.clear();
-                continue;
+            if let Ok(value) = serde_json::from_str::<Value>(trimmed) {
+                should_notify |= self.apply_line(&value);
             }
-
-            let value: Value = match serde_json::from_str(trimmed) {
-                Ok(v) => v,
-                Err(_) => {
-                    good_offset += line_bytes;
-                    line.clear();
-                    continue;
-                }
-            };
-
-            good_offset += line_bytes;
-
-            if value.get("isCompactSummary").and_then(|v| v.as_bool()) == Some(true) {
-                debug_log("compact summary seen, treating as new user turn");
-                self.state = SessionState::UserSent;
-                self.tool_use_at = None;
-                line.clear();
-                continue;
-            }
-
-            let msg_type = value.get("type").and_then(|v| v.as_str()).unwrap_or("");
-
-            match msg_type {
-                "user" => {
-                    if self.tool_use_at.is_some() {
-                        debug_log("user msg cancelled tool_wait timer");
-                    }
-                    self.state = SessionState::UserSent;
-                    self.tool_use_at = None;
-                }
-                "assistant" => {
-                    let stop_reason = value
-                        .get("message")
-                        .and_then(|m| m.get("stop_reason"))
-                        .and_then(|s| s.as_str());
-
-                    match stop_reason {
-                        Some("end_turn") => {
-                            if matches!(
-                                self.state,
-                                SessionState::UserSent
-                                    | SessionState::Working
-                                    | SessionState::ToolWait
-                            ) {
-                                debug_log(&format!(
-                                    "BELL: end_turn from state {:?}",
-                                    self.state as u8
-                                ));
-                                should_notify = true;
-                            }
-                            self.state = SessionState::Idle;
-                            self.tool_use_at = None;
-                        }
-                        Some("tool_use") => {
-                            debug_log("state -> ToolWait, starting 5s timer");
-                            self.state = SessionState::ToolWait;
-                            self.tool_use_at = Some(now_millis());
-                        }
-                        _ => {
-                            if self.state != SessionState::ToolWait {
-                                self.state = SessionState::Working;
-                                self.tool_use_at = None;
-                            }
-                        }
-                    }
-                }
-                "system" => {
-                    let subtype = value.get("subtype").and_then(|v| v.as_str());
-                    if matches!(subtype, Some("stop_hook_summary" | "turn_duration")) {
-                        if matches!(
-                            self.state,
-                            SessionState::UserSent | SessionState::Working | SessionState::ToolWait
-                        ) {
-                            debug_log(&format!(
-                                "BELL: {} from state {:?}",
-                                subtype.unwrap_or("?"),
-                                self.state as u8
-                            ));
-                            should_notify = true;
-                        }
-                        self.state = SessionState::Idle;
-                        self.tool_use_at = None;
-                    }
-                }
-                "progress" if self.state != SessionState::ToolWait => {
-                    self.state = SessionState::Working;
-                }
-                _ => {}
-            }
-
             line.clear();
         }
 
@@ -245,34 +113,100 @@ impl JsonlNotifier {
         should_notify
     }
 
-    pub fn debug_log_ext(&self, msg: &str) {
-        debug_log(msg);
+    fn tool_wait_expired(&mut self) -> bool {
+        let Some(tool_at) = self.tool_use_at else {
+            return false;
+        };
+        if now_millis().saturating_sub(tool_at) >= TOOL_WAIT_MS {
+            self.tool_use_at = None;
+            return true;
+        }
+        false
+    }
+
+    fn in_progress(&self) -> bool {
+        matches!(
+            self.state,
+            SessionState::UserSent | SessionState::Working | SessionState::ToolWait
+        )
+    }
+
+    fn apply_line(&mut self, value: &Value) -> bool {
+        if value.get("isCompactSummary").and_then(|v| v.as_bool()) == Some(true) {
+            self.state = SessionState::UserSent;
+            self.tool_use_at = None;
+            return false;
+        }
+
+        let msg_type = value.get("type").and_then(|v| v.as_str()).unwrap_or("");
+        match msg_type {
+            "user" => {
+                self.state = SessionState::UserSent;
+                self.tool_use_at = None;
+                false
+            }
+            "assistant" => {
+                let stop_reason = value
+                    .get("message")
+                    .and_then(|m| m.get("stop_reason"))
+                    .and_then(|s| s.as_str());
+                self.apply_stop_reason(stop_reason)
+            }
+            "system" => {
+                let subtype = value.get("subtype").and_then(|v| v.as_str());
+                if matches!(subtype, Some("stop_hook_summary" | "turn_duration")) {
+                    let notify = self.in_progress();
+                    self.state = SessionState::Idle;
+                    self.tool_use_at = None;
+                    return notify;
+                }
+                false
+            }
+            "progress" if self.state != SessionState::ToolWait => {
+                self.state = SessionState::Working;
+                false
+            }
+            _ => false,
+        }
+    }
+
+    fn apply_stop_reason(&mut self, stop_reason: Option<&str>) -> bool {
+        match stop_reason {
+            Some("end_turn") => {
+                let notify = self.in_progress();
+                self.state = SessionState::Idle;
+                self.tool_use_at = None;
+                notify
+            }
+            Some("tool_use") => {
+                self.state = SessionState::ToolWait;
+                self.tool_use_at = Some(now_millis());
+                false
+            }
+            _ => {
+                if self.state != SessionState::ToolWait {
+                    self.state = SessionState::Working;
+                    self.tool_use_at = None;
+                }
+                false
+            }
+        }
     }
 
     fn try_discover_path(&mut self) {
-        if !self.project_dir.exists() {
+        let Ok(entries) = std::fs::read_dir(&self.project_dir) else {
             return;
-        }
-
-        let entries = match std::fs::read_dir(&self.project_dir) {
-            Ok(e) => e,
-            Err(_) => return,
         };
 
-        let mut newest: Option<(PathBuf, SystemTime)> = None;
-        for entry in entries.flatten() {
-            let p = entry.path();
-            if p.extension().is_none_or(|e| e != "jsonl") {
-                continue;
-            }
-            if let Ok(meta) = p.metadata() {
-                if let Ok(mtime) = meta.modified() {
-                    if newest.as_ref().is_none_or(|(_, t)| mtime > *t) {
-                        newest = Some((p, mtime));
-                    }
-                }
-            }
-        }
+        let newest = entries
+            .flatten()
+            .map(|e| e.path())
+            .filter(|p| p.extension().is_some_and(|e| e == "jsonl"))
+            .filter_map(|p| {
+                let mtime = p.metadata().ok()?.modified().ok()?;
+                Some((p, mtime))
+            })
+            .max_by_key(|(_, mtime)| *mtime);
 
         if let Some((path, _)) = newest {
             let size = path.metadata().map(|m| m.len()).unwrap_or(0);
@@ -280,5 +214,80 @@ impl JsonlNotifier {
             self.read_offset = size;
             self.jsonl_path = Some(path);
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn notifier_at(state: SessionState) -> JsonlNotifier {
+        JsonlNotifier {
+            jsonl_path: None,
+            project_dir: PathBuf::from("/nonexistent"),
+            last_known_size: 0,
+            read_offset: 0,
+            state,
+            tool_use_at: None,
+        }
+    }
+
+    fn line(json: &str) -> Value {
+        serde_json::from_str(json).unwrap()
+    }
+
+    #[test]
+    fn test_end_turn_after_user_notifies_once() {
+        let mut n = notifier_at(SessionState::Unknown);
+        assert!(!n.apply_line(&line(r#"{"type":"user"}"#)));
+        assert!(n.apply_line(&line(
+            r#"{"type":"assistant","message":{"stop_reason":"end_turn"}}"#
+        )));
+        assert!(!n.apply_line(&line(
+            r#"{"type":"assistant","message":{"stop_reason":"end_turn"}}"#
+        )));
+    }
+
+    #[test]
+    fn test_turn_duration_notifies_while_working() {
+        let mut n = notifier_at(SessionState::Working);
+        assert!(n.apply_line(&line(r#"{"type":"system","subtype":"turn_duration"}"#)));
+        assert!(!n.apply_line(&line(r#"{"type":"system","subtype":"turn_duration"}"#)));
+    }
+
+    #[test]
+    fn test_tool_use_starts_wait_timer_and_user_cancels_it() {
+        let mut n = notifier_at(SessionState::UserSent);
+        assert!(!n.apply_line(&line(
+            r#"{"type":"assistant","message":{"stop_reason":"tool_use"}}"#
+        )));
+        assert!(n.tool_use_at.is_some());
+        assert!(!n.tool_wait_expired());
+        n.tool_use_at = Some(now_millis() - TOOL_WAIT_MS - 1);
+        assert!(n.tool_wait_expired());
+        assert!(n.tool_use_at.is_none());
+    }
+
+    #[test]
+    fn test_check_reads_appended_lines_from_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("s.jsonl");
+        std::fs::write(&path, "").unwrap();
+        let mut n = JsonlNotifier {
+            jsonl_path: Some(path.clone()),
+            project_dir: dir.path().to_path_buf(),
+            last_known_size: 0,
+            read_offset: 0,
+            state: SessionState::Unknown,
+            tool_use_at: None,
+        };
+        assert!(!n.check());
+        std::fs::write(
+            &path,
+            "{\"type\":\"user\"}\n{\"type\":\"assistant\",\"message\":{\"stop_reason\":\"end_turn\"}}\n",
+        )
+        .unwrap();
+        assert!(n.check());
+        assert!(!n.check());
     }
 }

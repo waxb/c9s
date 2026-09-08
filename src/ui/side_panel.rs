@@ -7,10 +7,21 @@ use ratatui::Frame;
 use crate::terminal::EmbeddedTerminal;
 use crate::ui::terminal_view::render_screen;
 
+const SIDE_HEADER_ROWS: u16 = 1;
+const SIDE_BORDER_COLS: u16 = 1;
+
 pub fn split_with_side_panel(area: Rect) -> (Rect, Rect) {
     let chunks =
         Layout::horizontal([Constraint::Percentage(60), Constraint::Percentage(40)]).split(area);
     (chunks[0], chunks[1])
+}
+
+pub fn side_pty_size(area: Rect) -> (u16, u16) {
+    let side = split_with_side_panel(area).1;
+    (
+        side.height.saturating_sub(SIDE_HEADER_ROWS),
+        side.width.saturating_sub(SIDE_BORDER_COLS),
+    )
 }
 
 pub fn render_side_panel(f: &mut Frame, terminal: &EmbeddedTerminal, focused: bool, area: Rect) {
@@ -50,4 +61,15 @@ pub fn render_side_panel(f: &mut Frame, terminal: &EmbeddedTerminal, focused: bo
     let guard = terminal.lock_parser();
     let screen = guard.screen();
     render_screen(f, screen, chunks[1]);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_side_pty_size_excludes_border_and_header() {
+        let area = Rect::new(0, 0, 100, 40);
+        assert_eq!(side_pty_size(area), (39, 39));
+    }
 }

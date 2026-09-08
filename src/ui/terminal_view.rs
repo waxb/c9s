@@ -5,8 +5,24 @@ use ratatui::widgets::Paragraph;
 use ratatui::Frame;
 
 use crate::terminal::TabEntry;
+use crate::ui::side_panel::split_with_side_panel;
 use crate::ui::theme::Theme;
 use crate::usage::UsageData;
+
+const TAB_BAR_ROWS: u16 = 1;
+const STATUS_ROWS: u16 = 1;
+
+pub fn pty_size(area: Rect, side_panel_open: bool) -> (u16, u16) {
+    let main = if side_panel_open {
+        split_with_side_panel(area).0
+    } else {
+        area
+    };
+    (
+        main.height.saturating_sub(TAB_BAR_ROWS + STATUS_ROWS),
+        main.width,
+    )
+}
 
 pub fn render_terminal(
     f: &mut Frame,
@@ -257,5 +273,20 @@ pub(crate) fn convert_color(c: vt100::Color) -> Color {
         vt100::Color::Default => Color::Reset,
         vt100::Color::Idx(i) => Color::Indexed(i),
         vt100::Color::Rgb(r, g, b) => Color::Rgb(r, g, b),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_pty_size_matches_render_layout() {
+        let area = Rect::new(0, 0, 100, 40);
+        assert_eq!(pty_size(area, false), (38, 100));
+        let (rows, cols) = pty_size(area, true);
+        assert_eq!(rows, 38);
+        assert_eq!(cols, split_with_side_panel(area).0.width);
+        assert_eq!(cols, 60);
     }
 }

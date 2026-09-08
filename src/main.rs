@@ -128,11 +128,13 @@ fn run_loop(terminal: &mut Term, app: &mut App) -> Result<()> {
         }
 
         let viewing_active = is_terminal_view(app.view_mode());
-        if app
+        let notified = app
             .terminal_manager_mut()
             .check_and_forward_notifications(viewing_active)
-        {
+            | app.poll_registry(viewing_active);
+        if notified {
             app.invalidate_usage();
+            needs_draw = true;
         }
 
         app.terminal_manager_mut().cleanup_inactive_exited();
@@ -215,19 +217,13 @@ fn handle_events(terminal: &Term, app: &mut App) -> Result<bool> {
 }
 
 fn handle_resize(app: &mut App, cols: u16, rows: u16) {
+    let area = Rect::new(0, 0, cols, rows);
     if is_terminal_view(app.view_mode()) {
-        let term_cols = if app.is_side_panel_open() {
-            cols * 60 / 100
-        } else {
-            cols
-        };
-        let _ = app
-            .terminal_manager()
-            .resize_active(rows.saturating_sub(2), term_cols);
+        let (pty_rows, pty_cols) = ui::pty_size(area, app.is_side_panel_open());
+        let _ = app.terminal_manager().resize_active(pty_rows, pty_cols);
     }
     if app.is_side_panel_open() {
-        let panel_cols = cols * 40 / 100;
-        let panel_rows = rows.saturating_sub(1);
+        let (panel_rows, panel_cols) = ui::side_pty_size(area);
         if let Some(st) = app.side_terminal() {
             let _ = st.resize(panel_rows, panel_cols);
         }
@@ -319,9 +315,16 @@ fn render_terminal_view(app: &App, f: &mut Frame, area: Rect) {
     }
 }
 
-fn pty_dims(terminal: &Term) -> Result<(u16, u16)> {
-    let area = terminal.size()?;
-    Ok((area.height.saturating_sub(1), area.width))
+fn screen_area(terminal: &Term) -> Result<Rect> {
+    let size = terminal.size()?;
+    Ok(Rect::new(0, 0, size.width, size.height))
+}
+
+fn pty_dims(terminal: &Term, app: &App) -> Result<(u16, u16)> {
+    Ok(ui::pty_size(
+        screen_area(terminal)?,
+        app.is_side_panel_open(),
+    ))
 }
 
 fn process_action(app: &mut App, action: Action, terminal: &Term) -> Result<()> {
@@ -384,7 +387,7 @@ fn process_action(app: &mut App, action: Action, terminal: &Term) -> Result<()> 
         }
         Action::ResumeSessionPicker => {
             if let Some(cwd) = app.selected_session().map(|s| s.cwd.clone()) {
-                let (rows, cols) = pty_dims(terminal)?;
+                let (rows, cols) = pty_dims(terminal, app)?;
                 let _ = app
                     .terminal_manager_mut()
                     .attach_resume_picker(&cwd, rows, cols);
@@ -473,10 +476,13 @@ fn process_action(app: &mut App, action: Action, terminal: &Term) -> Result<()> 
             if app.is_side_panel_open() {
                 app.close_side_panel();
             } else {
-                let area = terminal.size()?;
-                let panel_cols = area.width * 40 / 100;
-                let panel_rows = area.height.saturating_sub(1);
+                let area = screen_area(terminal)?;
+                let (panel_rows, panel_cols) = ui::side_pty_size(area);
                 app.open_side_panel(panel_rows, panel_cols);
+                if app.is_side_panel_open() && is_terminal_view(app.view_mode()) {
+                    let (rows, cols) = ui::pty_size(area, true);
+                    let _ = app.terminal_manager().resize_active(rows, cols);
+                }
             }
         }
         Action::SideTerminalInput(bytes) => {
@@ -542,7 +548,7 @@ fn select_session_file(app: &mut App, terminal: &Term) -> Result<()> {
     });
     if let (Some(session_id), Some((selected_id, name, cwd, pid))) = (picked, selected) {
         let takeover = pid.filter(|_| selected_id == session_id);
-        let (rows, cols) = pty_dims(terminal)?;
+        let (rows, cols) = pty_dims(terminal, app)?;
         app.terminal_manager_mut()
             .attach(&session_id, &name, &cwd, takeover, rows, cols)?;
         app.set_view_mode(ViewMode::Terminal);
@@ -564,7 +570,7 @@ fn submit_new_session(app: &mut App, terminal: &Term) -> Result<()> {
     };
     let cwd = std::fs::canonicalize(&expanded).unwrap_or_else(|_| PathBuf::from(&expanded));
     if cwd.is_dir() {
-        let (rows, cols) = pty_dims(terminal)?;
+        let (rows, cols) = pty_dims(terminal, app)?;
         let _ = app.terminal_manager_mut().attach_new(&cwd, rows, cols);
         app.set_view_mode(ViewMode::Terminal);
     } else {
@@ -606,7 +612,7 @@ fn attach_target(
     let Some((id, name, cwd, pid)) = target else {
         return Ok(());
     };
-    let (rows, cols) = pty_dims(terminal)?;
+    let (rows, cols) = pty_dims(terminal, app)?;
     app.terminal_manager_mut()
         .attach(&id, &name, &cwd, pid, rows, cols)?;
     app.set_view_mode(ViewMode::Terminal);

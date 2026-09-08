@@ -82,10 +82,7 @@ impl UsageFetcher {
             if data.api_available {
                 self.cached = data;
             } else {
-                self.last_request = Some(
-                    Instant::now()
-                        - std::time::Duration::from_secs(CACHE_TTL_SECS - BACKOFF_TTL_SECS),
-                );
+                self.last_request = backdated(CACHE_TTL_SECS - BACKOFF_TTL_SECS);
                 return &self.cached;
             }
             self.last_request = Some(Instant::now());
@@ -106,11 +103,14 @@ impl UsageFetcher {
     }
 
     pub fn invalidate(&mut self) {
-        if let Some(ref mut t) = self.last_request {
-            *t = Instant::now()
-                - std::time::Duration::from_secs(CACHE_TTL_SECS - INVALIDATED_TTL_SECS);
+        if self.last_request.is_some() {
+            self.last_request = backdated(CACHE_TTL_SECS - INVALIDATED_TTL_SECS);
         }
     }
+}
+
+fn backdated(secs: u64) -> Option<Instant> {
+    Instant::now().checked_sub(std::time::Duration::from_secs(secs))
 }
 
 fn fetch_usage() -> UsageData {
