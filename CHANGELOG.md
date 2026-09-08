@@ -12,6 +12,8 @@
 - Registry-only sessions (no transcript yet) appear immediately; terminals opened through the resume picker are matched to their real session id by pid.
 - Notifiers watch only their own transcript.
 - SQLite schema v2 with title, session name, context, compaction, API error, cache write and hidden columns.
+- Transcript statistics are exact for every file size: lines are parsed with a streaming deserializer that skips message bodies, only appended bytes are parsed on refresh, and per-file offsets are checkpointed in SQLite so a restart with 1 GB of transcripts renders in well under a second. Previously files over 2 MB were sampled head and tail only, undercounting tokens and cost by up to 60x.
+- PTY is resized whenever the pane layout or the active session changes; list and quick switcher selection stay on the same row across background refreshes.
 
 ## 0.3.0
 
