@@ -260,7 +260,7 @@ fn render_info_column(f: &mut Frame, session: &Session, area: Rect) {
         kv_line("Project", &session.project_name),
         kv_line("Branch", session.git_branch.as_deref().unwrap_or("-")),
         kv_line("Model", session.model.as_deref().unwrap_or("-")),
-        kv_line("Status", session.status.label()),
+        kv_line("Status", &session.status_text()),
         kv_line(
             "PID",
             &session.pid.map_or("-".to_string(), |p| p.to_string()),

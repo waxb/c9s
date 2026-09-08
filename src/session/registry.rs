@@ -32,6 +32,7 @@ pub struct RegistryEntry {
     pub cwd: Option<String>,
     pub messaging_socket_path: Option<String>,
     pub started_at: Option<u64>,
+    pub waiting_for: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -47,6 +48,8 @@ struct RawEntry {
     messaging_socket_path: Option<String>,
     #[serde(rename = "startedAt")]
     started_at: Option<u64>,
+    #[serde(rename = "waitingFor")]
+    waiting_for: Option<String>,
 }
 
 pub fn parse_entry(text: &str) -> Option<RegistryEntry> {
@@ -60,6 +63,7 @@ pub fn parse_entry(text: &str) -> Option<RegistryEntry> {
         cwd: raw.cwd,
         messaging_socket_path: raw.messaging_socket_path,
         started_at: raw.started_at,
+        waiting_for: raw.waiting_for.filter(|w| !w.is_empty()),
     })
 }
 
@@ -126,6 +130,17 @@ mod tests {
             Some("/tmp/cc-socks/76606.sock")
         );
         assert_eq!(e.started_at, Some(1788857550258));
+        assert_eq!(e.waiting_for, None);
+    }
+
+    #[test]
+    fn test_parse_entry_waiting_for() {
+        let e = parse_entry(
+            r#"{"pid":1,"sessionId":"a","kind":"interactive","status":"waiting","waitingFor":"approve Bash"}"#,
+        )
+        .unwrap();
+        assert_eq!(e.status, RegistryStatus::Waiting);
+        assert_eq!(e.waiting_for.as_deref(), Some("approve Bash"));
     }
 
     #[test]

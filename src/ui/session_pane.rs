@@ -72,9 +72,10 @@ fn row_lines(
                 short_age(s)
             );
             let name = s
-                .session_name
+                .waiting_for
                 .as_deref()
-                .map(|n| format!(" {}", n))
+                .map(|w| format!(" needs {}", w))
+                .or_else(|| s.session_name.as_deref().map(|n| format!(" {}", n)))
                 .unwrap_or_default();
             Line::from(vec![
                 Span::styled("   ", base),

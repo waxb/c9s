@@ -219,6 +219,7 @@ struct Liveness {
     pid_verified: bool,
     status: SessionStatus,
     session_name: Option<String>,
+    waiting_for: Option<String>,
     messaging_socket: Option<String>,
 }
 
@@ -229,6 +230,7 @@ fn resolve_liveness(id: &str, project_cwd: &str, stats: &JsonlStats, live: &Live
             pid_verified: true,
             status: status_from_registry(&entry.status),
             session_name: entry.name.clone(),
+            waiting_for: entry.waiting_for.clone(),
             messaging_socket: entry.messaging_socket_path.clone(),
         };
     }
@@ -241,6 +243,7 @@ fn resolve_liveness(id: &str, project_cwd: &str, stats: &JsonlStats, live: &Live
             None => SessionStatus::Dead,
         },
         session_name: None,
+        waiting_for: None,
         messaging_socket: None,
     }
 }
@@ -275,6 +278,7 @@ fn build_session(
         pid: liveness.pid,
         pid_verified: liveness.pid_verified,
         session_name: liveness.session_name,
+        waiting_for: liveness.waiting_for,
         messaging_socket: liveness.messaging_socket,
         status: liveness.status,
         cwd: PathBuf::from(&project_cwd),
@@ -314,6 +318,7 @@ fn placeholder_session(entry: &RegistryEntry) -> Session {
         pid: Some(entry.pid),
         pid_verified: true,
         session_name: entry.name.clone(),
+        waiting_for: entry.waiting_for.clone(),
         messaging_socket: entry.messaging_socket_path.clone(),
         status: status_from_registry(&entry.status),
         cwd: PathBuf::from(&cwd),
@@ -524,6 +529,7 @@ mod tests {
             cwd: Some("/p".into()),
             messaging_socket_path: Some("/tmp/cc-socks/4242.sock".into()),
             started_at: None,
+            waiting_for: Some("approve Bash".into()),
         };
         let live = live_index(&[("/p", 99)], vec![entry]);
         let s = build_session(&path, stats("a", "/p", Utc::now()), "", &live).unwrap();
@@ -531,6 +537,7 @@ mod tests {
         assert!(s.pid_verified);
         assert_eq!(s.status, SessionStatus::Waiting);
         assert_eq!(s.session_name.as_deref(), Some("proj-1a"));
+        assert_eq!(s.waiting_for.as_deref(), Some("approve Bash"));
         assert_eq!(
             s.messaging_socket.as_deref(),
             Some("/tmp/cc-socks/4242.sock")

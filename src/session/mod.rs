@@ -54,6 +54,7 @@ pub struct Session {
     pub pid: Option<u32>,
     pub pid_verified: bool,
     pub session_name: Option<String>,
+    pub waiting_for: Option<String>,
     pub messaging_socket: Option<String>,
     pub cwd: PathBuf,
     pub project_name: String,
@@ -95,6 +96,13 @@ impl Session {
             + self.cache_write_5m_tokens as f64 * p.cache_write_5m
             + self.cache_write_1h_tokens as f64 * p.cache_write_1h)
             / 1_000_000.0
+    }
+
+    pub fn status_text(&self) -> String {
+        match (&self.status, self.waiting_for.as_deref()) {
+            (SessionStatus::Waiting, Some(detail)) => format!("Waiting: {}", detail),
+            (status, _) => status.label().to_string(),
+        }
     }
 
     pub fn cache_write_tokens(&self) -> u64 {
@@ -175,6 +183,7 @@ pub(crate) mod test_support {
             pid: None,
             pid_verified: false,
             session_name: None,
+            waiting_for: None,
             messaging_socket: None,
             cwd: PathBuf::from("/tmp"),
             project_name: "test".to_string(),
@@ -207,6 +216,7 @@ pub(crate) mod test_support {
 #[cfg(test)]
 mod tests {
     use super::test_support::make_session;
+    use super::SessionStatus;
 
     fn close(a: f64, b: f64) -> bool {
         (a - b).abs() < 1e-6
@@ -265,6 +275,17 @@ mod tests {
         assert_eq!(over.context_percent(), 300);
         over.context_tokens = 5_000_000;
         assert_eq!(over.context_percent(), 999);
+    }
+
+    #[test]
+    fn test_status_text_includes_waiting_detail() {
+        let mut s = make_session("t", "claude-opus-5");
+        s.status = SessionStatus::Waiting;
+        assert_eq!(s.status_text(), "Waiting");
+        s.waiting_for = Some("approve Bash".into());
+        assert_eq!(s.status_text(), "Waiting: approve Bash");
+        s.status = SessionStatus::Idle;
+        assert_eq!(s.status_text(), "Idle");
     }
 
     #[test]

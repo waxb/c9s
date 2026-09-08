@@ -672,6 +672,7 @@ mod tests {
             cwd: None,
             messaging_socket_path: None,
             started_at: None,
+            waiting_for: None,
         };
         m.reconcile_ids(&[entry]);
         assert!(m.is_attached("real-id"));
