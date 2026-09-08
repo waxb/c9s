@@ -108,10 +108,7 @@ fn main() -> Result<()> {
 fn print_usage_log(limit: usize) -> Result<()> {
     let store = store::Store::open()?;
     let samples = store.recent_usage_samples(limit)?;
-    println!(
-        "{:<20} {:>4} {:>4}  {:<5} {:<9} {}",
-        "time", "5h%", "7d%", "event", "session", "context"
-    );
+    println!("time                  5h%  7d%  event session   context");
     for s in samples {
         let time = chrono::DateTime::<chrono::Utc>::from_timestamp_millis(s.ts_ms)
             .map(|t| {
