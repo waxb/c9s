@@ -29,6 +29,9 @@ pub struct RegistryEntry {
     pub name: Option<String>,
     pub status: RegistryStatus,
     pub kind: String,
+    pub cwd: Option<String>,
+    pub messaging_socket_path: Option<String>,
+    pub started_at: Option<u64>,
 }
 
 #[derive(Deserialize)]
@@ -39,6 +42,11 @@ struct RawEntry {
     name: Option<String>,
     status: Option<String>,
     kind: Option<String>,
+    cwd: Option<String>,
+    #[serde(rename = "messagingSocketPath")]
+    messaging_socket_path: Option<String>,
+    #[serde(rename = "startedAt")]
+    started_at: Option<u64>,
 }
 
 pub fn parse_entry(text: &str) -> Option<RegistryEntry> {
@@ -49,6 +57,9 @@ pub fn parse_entry(text: &str) -> Option<RegistryEntry> {
         name: raw.name.filter(|n| !n.is_empty()),
         status: RegistryStatus::parse(raw.status.as_deref().unwrap_or("")),
         kind: raw.kind.unwrap_or_default(),
+        cwd: raw.cwd,
+        messaging_socket_path: raw.messaging_socket_path,
+        started_at: raw.started_at,
     })
 }
 
@@ -109,6 +120,12 @@ mod tests {
         assert_eq!(e.name.as_deref(), Some("proj-c5"));
         assert_eq!(e.status, RegistryStatus::Busy);
         assert_eq!(e.kind, "interactive");
+        assert_eq!(e.cwd.as_deref(), Some("/Users/me/proj"));
+        assert_eq!(
+            e.messaging_socket_path.as_deref(),
+            Some("/tmp/cc-socks/76606.sock")
+        );
+        assert_eq!(e.started_at, Some(1788857550258));
     }
 
     #[test]

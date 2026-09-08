@@ -1,6 +1,7 @@
 use crossterm::event::{Event, KeyCode, KeyEvent, KeyModifiers, MouseEventKind};
 
 use crate::app::ViewMode;
+use crate::config::Keys;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Action {
@@ -51,12 +52,16 @@ pub enum Action {
     SessionFileClose,
     ToggleSideTerminal,
     SideTerminalInput(Vec<u8>),
+    ToggleSessionPane,
+    ToggleExpand,
+    ExpandRow,
+    CollapseRow,
     None,
 }
 
-pub fn handle_event(event: &Event, mode: &ViewMode, side_focused: bool) -> Action {
+pub fn handle_event(event: &Event, mode: &ViewMode, side_focused: bool, keys: &Keys) -> Action {
     match event {
-        Event::Key(key) => handle_key(key, mode, side_focused),
+        Event::Key(key) => handle_key(key, mode, side_focused, keys),
         Event::Mouse(mouse) => handle_mouse(mouse.kind, mode),
         _ => Action::None,
     }
@@ -90,9 +95,12 @@ fn is_ctrl(key: &KeyEvent, c: char) -> bool {
     key.modifiers.contains(KeyModifiers::CONTROL) && key.code == KeyCode::Char(c)
 }
 
-fn handle_key(key: &KeyEvent, mode: &ViewMode, side_focused: bool) -> Action {
+fn handle_key(key: &KeyEvent, mode: &ViewMode, side_focused: bool, keys: &Keys) -> Action {
     if is_ctrl(key, 't') {
         return Action::ToggleSideTerminal;
+    }
+    if keys.session_pane.matches(key) {
+        return Action::ToggleSessionPane;
     }
 
     if side_focused {
@@ -106,6 +114,9 @@ fn handle_key(key: &KeyEvent, mode: &ViewMode, side_focused: bool) -> Action {
         }
         if is_ctrl(key, 'b') {
             return Action::ResumeSessionPicker;
+        }
+        if is_ctrl(key, ' ') {
+            return Action::ToggleQSwitcher;
         }
     }
 
@@ -143,7 +154,9 @@ fn handle_normal_key(key: &KeyEvent) -> Action {
         KeyCode::Char('u') => Action::UnfollowSession,
         KeyCode::Char('x') => Action::KillSession,
         KeyCode::Char('L') => Action::ToggleLog,
-        KeyCode::Char(' ') => Action::ToggleQSwitcher,
+        KeyCode::Char(' ') => Action::ToggleExpand,
+        KeyCode::Char('l') | KeyCode::Right => Action::ExpandRow,
+        KeyCode::Char('h') | KeyCode::Left => Action::CollapseRow,
         KeyCode::Char(c @ '1'..='9') => Action::AttachByIndex(digit_index(c)),
         _ => Action::None,
     }
@@ -158,6 +171,8 @@ fn handle_qswitcher_key(key: &KeyEvent) -> Action {
         KeyCode::Char(c @ '1'..='9') => Action::AttachByIndex(digit_index(c)),
         KeyCode::Char('j') | KeyCode::Down => Action::MoveDown,
         KeyCode::Char('k') | KeyCode::Up => Action::MoveUp,
+        KeyCode::Char('l') | KeyCode::Right => Action::ExpandRow,
+        KeyCode::Char('h') | KeyCode::Left => Action::CollapseRow,
         KeyCode::Enter => Action::AttachSession,
         KeyCode::Esc | KeyCode::Char(' ') | KeyCode::Char('q') => Action::Back,
         _ => Action::None,
@@ -198,6 +213,8 @@ fn handle_terminal_qswitcher_key(key: &KeyEvent) -> Action {
         KeyCode::Char(c @ '1'..='9') => Action::AttachByIndex(digit_index(c)),
         KeyCode::Char('j') | KeyCode::Down => Action::MoveDown,
         KeyCode::Char('k') | KeyCode::Up => Action::MoveUp,
+        KeyCode::Char('l') | KeyCode::Right => Action::ExpandRow,
+        KeyCode::Char('h') | KeyCode::Left => Action::CollapseRow,
         KeyCode::Enter => Action::AttachSession,
         KeyCode::Esc | KeyCode::Char(' ') => Action::Back,
         _ => Action::None,
@@ -351,7 +368,38 @@ mod tests {
         assert_eq!(handle_normal_key(&key(KeyCode::Char('c'))), Action::None);
         assert_eq!(
             handle_normal_key(&key(KeyCode::Char(' '))),
+            Action::ToggleExpand
+        );
+        assert_eq!(handle_normal_key(&key(KeyCode::Right)), Action::ExpandRow);
+        assert_eq!(
+            handle_normal_key(&key(KeyCode::Char('h'))),
+            Action::CollapseRow
+        );
+    }
+
+    #[test]
+    fn test_ctrl_space_opens_quick_switcher_in_list_and_terminal() {
+        let ev = key_with_mod(KeyCode::Char(' '), KeyModifiers::CONTROL);
+        assert_eq!(
+            handle_key(&ev, &ViewMode::List, false, &Keys::default()),
             Action::ToggleQSwitcher
+        );
+        assert_eq!(
+            handle_key(&ev, &ViewMode::Terminal, false, &Keys::default()),
+            Action::TerminalQSwitcher
+        );
+    }
+
+    #[test]
+    fn test_session_pane_key_from_config() {
+        let ev = key_with_mod(KeyCode::Char('5'), KeyModifiers::CONTROL);
+        assert_eq!(
+            handle_key(&ev, &ViewMode::Terminal, false, &Keys::default()),
+            Action::ToggleSessionPane
+        );
+        assert_eq!(
+            handle_key(&ev, &ViewMode::List, true, &Keys::default()),
+            Action::ToggleSessionPane
         );
     }
 
@@ -369,27 +417,53 @@ mod tests {
     #[test]
     fn test_qswitcher_routing() {
         assert_eq!(
-            handle_key(&key(KeyCode::Char(' ')), &ViewMode::QSwitcher, false),
+            handle_key(
+                &key(KeyCode::Char(' ')),
+                &ViewMode::QSwitcher,
+                false,
+                &Keys::default()
+            ),
             Action::Back
         );
         assert_eq!(
-            handle_key(&key(KeyCode::Char('3')), &ViewMode::QSwitcher, false),
+            handle_key(
+                &key(KeyCode::Char('3')),
+                &ViewMode::QSwitcher,
+                false,
+                &Keys::default()
+            ),
             Action::AttachByIndex(2)
         );
         assert_eq!(
-            handle_key(&key(KeyCode::Enter), &ViewMode::QSwitcher, false),
+            handle_key(
+                &key(KeyCode::Enter),
+                &ViewMode::QSwitcher,
+                false,
+                &Keys::default()
+            ),
             Action::AttachSession
+        );
+        assert_eq!(
+            handle_key(
+                &key(KeyCode::Char('l')),
+                &ViewMode::QSwitcher,
+                false,
+                &Keys::default()
+            ),
+            Action::ExpandRow
         );
     }
 
     #[test]
     fn test_terminal_control_keys() {
         let ctrl = KeyModifiers::CONTROL;
+        let keys = Keys::default();
         assert_eq!(
             handle_key(
                 &key_with_mod(KeyCode::Char('d'), ctrl),
                 &ViewMode::Terminal,
-                false
+                false,
+                &keys
             ),
             Action::Detach
         );
@@ -397,7 +471,8 @@ mod tests {
             handle_key(
                 &key_with_mod(KeyCode::Char('n'), ctrl),
                 &ViewMode::Terminal,
-                false
+                false,
+                &keys
             ),
             Action::CycleNextSession
         );
@@ -405,12 +480,13 @@ mod tests {
             handle_key(
                 &key_with_mod(KeyCode::Char('c'), ctrl),
                 &ViewMode::Terminal,
-                false
+                false,
+                &keys
             ),
             Action::TerminalInput(vec![3])
         );
         assert_eq!(
-            handle_key(&key(KeyCode::Char('a')), &ViewMode::Terminal, false),
+            handle_key(&key(KeyCode::Char('a')), &ViewMode::Terminal, false, &keys),
             Action::TerminalInput(b"a".to_vec())
         );
     }
@@ -418,20 +494,25 @@ mod tests {
     #[test]
     fn test_ctrl_c_quits_outside_terminal() {
         let ev = key_with_mod(KeyCode::Char('c'), KeyModifiers::CONTROL);
-        assert_eq!(handle_key(&ev, &ViewMode::List, false), Action::Quit);
-        assert_eq!(handle_key(&ev, &ViewMode::Detail, false), Action::Quit);
+        let keys = Keys::default();
+        assert_eq!(handle_key(&ev, &ViewMode::List, false, &keys), Action::Quit);
+        assert_eq!(
+            handle_key(&ev, &ViewMode::Detail, false, &keys),
+            Action::Quit
+        );
     }
 
     #[test]
     fn test_side_panel_focus_routes_input() {
         let ev = key(KeyCode::Char('l'));
+        let keys = Keys::default();
         assert_eq!(
-            handle_key(&ev, &ViewMode::List, true),
+            handle_key(&ev, &ViewMode::List, true, &keys),
             Action::SideTerminalInput(b"l".to_vec())
         );
         let toggle = key_with_mod(KeyCode::Char('t'), KeyModifiers::CONTROL);
         assert_eq!(
-            handle_key(&toggle, &ViewMode::List, true),
+            handle_key(&toggle, &ViewMode::List, true, &keys),
             Action::ToggleSideTerminal
         );
     }

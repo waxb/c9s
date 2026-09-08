@@ -3,11 +3,13 @@ mod discovery;
 mod jsonl;
 mod manager;
 pub mod pricing;
+pub mod project;
 pub mod registry;
 mod worker;
 
 pub use discovery::{list_session_files, SessionDiscovery, SessionFile};
 pub use manager::SessionManager;
+pub use project::{group_projects, Project};
 pub use worker::DiscoveryWorker;
 
 use chrono::{DateTime, Utc};
@@ -49,6 +51,7 @@ pub struct Session {
     pub pid: Option<u32>,
     pub pid_verified: bool,
     pub session_name: Option<String>,
+    pub messaging_socket: Option<String>,
     pub cwd: PathBuf,
     pub project_name: String,
     pub git_branch: Option<String>,
@@ -145,6 +148,7 @@ impl Session {
             || contains(self.git_branch.as_deref().unwrap_or(""))
             || contains(self.model.as_deref().unwrap_or(""))
             || contains(self.title.as_deref().unwrap_or(""))
+            || contains(self.session_name.as_deref().unwrap_or(""))
             || contains(self.status.label())
     }
 }
@@ -159,6 +163,7 @@ pub(crate) mod test_support {
             pid: None,
             pid_verified: false,
             session_name: None,
+            messaging_socket: None,
             cwd: PathBuf::from("/tmp"),
             project_name: "test".to_string(),
             git_branch: None,

@@ -22,4 +22,4 @@ pub use session_detail::render_session_detail;
 pub use session_file_picker::render_session_file_picker;
 pub use session_list::render_session_list;
 pub use side_panel::{render_side_panel, side_pty_size, split_with_side_panel};
-pub use terminal_view::{pty_size, render_terminal};
+pub use terminal_view::{pty_size, render_terminal, TerminalViewData};

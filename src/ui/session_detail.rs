@@ -266,6 +266,7 @@ fn render_info_column(f: &mut Frame, session: &Session, area: Rect) {
             &session.pid.map_or("-".to_string(), |p| p.to_string()),
         ),
         kv_line("Version", session.claude_version.as_deref().unwrap_or("-")),
+        kv_line("Socket", session.messaging_socket.as_deref().unwrap_or("-")),
         kv_line("Perm", session.permission_mode.as_deref().unwrap_or("-")),
     ];
 

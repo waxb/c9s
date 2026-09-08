@@ -1,13 +1,17 @@
 use ratatui::layout::{Constraint, Layout, Rect};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
-use ratatui::widgets::{Block, Borders, Cell, Paragraph, Row, Table, TableState};
+use ratatui::widgets::{Block, Borders, Cell, Paragraph, Row as TableRow, Table, TableState};
 use ratatui::Frame;
 
-use crate::app::{App, CiStatus, ViewMode};
-use crate::session::{Session, SessionStatus};
+use crate::app::{App, CiStatus, Row, ViewMode};
+use crate::session::{Project, Session, SessionStatus};
 use crate::ui::theme::Theme;
 use crate::ui::usage_panel::render_usage_panel;
+
+const CONTEXT_YELLOW_PERCENT: u16 = 70;
+const CONTEXT_RED_PERCENT: u16 = 85;
+const TITLE_MAX: usize = 48;
 
 pub fn render_session_list(f: &mut Frame, app: &App, area: Rect) {
     let show_command_bar = app.is_filtering() || app.attached_session_id().is_some();
@@ -39,9 +43,15 @@ fn render_header(f: &mut Frame, app: &App, area: Rect) {
         .iter()
         .filter(|s| s.status != SessionStatus::Dead)
         .count();
+    let project_count = app
+        .rows()
+        .iter()
+        .filter(|r| matches!(r, Row::Project(_)))
+        .count();
 
     let title = format!(
-        " c9s - Claude Code Sessions [{}/{}]",
+        " c9s - {} projects, {} live / {} sessions",
+        project_count,
         live_count,
         sessions.len()
     );
@@ -76,10 +86,8 @@ fn render_command_bar(f: &mut Frame, app: &App, area: Rect) {
 
     if let Some(sid) = app.attached_session_id() {
         let attached_name = app
-            .all_sessions()
-            .iter()
-            .find(|s| s.id == sid)
-            .map(|s| s.project_name.clone())
+            .find_session(sid)
+            .map(|s| format!("{}: {}", s.project_name, session_title(s)))
             .unwrap_or_else(|| sid[..8.min(sid.len())].to_string());
 
         spans.push(Span::styled(" >> ", Theme::attached_marker()));
@@ -105,37 +113,100 @@ fn ci_cell(status: Option<&CiStatus>) -> Cell<'static> {
     Cell::from(symbol).style(style)
 }
 
-fn session_row<'a>(app: &App, session: &'a Session) -> Row<'a> {
-    let is_attached = app.attached_session_id() == Some(session.id.as_str());
-    let has_bell = app.has_bell(&session.id);
-
+fn marker_cell(is_attached: bool, has_bell: bool) -> Cell<'static> {
     let marker = match (is_attached, has_bell) {
         (true, true) => ">>*",
         (true, false) => ">>",
         (false, true) => " *",
         (false, false) => "",
     };
-    let marker_style = if has_bell {
+    let style = if has_bell {
         Theme::bell()
     } else {
         Theme::attached_marker()
     };
+    Cell::from(marker).style(style)
+}
+
+fn project_row(app: &App, project: &Project) -> TableRow<'static> {
+    let visible = app.visible_sessions(project);
+    let current = app.current_visible_session(project);
+    let is_attached = visible
+        .iter()
+        .any(|s| app.terminal_manager().is_attached(&s.id));
+    let has_bell = visible.iter().any(|s| app.has_bell(&s.id));
+    let marker = if app.is_expanded(project) { "v" } else { ">" };
+    let label = format!(
+        "{} {}  [{} live / {}]",
+        marker,
+        project.name,
+        project.live_count(),
+        visible.len()
+    );
+    let name_style = if has_bell {
+        Theme::bell()
+    } else {
+        Theme::project_row()
+    };
+    let (branch, model, status, ctx) = match current {
+        Some(s) => (
+            s.git_branch.clone().unwrap_or_else(|| "-".to_string()),
+            s.model
+                .as_deref()
+                .map(shorten_model)
+                .unwrap_or_else(|| "-".to_string()),
+            Cell::from(s.status.label().to_string()).style(Theme::status(&s.status)),
+            Cell::from(format!("{}%", s.context_percent())).style(context_style(s)),
+        ),
+        None => (
+            "-".to_string(),
+            "-".to_string(),
+            Cell::from("-"),
+            Cell::from("-"),
+        ),
+    };
+    let last = visible
+        .iter()
+        .max_by_key(|s| s.last_activity)
+        .map(|s| s.last_activity_display())
+        .unwrap_or_default();
+
+    TableRow::new(vec![
+        marker_cell(is_attached, has_bell),
+        ci_cell(current.and_then(|s| app.ci_statuses.get(&s.id))),
+        Cell::from(label).style(name_style),
+        Cell::from(branch),
+        Cell::from(model),
+        status,
+        ctx,
+        Cell::from(format_count(project.total_messages())),
+        Cell::from(format_tokens(project.total_input_tokens())),
+        Cell::from(format_tokens(project.total_output_tokens())),
+        Cell::from(format!("${:.2}", project.total_cost())).style(Theme::cost()),
+        Cell::from(last),
+    ])
+}
+
+fn session_row(app: &App, project: &Project, session: &Session) -> TableRow<'static> {
+    let is_attached = app.terminal_manager().is_attached(&session.id);
+    let has_bell = app.has_bell(&session.id);
+    let is_current = project.current_session().map(|s| s.id.as_str()) == Some(session.id.as_str());
+    let prefix = if is_current { "  * " } else { "    " };
     let name_style = if has_bell {
         Theme::bell()
     } else {
         Style::default()
     };
-
     let model_short = session
         .model
         .as_deref()
         .map(shorten_model)
         .unwrap_or_else(|| "-".to_string());
 
-    let cells = vec![
-        Cell::from(marker).style(marker_style),
+    TableRow::new(vec![
+        marker_cell(is_attached, has_bell),
         ci_cell(app.ci_statuses.get(&session.id)),
-        Cell::from(project_label(session)).style(name_style),
+        Cell::from(format!("{}{}", prefix, session_title(session))).style(name_style),
         Cell::from(
             session
                 .git_branch
@@ -143,7 +214,7 @@ fn session_row<'a>(app: &App, session: &'a Session) -> Row<'a> {
                 .unwrap_or_else(|| "-".to_string()),
         ),
         Cell::from(model_short),
-        Cell::from(session.status.label()).style(Theme::status(&session.status)),
+        Cell::from(session.status.label().to_string()).style(Theme::status(&session.status)),
         Cell::from(format!("{}%", session.context_percent())).style(context_style(session)),
         Cell::from(format_count(session.message_count as u64)),
         Cell::from(format_tokens(
@@ -152,15 +223,14 @@ fn session_row<'a>(app: &App, session: &'a Session) -> Row<'a> {
         Cell::from(format_tokens(session.output_tokens)),
         Cell::from(format!("${:.2}", session.estimated_cost_usd())).style(Theme::cost()),
         Cell::from(session.last_activity_display()),
-    ];
-    Row::new(cells)
+    ])
 }
 
 fn render_table(f: &mut Frame, app: &App, area: Rect) {
     let header_cells = [
         "",
         "CI",
-        "Project",
+        "Project / Session",
         "Branch",
         "Model",
         "Status",
@@ -174,21 +244,27 @@ fn render_table(f: &mut Frame, app: &App, area: Rect) {
     .iter()
     .map(|h| Cell::from(*h).style(Theme::header()));
 
-    let header = Row::new(header_cells).height(1);
+    let header = TableRow::new(header_cells).height(1);
 
-    let rows: Vec<Row> = app
-        .filtered_sessions()
-        .into_iter()
-        .map(|s| session_row(app, s))
+    let rows: Vec<TableRow> = app
+        .rows()
+        .iter()
+        .filter_map(|row| {
+            let project = app.project(row.project_index())?;
+            Some(match row {
+                Row::Project(_) => project_row(app, project),
+                Row::Session(_, s) => session_row(app, project, project.sessions.get(*s)?),
+            })
+        })
         .collect();
 
     let widths = [
         Constraint::Length(3),
         Constraint::Length(2),
-        Constraint::Min(20),
+        Constraint::Min(24),
         Constraint::Length(15),
-        Constraint::Length(10),
-        Constraint::Length(10),
+        Constraint::Length(8),
+        Constraint::Length(8),
         Constraint::Length(4),
         Constraint::Length(6),
         Constraint::Length(10),
@@ -223,8 +299,7 @@ fn render_footer(f: &mut Frame, app: &App, area: Rect) {
         total_cost,
         format_tokens(total_tokens)
     );
-    let keys =
-        "  a:attach  C-b:resume  d:detail  x:kill  u:unfollow  n:new  /:filter  s:sort  ?:help";
+    let keys = "  Enter:attach  Space:expand  n:new  x:discard  u:hide  U:unhide  d:detail  /:filter  s:sort  ?:help";
 
     let footer = Line::from(vec![
         Span::styled(stats, Theme::cost()),
@@ -233,17 +308,28 @@ fn render_footer(f: &mut Frame, app: &App, area: Rect) {
     f.render_widget(Paragraph::new(footer), area);
 }
 
-fn project_label(session: &Session) -> String {
-    match session.title.as_deref() {
-        Some(title) if !title.is_empty() => format!("{}: {}", session.project_name, title),
-        _ => session.project_name.clone(),
+pub(crate) fn session_title(session: &Session) -> String {
+    let raw = session
+        .title
+        .as_deref()
+        .filter(|t| !t.is_empty())
+        .or(session.last_prompt.as_deref().filter(|t| !t.is_empty()))
+        .map(|t| t.lines().next().unwrap_or("").to_string())
+        .unwrap_or_else(|| session.id[..8.min(session.id.len())].to_string());
+    truncate_chars(&raw, TITLE_MAX)
+}
+
+pub(crate) fn truncate_chars(text: &str, max: usize) -> String {
+    let chars: Vec<char> = text.chars().collect();
+    if chars.len() <= max {
+        text.to_string()
+    } else {
+        let head: String = chars[..max.saturating_sub(1)].iter().collect();
+        format!("{}~", head)
     }
 }
 
-const CONTEXT_YELLOW_PERCENT: u16 = 70;
-const CONTEXT_RED_PERCENT: u16 = 85;
-
-fn context_style(session: &Session) -> Style {
+pub(crate) fn context_style(session: &Session) -> Style {
     let pct = session.context_percent();
     let color = if pct >= CONTEXT_RED_PERCENT {
         Color::Red
@@ -255,7 +341,7 @@ fn context_style(session: &Session) -> Style {
     Style::default().fg(color)
 }
 
-fn shorten_model(model: &str) -> String {
+pub(crate) fn shorten_model(model: &str) -> String {
     for family in ["fable", "mythos", "opus", "sonnet", "haiku"] {
         if model.contains(family) {
             return family.to_string();
@@ -274,7 +360,7 @@ pub(crate) fn format_tokens(n: u64) -> String {
     }
 }
 
-fn format_count(n: u64) -> String {
+pub(crate) fn format_count(n: u64) -> String {
     if n >= 1_000 {
         format!("{:.1}K", n as f64 / 1_000.0)
     } else {
@@ -285,6 +371,7 @@ fn format_count(n: u64) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::session::test_support::make_session;
 
     #[test]
     fn test_shorten_model() {
@@ -299,5 +386,17 @@ mod tests {
         assert_eq!(format_tokens(999), "999");
         assert_eq!(format_tokens(1_500), "1.5K");
         assert_eq!(format_tokens(2_000_000), "2.0M");
+    }
+
+    #[test]
+    fn test_session_title_prefers_title_then_prompt_then_id() {
+        let mut s = make_session("abcdef1234", "claude-opus-5");
+        assert_eq!(session_title(&s), "abcdef12");
+        s.last_prompt = Some("do the thing\nsecond line".into());
+        assert_eq!(session_title(&s), "do the thing");
+        s.title = Some("Fix login".into());
+        assert_eq!(session_title(&s), "Fix login");
+        s.title = Some("x".repeat(60));
+        assert_eq!(session_title(&s).chars().count(), TITLE_MAX);
     }
 }

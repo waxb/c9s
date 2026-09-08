@@ -24,15 +24,22 @@ pub fn pty_size(area: Rect, side_panel_open: bool) -> (u16, u16) {
     )
 }
 
-pub fn render_terminal(
-    f: &mut Frame,
-    screen: &vt100::Screen,
-    tabs: &[TabEntry],
-    exited: bool,
-    scrolled: bool,
-    usage: &UsageData,
-    area: Rect,
-) {
+pub struct TerminalViewData<'a> {
+    pub tabs: &'a [TabEntry],
+    pub exited: bool,
+    pub scrolled: bool,
+    pub usage: &'a UsageData,
+    pub pane_key: &'a str,
+}
+
+pub fn render_terminal(f: &mut Frame, screen: &vt100::Screen, data: &TerminalViewData, area: Rect) {
+    let TerminalViewData {
+        tabs,
+        exited,
+        scrolled,
+        usage,
+        pane_key,
+    } = *data;
     let chunks = Layout::vertical([
         Constraint::Length(1),
         Constraint::Min(1),
@@ -73,8 +80,8 @@ pub fn render_terminal(
             scroll_indicator,
             Span::styled(
                 format!(
-                    "  C-d:list  C-Space:switch  C-n/p:cycle  C-j/k:scroll  C-t:shell  {}",
-                    project
+                    "  C-d:list  C-Space:switch  C-n/p:cycle  {}:sessions  C-j/k:scroll  C-t:shell  {}",
+                    pane_key, project
                 ),
                 Theme::footer(),
             ),

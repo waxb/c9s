@@ -1,4 +1,5 @@
 mod app;
+mod config;
 mod input;
 mod log;
 mod session;
@@ -190,7 +191,12 @@ fn handle_events(terminal: &Term, app: &mut App) -> Result<bool> {
             needs_draw = true;
         }
 
-        let action = handle_event(&ev, app.view_mode(), app.is_side_panel_focused());
+        let action = handle_event(
+            &ev,
+            app.view_mode(),
+            app.is_side_panel_focused(),
+            &app.config.keys,
+        );
         let is_noop = matches!(
             action,
             Action::None | Action::TerminalInput(_) | Action::SideTerminalInput(_)
@@ -264,7 +270,7 @@ fn draw_frame(f: &mut Frame, app: &App) {
             let name = app
                 .confirm_kill_session_id
                 .as_ref()
-                .and_then(|id| app.all_sessions().iter().find(|s| &s.id == id))
+                .and_then(|id| app.find_session(id))
                 .map(|s| s.project_name.clone())
                 .unwrap_or_else(|| "unknown".to_string());
             ui::render_confirm_kill(f, &name, area);
@@ -308,7 +314,15 @@ fn render_terminal_view(app: &App, f: &mut Frame, area: Rect) {
         let scrolled = screen.scrollback() > 0;
         let exited = term.is_exited();
         let tabs = app.terminal_manager().tab_info();
-        ui::render_terminal(f, screen, &tabs, exited, scrolled, app.usage(), area);
+        let pane_key = app.config.keys.session_pane.label();
+        let data = ui::TerminalViewData {
+            tabs: &tabs,
+            exited,
+            scrolled,
+            usage: app.usage(),
+            pane_key: &pane_key,
+        };
+        ui::render_terminal(f, screen, &data, area);
     }
 }
 
@@ -345,12 +359,7 @@ fn process_action(app: &mut App, action: Action, terminal: &Term) -> Result<()> 
         }
         Action::ConfirmKill => {
             if let Some(session_id) = app.confirm_kill_session_id.take() {
-                if let Some(pid) = app
-                    .all_sessions()
-                    .iter()
-                    .find(|s| s.id == session_id)
-                    .and_then(|s| s.takeover_pid())
-                {
+                if let Some(pid) = app.find_session(&session_id).and_then(|s| s.takeover_pid()) {
                     unsafe {
                         libc::kill(pid as i32, libc::SIGTERM);
                     }
@@ -379,9 +388,19 @@ fn process_action(app: &mut App, action: Action, terminal: &Term) -> Result<()> 
         }
         Action::UnfollowSession => {
             if let Some(id) = app.selected_session().map(|s| s.id.clone()) {
-                app.unfollow_session(&id);
+                app.hide_session(&id);
             }
         }
+        Action::ToggleExpand => app.toggle_expand_selected(),
+        Action::ExpandRow => match app.view_mode() {
+            ViewMode::QSwitcher | ViewMode::TerminalQSwitcher => app.quick_switch_expand(),
+            _ => app.expand_selected(),
+        },
+        Action::CollapseRow => match app.view_mode() {
+            ViewMode::QSwitcher | ViewMode::TerminalQSwitcher => app.quick_switch_collapse(),
+            _ => app.collapse_selected(),
+        },
+        Action::ToggleSessionPane => {}
         Action::ResumeSessionPicker => {
             if let Some(cwd) = app.selected_session().map(|s| s.cwd.clone()) {
                 let (rows, cols) = pty_dims(terminal, app)?;
@@ -559,10 +578,7 @@ fn submit_new_session(app: &mut App, terminal: &Term) -> Result<()> {
         app.set_view_mode(ViewMode::List);
         return Ok(());
     }
-    let expanded = match (path.strip_prefix('~'), dirs::home_dir()) {
-        (Some(rest), Some(home)) => home.to_string_lossy().to_string() + rest,
-        _ => path,
-    };
+    let expanded = app::expand_home(&path);
     let cwd = std::fs::canonicalize(&expanded).unwrap_or_else(|_| PathBuf::from(&expanded));
     if cwd.is_dir() {
         let (rows, cols) = pty_dims(terminal, app)?;
@@ -575,27 +591,37 @@ fn submit_new_session(app: &mut App, terminal: &Term) -> Result<()> {
     Ok(())
 }
 
+fn target_of(session: &session::Session) -> (String, String, PathBuf, Option<u32>) {
+    (
+        session.id.clone(),
+        session.project_name.clone(),
+        session.cwd.clone(),
+        session.takeover_pid(),
+    )
+}
+
+fn in_quick_switch(app: &App) -> bool {
+    matches!(
+        app.view_mode(),
+        ViewMode::QSwitcher | ViewMode::TerminalQSwitcher
+    )
+}
+
 fn attach_selected(app: &mut App, terminal: &Term) -> Result<()> {
-    let target = app.selected_session().map(|s| {
-        (
-            s.id.clone(),
-            s.project_name.clone(),
-            s.cwd.clone(),
-            s.takeover_pid(),
-        )
-    });
+    let target = if in_quick_switch(app) {
+        app.quick_switch_selected_session().map(target_of)
+    } else {
+        app.selected_session().map(target_of)
+    };
     attach_target(app, target, terminal)
 }
 
 fn attach_by_index(app: &mut App, idx: usize, terminal: &Term) -> Result<()> {
-    let target = app.filtered_sessions().get(idx).map(|s| {
-        (
-            s.id.clone(),
-            s.project_name.clone(),
-            s.cwd.clone(),
-            s.takeover_pid(),
-        )
-    });
+    let target = if in_quick_switch(app) {
+        app.quick_switch_nth_project_session(idx).map(target_of)
+    } else {
+        app.nth_project_session(idx).map(target_of)
+    };
     attach_target(app, target, terminal)
 }
 
@@ -610,6 +636,7 @@ fn attach_target(
     let (rows, cols) = pty_dims(terminal, app)?;
     app.terminal_manager_mut()
         .attach(&id, &name, &cwd, pid, rows, cols)?;
+    app.set_project_current(&cwd, &id);
     app.set_view_mode(ViewMode::Terminal);
     Ok(())
 }

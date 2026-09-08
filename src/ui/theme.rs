@@ -84,6 +84,12 @@ impl Theme {
         Style::default().fg(Color::Cyan)
     }
 
+    pub fn project_row() -> Style {
+        Style::default()
+            .fg(Color::White)
+            .add_modifier(Modifier::BOLD)
+    }
+
     pub fn bell() -> Style {
         Style::default()
             .fg(Color::Yellow)

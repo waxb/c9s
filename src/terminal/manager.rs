@@ -217,6 +217,10 @@ impl TerminalManager {
             .collect()
     }
 
+    pub fn is_attached(&self, session_id: &str) -> bool {
+        self.terminals.contains_key(session_id)
+    }
+
     pub fn has_bell_for(&self, session_id: &str) -> bool {
         self.terminals
             .get(session_id)

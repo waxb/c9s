@@ -73,7 +73,8 @@ impl SessionDiscovery {
         let live = self.live_index()?;
 
         let projects_dir = self.claude_dir.join("projects");
-        let mut seen: HashMap<String, Session> = HashMap::new();
+        let mut sessions: Vec<Session> = Vec::new();
+        let mut seen_ids: HashSet<String> = HashSet::new();
 
         for jf_path in list_session_jsonl_files(&projects_dir) {
             let fallback_cwd = jf_path
@@ -88,16 +89,17 @@ impl SessionDiscovery {
             let Some(session) = build_session(&jf_path, stats, &fallback_cwd, &live) else {
                 continue;
             };
-            let key = session.cwd.to_string_lossy().to_string();
-            let replace = seen
-                .get(&key)
-                .is_none_or(|existing| prefer_over(&session, existing));
-            if replace {
-                seen.insert(key, session);
+            if seen_ids.insert(session.id.clone()) {
+                sessions.push(session);
             }
         }
 
-        let mut sessions: Vec<Session> = seen.into_values().collect();
+        for entry in live.by_session.values() {
+            if !seen_ids.contains(&entry.session_id) {
+                sessions.push(placeholder_session(entry));
+            }
+        }
+
         sessions.sort_by_key(|s| std::cmp::Reverse(s.last_activity));
         Ok(sessions)
     }
@@ -237,6 +239,7 @@ struct Liveness {
     pid_verified: bool,
     status: SessionStatus,
     session_name: Option<String>,
+    messaging_socket: Option<String>,
 }
 
 fn resolve_liveness(id: &str, project_cwd: &str, stats: &JsonlStats, live: &LiveIndex) -> Liveness {
@@ -246,6 +249,7 @@ fn resolve_liveness(id: &str, project_cwd: &str, stats: &JsonlStats, live: &Live
             pid_verified: true,
             status: status_from_registry(&entry.status),
             session_name: entry.name.clone(),
+            messaging_socket: entry.messaging_socket_path.clone(),
         };
     }
     let pid = live.by_cwd.get(project_cwd).copied();
@@ -257,6 +261,7 @@ fn resolve_liveness(id: &str, project_cwd: &str, stats: &JsonlStats, live: &Live
             None => SessionStatus::Dead,
         },
         session_name: None,
+        messaging_socket: None,
     }
 }
 
@@ -290,6 +295,7 @@ fn build_session(
         pid: liveness.pid,
         pid_verified: liveness.pid_verified,
         session_name: liveness.session_name,
+        messaging_socket: liveness.messaging_socket,
         status: liveness.status,
         cwd: PathBuf::from(&project_cwd),
         project_name: extract_project_name(&project_cwd),
@@ -317,6 +323,45 @@ fn build_session(
     })
 }
 
+fn placeholder_session(entry: &RegistryEntry) -> Session {
+    let cwd = entry.cwd.clone().unwrap_or_default();
+    let started = entry
+        .started_at
+        .and_then(|ms| DateTime::<Utc>::from_timestamp_millis(ms as i64))
+        .unwrap_or_else(Utc::now);
+    Session {
+        id: entry.session_id.clone(),
+        pid: Some(entry.pid),
+        pid_verified: true,
+        session_name: entry.name.clone(),
+        messaging_socket: entry.messaging_socket_path.clone(),
+        status: status_from_registry(&entry.status),
+        cwd: PathBuf::from(&cwd),
+        project_name: extract_project_name(&cwd),
+        git_branch: None,
+        model: None,
+        started_at: started,
+        last_activity: started,
+        input_tokens: 0,
+        output_tokens: 0,
+        cache_read_tokens: 0,
+        cache_write_5m_tokens: 0,
+        cache_write_1h_tokens: 0,
+        context_tokens: 0,
+        message_count: 0,
+        tool_call_count: 0,
+        claude_version: None,
+        permission_mode: None,
+        plan_slugs: Vec::new(),
+        compaction_count: 0,
+        hook_run_count: 0,
+        hook_error_count: 0,
+        api_error_count: 0,
+        title: None,
+        last_prompt: None,
+    }
+}
+
 fn infer_live_status(stats: &JsonlStats, now: DateTime<Utc>) -> SessionStatus {
     let hung = stats.last_timestamp.is_some_and(|ts| {
         now.signed_duration_since(ts) > chrono::Duration::minutes(HUNG_THRESHOLD_MINUTES)
@@ -331,16 +376,6 @@ fn infer_live_status(stats: &JsonlStats, now: DateTime<Utc>) -> SessionStatus {
         (Some("user"), _) => SessionStatus::Thinking,
         (Some("assistant"), Some("end_turn")) => SessionStatus::Idle,
         _ => SessionStatus::Active,
-    }
-}
-
-fn prefer_over(candidate: &Session, existing: &Session) -> bool {
-    let candidate_live = candidate.status != SessionStatus::Dead;
-    let existing_live = existing.status != SessionStatus::Dead;
-    match (candidate_live, existing_live) {
-        (true, false) => true,
-        (false, true) => false,
-        _ => candidate.last_activity > existing.last_activity,
     }
 }
 
@@ -506,6 +541,9 @@ mod tests {
             name: Some("proj-1a".into()),
             status: RegistryStatus::Waiting,
             kind: "interactive".into(),
+            cwd: Some("/p".into()),
+            messaging_socket_path: Some("/tmp/cc-socks/4242.sock".into()),
+            started_at: None,
         };
         let live = live_index(&[("/p", 99)], vec![entry]);
         let s = build_session(&path, stats("a", "/p", Utc::now()), "", &live).unwrap();
@@ -513,31 +551,15 @@ mod tests {
         assert!(s.pid_verified);
         assert_eq!(s.status, SessionStatus::Waiting);
         assert_eq!(s.session_name.as_deref(), Some("proj-1a"));
+        assert_eq!(
+            s.messaging_socket.as_deref(),
+            Some("/tmp/cc-socks/4242.sock")
+        );
 
         let other = build_session(&path, stats("b", "/p", Utc::now()), "", &live).unwrap();
         assert_eq!(other.pid, Some(99));
         assert!(!other.pid_verified);
         assert_eq!(other.takeover_pid(), None);
-    }
-
-    #[test]
-    fn test_prefer_live_session_over_newer_dead_one() {
-        let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("a.jsonl");
-        std::fs::write(&path, "").unwrap();
-        let live_cwds = live_index(&[("/p", 42)], Vec::new());
-        let nobody = live_index(&[], Vec::new());
-
-        let old_live = build_session(
-            &path,
-            stats("a", "/p", Utc::now() - chrono::Duration::hours(2)),
-            "",
-            &live_cwds,
-        )
-        .unwrap();
-        let new_dead = build_session(&path, stats("b", "/p", Utc::now()), "", &nobody).unwrap();
-        assert!(prefer_over(&old_live, &new_dead));
-        assert!(!prefer_over(&new_dead, &old_live));
     }
 
     #[test]
@@ -562,8 +584,36 @@ mod tests {
             ),
         )
         .unwrap();
+        std::fs::write(
+            project_dir.join("s2.jsonl"),
+            r#"{"sessionId":"s2","cwd":"/tmp/proj","type":"user","timestamp":"2025-12-01T00:00:00Z"}"#,
+        )
+        .unwrap();
+        std::fs::write(
+            sessions_dir.join("2.json"),
+            format!(
+                r#"{{"pid":{},"sessionId":"fresh","cwd":"/tmp/other","kind":"interactive","status":"busy","name":"other-bb","startedAt":1700000000000}}"#,
+                std::process::id()
+            ),
+        )
+        .unwrap();
         let mut discovery = SessionDiscovery::with_dirs(home.path(), &sessions_dir);
         let sessions = discovery.discover_all().unwrap();
+        assert_eq!(
+            sessions.len(),
+            3,
+            "both transcripts plus the registry-only session"
+        );
+        assert_eq!(sessions[0].id, "s1");
+        let fresh = sessions
+            .iter()
+            .find(|s| s.id == "fresh")
+            .expect("placeholder");
+        assert_eq!(fresh.cwd, PathBuf::from("/tmp/other"));
+        assert_eq!(fresh.session_name.as_deref(), Some("other-bb"));
+        assert_eq!(fresh.status, SessionStatus::Active);
+        assert!(fresh.pid_verified);
+        assert_eq!(fresh.started_at.timestamp_millis(), 1700000000000);
         let s = sessions.iter().find(|s| s.id == "s1").expect("s1 found");
         assert_eq!(s.cwd, PathBuf::from("/tmp/proj"));
         assert_eq!(s.title.as_deref(), Some("Fix bug"));
