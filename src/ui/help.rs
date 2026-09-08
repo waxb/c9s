@@ -6,39 +6,42 @@ use ratatui::Frame;
 use crate::ui::theme::Theme;
 
 const BINDINGS: &[(&str, &str)] = &[
-    ("j / Down", "Move down"),
-    ("k / Up", "Move up"),
-    ("g", "Jump to top"),
-    ("G", "Jump to bottom"),
-    ("d", "Session detail"),
-    ("f", "Session files (in detail)"),
-    ("a / Enter", "Attach (open terminal)"),
-    ("1-9", "Attach to session by #"),
-    ("Space", "Quick switcher"),
-    ("n", "New session (enter path)"),
+    ("j / k", "Move down / up"),
+    ("g / G", "Jump to top / bottom"),
+    ("Space, l / h", "Expand / collapse project"),
+    ("Enter / a", "Attach (project row: current session)"),
+    ("1-9", "Attach Nth project's current session"),
+    ("Ctrl+Space", "Quick switcher (l expands a project)"),
+    ("n", "New session (path, then name)"),
+    ("F", "Fork selected session"),
+    ("x", "Discard session (terminate + hide)"),
+    ("u / U", "Hide session / unhide dialog"),
     ("Ctrl+b", "Resume picker for selected project"),
-    ("x", "Kill selected session"),
-    ("u", "Unfollow (hide) session"),
+    ("d", "Session detail (f: transcript picker)"),
     ("/", "Filter sessions"),
     ("s", "Cycle sort column"),
     ("r", "Refresh session list"),
     ("L", "Toggle log panel"),
     ("Esc", "Back / clear filter"),
     ("q", "Quit"),
-    ("Ctrl+c", "Force quit"),
-    ("Ctrl+t", "Toggle side shell panel"),
+    ("Ctrl+t", "Toggle side shell pane"),
     ("?", "Toggle this help"),
     ("", ""),
     ("In terminal", ""),
     ("Ctrl+d", "Detach (back to list)"),
     ("Ctrl+Space", "Quick switcher"),
-    ("Ctrl+n / Ctrl+p", "Cycle next / prev session"),
-    ("Ctrl+K / Ctrl+J", "Scroll history up / down"),
-    ("Ctrl+t", "Toggle side shell panel"),
+    ("Ctrl+n / Ctrl+p", "Next / prev project tab"),
+    ("Ctrl+]", "Toggle session pane (configurable)"),
+    ("Ctrl+k / Ctrl+j", "Scroll history up / down"),
+    ("", ""),
+    ("Session pane", ""),
+    ("Enter / 1-9", "Switch to session"),
+    ("n / f / x / r", "New / fork / discard / rename"),
+    ("m / M", "Message session / coordinate with it"),
 ];
 
 pub fn render_help(f: &mut Frame, area: Rect) {
-    let popup_width = 52;
+    let popup_width = 60;
     let popup_height = (BINDINGS.len() as u16) + 4;
 
     let popup_area = centered_rect(popup_width, popup_height, area);
@@ -54,7 +57,7 @@ pub fn render_help(f: &mut Frame, area: Rect) {
                 Line::from(Span::styled(format!("  -- {} --", key), Theme::footer()))
             } else {
                 Line::from(vec![
-                    Span::styled(format!("  {:<16}", key), Theme::help_key()),
+                    Span::styled(format!("  {:<18}", key), Theme::help_key()),
                     Span::styled(*desc, Theme::help_desc()),
                 ])
             }
