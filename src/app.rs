@@ -72,9 +72,10 @@ impl SortColumn {
 fn status_rank(status: &SessionStatus) -> u8 {
     match status {
         SessionStatus::Thinking => 0,
-        SessionStatus::Active => 1,
-        SessionStatus::Idle => 2,
-        SessionStatus::Dead => 3,
+        SessionStatus::Waiting => 1,
+        SessionStatus::Active => 2,
+        SessionStatus::Idle => 3,
+        SessionStatus::Dead => 4,
     }
 }
 

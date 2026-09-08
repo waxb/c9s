@@ -23,6 +23,7 @@ impl Theme {
             SessionStatus::Active => Color::Green,
             SessionStatus::Idle => Color::Yellow,
             SessionStatus::Thinking => Color::Magenta,
+            SessionStatus::Waiting => Color::Yellow,
             SessionStatus::Dead => Color::DarkGray,
         }
     }
@@ -30,7 +31,7 @@ impl Theme {
     pub fn status(status: &SessionStatus) -> Style {
         let style = Style::default().fg(Self::status_color(status));
         match status {
-            SessionStatus::Thinking => style.add_modifier(Modifier::BOLD),
+            SessionStatus::Thinking | SessionStatus::Waiting => style.add_modifier(Modifier::BOLD),
             _ => style,
         }
     }

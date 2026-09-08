@@ -532,13 +532,19 @@ fn select_session_file(app: &mut App, terminal: &Term) -> Result<()> {
         .session_files
         .get(app.session_file_cursor)
         .map(|f| f.session_id.clone());
-    let selected = app
-        .selected_session()
-        .map(|s| (s.project_name.clone(), s.cwd.clone(), s.pid));
-    if let (Some(session_id), Some((name, cwd, pid))) = (picked, selected) {
+    let selected = app.selected_session().map(|s| {
+        (
+            s.id.clone(),
+            s.project_name.clone(),
+            s.cwd.clone(),
+            s.takeover_pid(),
+        )
+    });
+    if let (Some(session_id), Some((selected_id, name, cwd, pid))) = (picked, selected) {
+        let takeover = pid.filter(|_| selected_id == session_id);
         let (rows, cols) = pty_dims(terminal)?;
         app.terminal_manager_mut()
-            .attach(&session_id, &name, &cwd, pid, rows, cols)?;
+            .attach(&session_id, &name, &cwd, takeover, rows, cols)?;
         app.set_view_mode(ViewMode::Terminal);
     }
     app.session_files.clear();
@@ -569,17 +575,26 @@ fn submit_new_session(app: &mut App, terminal: &Term) -> Result<()> {
 }
 
 fn attach_selected(app: &mut App, terminal: &Term) -> Result<()> {
-    let target = app
-        .selected_session()
-        .map(|s| (s.id.clone(), s.project_name.clone(), s.cwd.clone(), s.pid));
+    let target = app.selected_session().map(|s| {
+        (
+            s.id.clone(),
+            s.project_name.clone(),
+            s.cwd.clone(),
+            s.takeover_pid(),
+        )
+    });
     attach_target(app, target, terminal)
 }
 
 fn attach_by_index(app: &mut App, idx: usize, terminal: &Term) -> Result<()> {
-    let target = app
-        .filtered_sessions()
-        .get(idx)
-        .map(|s| (s.id.clone(), s.project_name.clone(), s.cwd.clone(), s.pid));
+    let target = app.filtered_sessions().get(idx).map(|s| {
+        (
+            s.id.clone(),
+            s.project_name.clone(),
+            s.cwd.clone(),
+            s.takeover_pid(),
+        )
+    });
     attach_target(app, target, terminal)
 }
 

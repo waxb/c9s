@@ -269,6 +269,9 @@ fn render_info_column(f: &mut Frame, session: &Session, area: Rect) {
         kv_line("Perm", session.permission_mode.as_deref().unwrap_or("-")),
     ];
 
+    if let Some(ref name) = session.session_name {
+        lines.push(kv_line("Name", name));
+    }
     if let Some(ref title) = session.title {
         lines.push(kv_line("Title", title));
     }

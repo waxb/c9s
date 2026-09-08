@@ -1,26 +1,39 @@
 use anyhow::Result;
 use std::collections::HashMap;
 use std::path::Path;
+use std::time::{Duration, Instant};
+
+use crate::session::registry::process_alive;
+use crate::tlog;
 
 use super::notifier::JsonlNotifier;
 use super::EmbeddedTerminal;
+
+const TERM_GRACE: Duration = Duration::from_millis(500);
+const KILL_GRACE: Duration = Duration::from_millis(200);
+
+fn wait_for_exit(pid: u32, timeout: Duration) -> bool {
+    let start = Instant::now();
+    while start.elapsed() < timeout {
+        if !process_alive(pid) {
+            return true;
+        }
+        std::thread::sleep(Duration::from_millis(25));
+    }
+    !process_alive(pid)
+}
 
 fn kill_process(pid: u32) {
     unsafe {
         libc::kill(pid as i32, libc::SIGTERM);
     }
-    let start = std::time::Instant::now();
-    while start.elapsed() < std::time::Duration::from_millis(500) {
-        unsafe {
-            if libc::kill(pid as i32, 0) != 0 {
-                return;
-            }
-        }
-        std::thread::sleep(std::time::Duration::from_millis(50));
+    if wait_for_exit(pid, TERM_GRACE) {
+        return;
     }
     unsafe {
         libc::kill(pid as i32, libc::SIGKILL);
     }
+    wait_for_exit(pid, KILL_GRACE);
 }
 
 pub struct TerminalManager {
@@ -49,15 +62,15 @@ impl TerminalManager {
         session_id: &str,
         project_name: &str,
         cwd: &Path,
-        existing_pid: Option<u32>,
+        takeover_pid: Option<u32>,
         rows: u16,
         cols: u16,
     ) -> Result<()> {
         self.clear_active_bells();
         if !self.terminals.contains_key(session_id) {
-            if let Some(pid) = existing_pid {
+            if let Some(pid) = takeover_pid {
+                tlog!(info, "taking over session {} from pid {}", session_id, pid);
                 kill_process(pid);
-                std::thread::sleep(std::time::Duration::from_millis(200));
             }
             let term = EmbeddedTerminal::spawn_resume(session_id, project_name, cwd, rows, cols)?;
             self.order.push(session_id.to_string());

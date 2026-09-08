@@ -21,7 +21,7 @@ c9s
 - Config tree viewer with token estimates
 - Usage dashboard (OAuth rate limits + local stats)
 - Bell notifications when Claude finishes
-- Session status (Active / Thinking / Idle / Dead)
+- Session status (Active / Thinking / Waiting / Idle / Dead) read from the Claude Code session registry
 - Native text selection in terminal mode
 - Side shell panel next to the attached session (Ctrl+t)
 
@@ -80,7 +80,7 @@ The binary will be at `target/release/c9s`.
 
 ## How It Works
 
-c9s discovers Claude Code sessions by scanning `~/.claude/projects/` for JSONL conversation logs. It parses token usage, model info, git branch, and message counts from these files. Live session status is determined by cross-referencing running `claude` processes with their working directories.
+c9s discovers Claude Code sessions by scanning `~/.claude/projects/` for JSONL conversation logs. It parses token usage, model info, git branch, and message counts from these files. Live sessions are matched through the registry files Claude Code writes under `~/.claude/sessions/` (pid, session id, status), with a fallback to cross-referencing running `claude` processes with their working directories for older Claude Code versions.
 
 When you attach to a session, c9s spawns a PTY terminal running `claude --resume <session-id>` in the session's working directory. The terminal is rendered via ratatui with full VT100 emulation (vt100 crate), supporting colors, cursor positioning, and scrollback.
 

@@ -3,6 +3,7 @@ mod discovery;
 mod jsonl;
 mod manager;
 pub mod pricing;
+pub mod registry;
 
 pub use discovery::{list_session_files, SessionDiscovery, SessionFile};
 pub use manager::SessionManager;
@@ -16,6 +17,7 @@ pub enum SessionStatus {
     Active,
     Idle,
     Thinking,
+    Waiting,
     Dead,
 }
 
@@ -25,6 +27,7 @@ impl SessionStatus {
             Self::Active => "Active",
             Self::Idle => "Idle",
             Self::Thinking => "Thinking",
+            Self::Waiting => "Waiting",
             Self::Dead => "Dead",
         }
     }
@@ -40,6 +43,8 @@ impl std::fmt::Display for SessionStatus {
 pub struct Session {
     pub id: String,
     pub pid: Option<u32>,
+    pub pid_verified: bool,
+    pub session_name: Option<String>,
     pub cwd: PathBuf,
     pub project_name: String,
     pub git_branch: Option<String>,
@@ -67,6 +72,10 @@ pub struct Session {
 }
 
 impl Session {
+    pub fn takeover_pid(&self) -> Option<u32> {
+        self.pid.filter(|_| self.pid_verified)
+    }
+
     pub fn estimated_cost_usd(&self) -> f64 {
         let model = self.model.as_deref().unwrap_or("");
         let p = pricing::pricing_for(model);
@@ -144,6 +153,8 @@ pub(crate) mod test_support {
         Session {
             id: id.to_string(),
             pid: None,
+            pid_verified: false,
+            session_name: None,
             cwd: PathBuf::from("/tmp"),
             project_name: "test".to_string(),
             git_branch: None,
@@ -228,6 +239,15 @@ mod tests {
         let mut h = make_session("t", "claude-haiku-4-5");
         h.context_tokens = 150_000;
         assert_eq!(h.context_percent(), 75);
+    }
+
+    #[test]
+    fn test_takeover_pid_requires_verification() {
+        let mut s = make_session("t", "claude-opus-5");
+        s.pid = Some(42);
+        assert_eq!(s.takeover_pid(), None);
+        s.pid_verified = true;
+        assert_eq!(s.takeover_pid(), Some(42));
     }
 
     #[test]
