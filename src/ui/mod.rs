@@ -16,7 +16,7 @@ mod theme;
 mod unhide_dialog;
 pub mod usage_panel;
 
-pub use confirm_kill::render_confirm_kill;
+pub use confirm_kill::{render_confirm_hide, render_confirm_kill};
 pub use confirm_quit::render_confirm_quit;
 pub use confirm_takeover::render_confirm_takeover;
 pub use help::render_help;

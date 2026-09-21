@@ -15,7 +15,7 @@ const BINDINGS: &[(&str, &str)] = &[
     ("n", "New session (directory, then name)"),
     ("F", "Fork selected session"),
     ("x", "Discard session (terminate + hide)"),
-    ("u / U", "Hide session / unhide dialog"),
+    ("u / U", "Hide (confirms) / unhide dialog"),
     ("Ctrl+b", "Resume picker for selected project"),
     ("d", "Session detail (f: transcript picker)"),
     ("/", "Filter sessions"),

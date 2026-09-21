@@ -25,13 +25,6 @@ impl Project {
         self.sessions.iter().position(|s| s.id == session_id)
     }
 
-    pub fn live_count(&self) -> usize {
-        self.sessions
-            .iter()
-            .filter(|s| s.status != SessionStatus::Dead)
-            .count()
-    }
-
     pub fn total_cost(&self) -> f64 {
         self.sessions.iter().map(|s| s.estimated_cost_usd()).sum()
     }
@@ -163,7 +156,6 @@ mod tests {
         let ids: Vec<&str> = a.sessions.iter().map(|s| s.id.as_str()).collect();
         assert_eq!(ids, vec!["a-old-live", "a-new-dead", "a-mid-dead"]);
         assert_eq!(a.current, 0);
-        assert_eq!(a.live_count(), 1);
         assert_eq!(a.name, "p/a");
     }
 

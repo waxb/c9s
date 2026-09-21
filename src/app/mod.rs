@@ -52,6 +52,7 @@ pub enum ViewMode {
     Command,
     ConfirmQuit,
     ConfirmKill,
+    ConfirmHide,
     SessionFilePicker,
     Log,
     SessionPane,
@@ -66,6 +67,7 @@ impl ViewMode {
         matches!(
             self,
             ViewMode::ConfirmKill
+                | ViewMode::ConfirmHide
                 | ViewMode::NameInput
                 | ViewMode::MessageInput
                 | ViewMode::ConfirmTakeover
@@ -111,6 +113,7 @@ pub struct App {
     ci_rx: mpsc::Receiver<(String, CiStatus)>,
     ci_last_check: Option<Instant>,
     pub confirm_kill_session_id: Option<String>,
+    pub confirm_hide_session_id: Option<String>,
     pub session_files: Vec<SessionFile>,
     pub session_file_cursor: usize,
     pane: PaneState,
@@ -161,6 +164,7 @@ impl App {
             ci_rx,
             ci_last_check: None,
             confirm_kill_session_id: None,
+            confirm_hide_session_id: None,
             session_files: Vec::new(),
             session_file_cursor: 0,
             pane: PaneState::default(),
@@ -320,6 +324,10 @@ impl App {
         self.list.visible_sessions(project)
     }
 
+    pub fn hidden_count(&self, project: &Project) -> usize {
+        self.list.hidden_count(project)
+    }
+
     pub fn is_expanded(&self, project: &Project) -> bool {
         self.list.is_expanded(project)
     }
@@ -329,6 +337,7 @@ impl App {
         if let Some(ref store) = self.store {
             let _ = store.set_hidden(id, true);
         }
+        tlog!(info, "hidden session {} (U on its project row unhides)", id);
         self.rebuild_rows_keeping_selection();
     }
 

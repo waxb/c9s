@@ -89,6 +89,14 @@ impl ListState {
         !self.hidden.contains(&session.id)
     }
 
+    pub fn hidden_count(&self, project: &Project) -> usize {
+        project
+            .sessions
+            .iter()
+            .filter(|s| !self.is_visible(s))
+            .count()
+    }
+
     pub fn visible_sessions<'a>(&'a self, project: &'a Project) -> Vec<&'a Session> {
         project
             .sessions
@@ -136,7 +144,12 @@ impl ListState {
         let mut rows = Vec::new();
         for (pi, project) in projects.iter().enumerate() {
             let visible = self.visible_sessions(project);
-            if visible.is_empty() || !self.project_matches(project) {
+            let only_hidden = visible.is_empty() && self.hidden_count(project) > 0;
+            if query.is_empty() {
+                if visible.is_empty() && !only_hidden {
+                    continue;
+                }
+            } else if !self.project_matches(project) {
                 continue;
             }
             rows.push(Row::Project(pi));
@@ -359,13 +372,32 @@ mod tests {
     }
 
     #[test]
-    fn test_hidden_sessions_are_excluded_and_empty_projects_dropped() {
+    fn test_fully_hidden_project_stays_listed_with_hidden_count() {
         let projects = projects();
         let mut list = ListState::new(["b1".to_string()].into_iter().collect());
         list.rebuild_rows(&projects);
-        let visible: Vec<usize> = list.rows.iter().map(|r| r.project_index()).collect();
-        assert_eq!(visible.len(), 1);
-        assert_eq!(projects[visible[0]].root, PathBuf::from("/a"));
+        assert_eq!(list.rows.len(), 2);
+        let b = projects
+            .iter()
+            .position(|p| p.root.as_path() == std::path::Path::new("/b"))
+            .unwrap();
+        assert!(list.rows.contains(&Row::Project(b)));
+        assert_eq!(list.hidden_count(&projects[b]), 1);
+        assert_eq!(list.hidden_count(&projects[1 - b]), 0);
+
+        list.expand(&projects[b].root);
+        list.rebuild_rows(&projects);
+        assert_eq!(list.rows.len(), 2);
+        assert!(list.visible_sessions(&projects[b]).is_empty());
+    }
+
+    #[test]
+    fn test_filter_drops_fully_hidden_projects() {
+        let projects = projects();
+        let mut list = ListState::new(["b1".to_string()].into_iter().collect());
+        list.filter_query = "beta".to_string();
+        list.rebuild_rows(&projects);
+        assert!(list.rows.is_empty());
     }
 
     #[test]

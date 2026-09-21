@@ -53,6 +53,15 @@ pub fn draw_frame(f: &mut Frame, app: &App) {
                 .unwrap_or_else(|| "unknown".to_string());
             ui::render_confirm_kill(f, &name, area);
         }
+        ViewMode::ConfirmHide => {
+            render_base(app, f, area);
+            let name = app
+                .confirm_hide_session_id
+                .as_deref()
+                .map(|id| session_label_for_render(app, id))
+                .unwrap_or_else(|| "unknown".to_string());
+            ui::render_confirm_hide(f, &name, area);
+        }
         ViewMode::ConfirmQuit => {
             ui::render_session_list(f, app, area);
             let active = app.active_attached_sessions();
@@ -165,4 +174,10 @@ fn render_terminal_view(app: &App, f: &mut Frame, area: Rect) {
         warm,
     };
     ui::render_terminal(f, screen, &data, area);
+}
+
+fn session_label_for_render(app: &App, id: &str) -> String {
+    app.find_session(id)
+        .map(ui::session_title)
+        .unwrap_or_else(|| id[..8.min(id.len())].to_string())
 }

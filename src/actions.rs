@@ -151,8 +151,22 @@ pub fn process_action(app: &mut App, action: Action, terminal: &Term) -> Result<
         }
         Action::UnfollowSession => {
             if let Some(id) = target_session_id(app) {
-                app.hide_session(&id);
+                app.confirm_hide_session_id = Some(id);
+                app.open_dialog(ViewMode::ConfirmHide);
             }
+        }
+        Action::ConfirmHide => {
+            if let Some(id) = app.confirm_hide_session_id.take() {
+                let label = session_label(app, &id);
+                app.hide_session(&id);
+                app.sync_pane_cursor();
+                app.set_pane_status(&format!("hidden {} (U in the list unhides)", label));
+            }
+            app.close_dialog();
+        }
+        Action::CancelHide => {
+            app.confirm_hide_session_id = None;
+            app.close_dialog();
         }
         Action::ToggleExpand => app.toggle_expand_selected(),
         Action::ExpandRow => match app.view_mode() {
@@ -591,6 +605,12 @@ fn select_session_file(app: &mut App, terminal: &Term) -> Result<()> {
     };
     app.set_view_mode(ViewMode::List);
     attach_target(app, &session_id, &project_name, &cwd, terminal)
+}
+
+fn session_label(app: &App, id: &str) -> String {
+    app.find_session(id)
+        .map(ui::session_title)
+        .unwrap_or_else(|| id[..8.min(id.len())].to_string())
 }
 
 fn discard_session(app: &mut App, session_id: &str) {

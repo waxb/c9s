@@ -44,6 +44,8 @@ pub enum Action {
     ConfirmKill,
     CancelKill,
     UnfollowSession,
+    ConfirmHide,
+    CancelHide,
     ResumeSessionPicker,
     OpenSessionFiles,
     SessionFileUp,
@@ -155,6 +157,7 @@ fn handle_key(key: &KeyEvent, mode: &ViewMode, side_focused: bool, keys: &Keys) 
         ViewMode::Command => handle_command_key(key),
         ViewMode::ConfirmQuit => handle_confirm_quit_key(key),
         ViewMode::ConfirmKill => handle_confirm_kill_key(key),
+        ViewMode::ConfirmHide => handle_confirm_hide_key(key),
         ViewMode::SessionFilePicker => handle_session_file_picker_key(key),
         ViewMode::Log => handle_log_key(key),
         ViewMode::SessionPane => handle_session_pane_key(key),
@@ -347,6 +350,14 @@ fn handle_confirm_kill_key(key: &KeyEvent) -> Action {
     match key.code {
         KeyCode::Char('y') | KeyCode::Enter => Action::ConfirmKill,
         KeyCode::Char('n') | KeyCode::Esc => Action::CancelKill,
+        _ => Action::None,
+    }
+}
+
+fn handle_confirm_hide_key(key: &KeyEvent) -> Action {
+    match key.code {
+        KeyCode::Char('y') | KeyCode::Enter => Action::ConfirmHide,
+        KeyCode::Char('n') | KeyCode::Esc => Action::CancelHide,
         _ => Action::None,
     }
 }
@@ -771,6 +782,31 @@ mod tests {
         assert_eq!(
             handle_command_key(&key(KeyCode::Char('/'))),
             Action::CommandInput('/')
+        );
+    }
+
+    #[test]
+    fn test_confirm_hide_keys() {
+        let keys = Keys::default();
+        assert_eq!(
+            handle_key(&key(KeyCode::Char('y')), &ViewMode::ConfirmHide, false, &keys),
+            Action::ConfirmHide
+        );
+        assert_eq!(
+            handle_key(&key(KeyCode::Enter), &ViewMode::ConfirmHide, false, &keys),
+            Action::ConfirmHide
+        );
+        assert_eq!(
+            handle_key(&key(KeyCode::Char('n')), &ViewMode::ConfirmHide, false, &keys),
+            Action::CancelHide
+        );
+        assert_eq!(
+            handle_key(&key(KeyCode::Esc), &ViewMode::ConfirmHide, false, &keys),
+            Action::CancelHide
+        );
+        assert_eq!(
+            handle_key(&key(KeyCode::Char('u')), &ViewMode::ConfirmHide, false, &keys),
+            Action::None
         );
     }
 }

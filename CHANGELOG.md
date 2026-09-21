@@ -18,6 +18,7 @@
 - Usage panel on the selector page shows every per-model weekly window the usage API reports (the `limits[]` weekly_scoped entries such as Fable, plus `seven_day_opus` and `seven_day_sonnet`) under the all-models bar; panel height follows the number of bars.
 - PTY is resized whenever the pane layout or the active session changes; list and quick switcher selection stay on the same row across background refreshes.
 - `n` in the list view prefills the directory prompt with the selected project root; Enter on an empty prompt uses that root, an invalid path keeps the prompt open with an error instead of silently returning to the list, and long paths scroll so the end stays visible.
+- Hiding with `u` asks for confirmation, project rows show `(N hidden)`, and a project whose sessions are all hidden stays listed so `U` can bring them back. Previously a stray `u` in the pane or list hid the session silently, and a project with every session hidden vanished from the list with no way to unhide.
 
 ## 0.3.0
 

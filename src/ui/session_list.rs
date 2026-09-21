@@ -142,12 +142,23 @@ fn project_row(app: &App, project: &Project) -> TableRow<'static> {
     let has_bell = visible.iter().any(|s| app.has_bell(&s.id));
     let warm = visible.iter().any(|s| app.is_warm(&s.id));
     let marker = if app.is_expanded(project) { "v" } else { ">" };
+    let hidden = app.hidden_count(project);
+    let hidden_note = if hidden > 0 {
+        format!(" ({} hidden)", hidden)
+    } else {
+        String::new()
+    };
+    let live = visible
+        .iter()
+        .filter(|s| s.status != SessionStatus::Dead)
+        .count();
     let label = format!(
-        "{} {}  [{} live / {}]",
+        "{} {}  [{} live / {}]{}",
         marker,
         project.name,
-        project.live_count(),
-        visible.len()
+        live,
+        visible.len(),
+        hidden_note
     );
     let name_style = if has_bell {
         Theme::bell()

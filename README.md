@@ -45,7 +45,7 @@ Projects are collapsed rows by default; expand them to see their sessions.
 | `n` | New session (directory prefilled from the selected project, then name) |
 | `F` | Fork the selected session (new id, same context) |
 | `x` | Discard session (terminate if c9s-owned or verified, hide) |
-| `u` / `U` | Hide session / unhide dialog for the project |
+| `u` / `U` | Hide session (asks to confirm) / unhide dialog for the project; project rows show `(N hidden)` |
 | `Ctrl+b` | Open the `claude --resume` picker for the selected project |
 | `d` | Session detail panel (`f` there opens the transcript picker) |
 | `/` | Filter (matches project, path, branch, title, session name) |
