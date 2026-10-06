@@ -163,7 +163,12 @@ fn backdated(secs: u64) -> Option<Instant> {
     Instant::now().checked_sub(std::time::Duration::from_secs(secs))
 }
 
+const USAGE_FIXTURE_ENV: &str = "C9S_USAGE_FIXTURE";
+
 fn fetch_usage() -> UsageData {
+    if let Some(path) = std::env::var_os(USAGE_FIXTURE_ENV) {
+        return usage_from_fixture(std::path::Path::new(&path)).unwrap_or_default();
+    }
     let creds = match read_credentials() {
         Some(c) => c,
         None => return UsageData::default(),
@@ -259,6 +264,12 @@ fn build_usage(plan_name: Option<String>, resp: &ApiResponse) -> UsageData {
     }
 }
 
+fn usage_from_fixture(path: &std::path::Path) -> Option<UsageData> {
+    let text = std::fs::read_to_string(path).ok()?;
+    let resp: ApiResponse = serde_json::from_str(&text).ok()?;
+    Some(build_usage(Some("Max".to_string()), &resp))
+}
+
 fn read_credentials() -> Option<(String, String)> {
     let content = read_credentials_json()?;
     let creds: Credentials = serde_json::from_str(&content).ok()?;
@@ -344,7 +355,7 @@ fn call_api(token: &str) -> Option<ApiResponse> {
         .get("https://api.anthropic.com/api/oauth/usage")
         .header("Authorization", &format!("Bearer {}", token))
         .header("anthropic-beta", "oauth-2025-04-20")
-        .header("User-Agent", "c9s/0.1")
+        .header("User-Agent", concat!("c9s/", env!("CARGO_PKG_VERSION")))
         .call()
         .ok()?;
 
@@ -436,5 +447,28 @@ mod tests {
         assert_eq!(parse_utilization(Some(150.0)), Some(100));
         assert_eq!(parse_utilization(Some(f64::NAN)), None);
         assert_eq!(parse_utilization(None), None);
+    }
+
+    #[test]
+    fn test_usage_from_fixture_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("usage.json");
+        std::fs::write(
+            &path,
+            r#"{"five_hour":{"utilization":34.0,"resets_at":"2026-10-06T17:00:00Z"},
+                "seven_day":{"utilization":21.0},
+                "limits":[{"kind":"weekly_scoped","scope":{"model":{"display_name":"Fable"}},"percent":12.0}]}"#,
+        )
+        .unwrap();
+        let data = usage_from_fixture(&path).unwrap();
+        assert!(data.api_available);
+        assert_eq!(data.plan_name.as_deref(), Some("Max"));
+        assert_eq!(data.five_hour, Some(34));
+        assert_eq!(data.seven_day, Some(21));
+        assert_eq!(data.weekly_models.len(), 1);
+        assert_eq!(data.weekly_models[0].label, "Current week (Fable)");
+        assert!(usage_from_fixture(&dir.path().join("missing.json")).is_none());
+        std::fs::write(&path, "not json").unwrap();
+        assert!(usage_from_fixture(&path).is_none());
     }
 }
