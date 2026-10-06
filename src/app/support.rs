@@ -197,7 +197,10 @@ mod tests {
     fn test_resolve_new_session_dir_falls_back_to_selected_root() {
         let dir = tempfile::tempdir().unwrap();
         let want = std::fs::canonicalize(dir.path()).unwrap();
-        assert_eq!(resolve_new_session_dir("", Some(dir.path())), Ok(want.clone()));
+        assert_eq!(
+            resolve_new_session_dir("", Some(dir.path())),
+            Ok(want.clone())
+        );
         assert_eq!(resolve_new_session_dir("   ", Some(dir.path())), Ok(want));
     }
 

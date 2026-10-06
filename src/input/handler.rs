@@ -789,7 +789,12 @@ mod tests {
     fn test_confirm_hide_keys() {
         let keys = Keys::default();
         assert_eq!(
-            handle_key(&key(KeyCode::Char('y')), &ViewMode::ConfirmHide, false, &keys),
+            handle_key(
+                &key(KeyCode::Char('y')),
+                &ViewMode::ConfirmHide,
+                false,
+                &keys
+            ),
             Action::ConfirmHide
         );
         assert_eq!(
@@ -797,7 +802,12 @@ mod tests {
             Action::ConfirmHide
         );
         assert_eq!(
-            handle_key(&key(KeyCode::Char('n')), &ViewMode::ConfirmHide, false, &keys),
+            handle_key(
+                &key(KeyCode::Char('n')),
+                &ViewMode::ConfirmHide,
+                false,
+                &keys
+            ),
             Action::CancelHide
         );
         assert_eq!(
@@ -805,7 +815,12 @@ mod tests {
             Action::CancelHide
         );
         assert_eq!(
-            handle_key(&key(KeyCode::Char('u')), &ViewMode::ConfirmHide, false, &keys),
+            handle_key(
+                &key(KeyCode::Char('u')),
+                &ViewMode::ConfirmHide,
+                false,
+                &keys
+            ),
             Action::None
         );
     }
