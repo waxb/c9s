@@ -6,6 +6,8 @@ ideas.save
 *.swo
 .DS_Store
 .codegraph/
+CLAUDE.md
+AGENTS.md
 openspec/
 .memelord/
 .codex/

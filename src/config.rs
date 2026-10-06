@@ -164,7 +164,7 @@ mod tests {
 
     #[test]
     fn test_config_parse_ignores_unknown_sections() {
-        let text = "[tervezo]\napi_key = \"x\"\n\n[keys]\nsession_pane = \"ctrl-y\"\n";
+        let text = "[legacy]\nold_option = \"x\"\n\n[keys]\nsession_pane = \"ctrl-y\"\n";
         let config = Config::parse(text).unwrap();
         assert!(config.keys.session_pane.matches(&ctrl('y')));
         assert!(config.keys.keep_warm.matches(&ctrl('q')));
