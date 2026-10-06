@@ -1,8 +1,11 @@
 [package]
 name = "c9s"
-version = "0.4.0"
+version = "0.3.0"
 edition = "2021"
-description = "A k9s-inspired TUI for managing Claude Code sessions"
+description = "A k9s-inspired terminal UI for running, switching and watching many Claude Code sessions"
+readme = "README.md"
+keywords = ["claude", "claude-code", "tui", "terminal", "ratatui"]
+categories = ["command-line-utilities", "development-tools"]
 license = "MIT"
 repository = "https://github.com/waxb/c9s"
 

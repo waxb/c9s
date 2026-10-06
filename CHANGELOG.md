@@ -1,6 +1,6 @@
 # Changelog
 
-## 0.4.0
+## 0.3.0 - 2026-10-06
 
 - Project x session matrix: all transcripts of a project root are listed; the list view shows collapsed project rows with live counts and summed cost and tokens, expandable into session rows.
 - Project tabs in the terminal view hold several sessions each (`name [current/total]`); `!` marks a background session waiting for input, `*` a finished turn.
@@ -11,7 +11,7 @@
 - Discard hides the session persistently and never deletes transcripts; `U` unhides.
 - Registry-only sessions (no transcript yet) appear immediately; terminals opened through the resume picker are matched to their real session id by pid.
 - Notifiers watch only their own transcript.
-- SQLite schema v2 with title, session name, context, compaction, API error, cache write and hidden columns.
+- SQLite schema v4 with title, session name, context, compaction, API error, cache write and hidden columns.
 - Transcript statistics are exact for every file size: lines are parsed with a streaming deserializer that skips message bodies, only appended bytes are parsed on refresh, and per-file offsets are checkpointed in SQLite so a restart with 1 GB of transcripts renders in well under a second. Previously files over 2 MB were sampled head and tail only, undercounting tokens and cost by up to 60x.
 - Usage log: every fresh usage API reading and every keep-warm ping is stored in `~/.c9s/data.db` (`usage_samples`); `c9s usage-log [N]` prints the timeline so the cost of a ping versus a cold prompt can be read off the 5-hour percentage.
 - Keep-warm: `Ctrl+q` in a session (or `w` in the pane and list) marks it with a red `X` and types a minimal prompt whenever it has been idle for 50 minutes, keeping the 1-hour prompt cache alive for up to 12 hours; configurable key under `[keys] keep_warm`.
@@ -19,10 +19,7 @@
 - PTY is resized whenever the pane layout or the active session changes; list and quick switcher selection stay on the same row across background refreshes.
 - `n` in the list view prefills the directory prompt with the selected project root; Enter on an empty prompt uses that root, an invalid path keeps the prompt open with an error instead of silently returning to the list, and long paths scroll so the end stays visible.
 - Hiding with `u` asks for confirmation, project rows show `(N hidden)`, and a project whose sessions are all hidden stays listed so `U` can bring them back. Previously a stray `u` in the pane or list hid the session silently, and a project with every session hidden vanished from the list with no way to unhide.
-
-## 0.3.0
-
-- Removed the tervezo integration.
+- `C9S_USAGE_FIXTURE=<file.json>` loads usage data from a file instead of the usage API, for offline demos and screenshots; the API request carries the real c9s version in its User-Agent.
 - Corrected pricing: current Opus models at $5/$25, Fable at $10/$50, cache writes at 1.25x (5 minute) and 2x (1 hour) of input, Fable 5.1 cache reads at $0.25 per million tokens.
 - Compaction, tool call, API error and context size statistics read from the transcript; session titles and last prompts shown.
 - Live status, pid and session name from `~/.claude/sessions/*.json`; new Waiting status; kills only registry-verified pids.
