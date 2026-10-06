@@ -84,15 +84,29 @@ pub fn render_terminal(f: &mut Frame, screen: &vt100::Screen, data: &TerminalVie
             Span::styled(format!("  C-d:dismiss  {}", project), Theme::footer()),
         ])
     } else {
+        let hints = [
+            "C-d:list".to_string(),
+            "C-Space:switch".to_string(),
+            "C-n/p:cycle".to_string(),
+            format!("{}:sessions", pane_key),
+            "C-j/k:scroll".to_string(),
+            "C-t:shell".to_string(),
+            format!("{}:warm", warm_key),
+            project.to_string(),
+        ];
+        let lead = format!(" c9s {}", version);
+        let used = lead.chars().count()
+            + scroll_indicator.content.chars().count()
+            + warm_indicator.content.chars().count()
+            + 2;
+        let available =
+            (chunks[2].width as usize).saturating_sub(used + usage_meter_width(usage) + 1);
         Line::from(vec![
-            Span::styled(format!(" c9s {}", version), Theme::attached_marker()),
+            Span::styled(lead, Theme::attached_marker()),
             scroll_indicator,
             warm_indicator,
             Span::styled(
-                format!(
-                    "  C-d:list  C-Space:switch  C-n/p:cycle  {}:sessions  C-j/k:scroll  C-t:shell  {}:warm  {}",
-                    pane_key, warm_key, project
-                ),
+                format!("  {}", fit_hints(&hints, available)),
                 Theme::footer(),
             ),
         ])
@@ -235,12 +249,40 @@ fn render_tab_bar(f: &mut Frame, tabs: &[TabEntry], area: Rect) {
     }
 }
 
-fn render_usage_bar_right(f: &mut Frame, usage: &UsageData, pct: u8, area: Rect) {
-    let label = match &usage.plan_name {
+const USAGE_METER_BAR: usize = 20;
+
+fn usage_meter_label(usage: &UsageData, pct: u8) -> String {
+    match &usage.plan_name {
         Some(p) => format!(" {} {}% ", p, pct),
         None => format!(" {}% ", pct),
-    };
-    let bar_width: usize = 20;
+    }
+}
+
+fn usage_meter_width(usage: &UsageData) -> usize {
+    match (usage.api_available, usage.five_hour) {
+        (true, Some(pct)) => USAGE_METER_BAR + usage_meter_label(usage, pct).chars().count(),
+        _ => 0,
+    }
+}
+
+fn fit_hints(hints: &[String], width: usize) -> String {
+    let mut out = String::new();
+    for hint in hints {
+        let extra = if out.is_empty() { 0 } else { 2 } + hint.chars().count();
+        if out.chars().count() + extra > width {
+            break;
+        }
+        if !out.is_empty() {
+            out.push_str("  ");
+        }
+        out.push_str(hint);
+    }
+    out
+}
+
+fn render_usage_bar_right(f: &mut Frame, usage: &UsageData, pct: u8, area: Rect) {
+    let label = usage_meter_label(usage, pct);
+    let bar_width: usize = USAGE_METER_BAR;
     let filled = (bar_width as f64 * pct as f64 / 100.0).round() as usize;
     let empty = bar_width.saturating_sub(filled);
     let total_len = bar_width + label.len();
@@ -319,5 +361,30 @@ mod tests {
         assert_eq!(tab_label(1, &tab(2, 3, false, false)), "2: c9s [2/3]");
         assert_eq!(tab_label(0, &tab(1, 2, false, true)), "1: c9s [1/2]*");
         assert_eq!(tab_label(0, &tab(1, 2, true, true)), "1: c9s [1/2]!");
+    }
+
+    #[test]
+    fn test_fit_hints_keeps_whole_hints_only() {
+        let hints = vec![
+            "C-d:list".to_string(),
+            "C-t:shell".to_string(),
+            "proj".to_string(),
+        ];
+        assert_eq!(fit_hints(&hints, 100), "C-d:list  C-t:shell  proj");
+        assert_eq!(fit_hints(&hints, 19), "C-d:list  C-t:shell");
+        assert_eq!(fit_hints(&hints, 18), "C-d:list");
+        assert_eq!(fit_hints(&hints, 3), "");
+    }
+
+    #[test]
+    fn test_usage_meter_width_matches_label() {
+        let usage = UsageData {
+            plan_name: Some("Max".into()),
+            five_hour: Some(38),
+            api_available: true,
+            ..UsageData::default()
+        };
+        assert_eq!(usage_meter_width(&usage), 20 + " Max 38% ".len());
+        assert_eq!(usage_meter_width(&UsageData::default()), 0);
     }
 }
